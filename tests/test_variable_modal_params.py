@@ -134,3 +134,14 @@ def test_choice_error_message_lists_the_options():
     src = " ".join(inspect.getsource(mod.VariableModal).split())
     assert "error_param_choice" in src
     assert "error_param_range" in src  # int path must remain
+
+
+def test_custom_gee_entry_submits_raster_type():
+    """The raster-type select shown for GEE assets must land in the entry.
+
+    It was rendered for ``GEEVar`` but only written for ``LocalRasterVar``, so
+    ``to_local_raster`` later failed with "raster_type must be provided".
+    """
+    src = inspect.getsource(mod.VariableModal.f)
+    gee_branch = src.split('elif var_type == "GEEVar":', 1)[1].split("elif", 1)[0]
+    assert 'entry["raster_type"] = RasterType(raster_type)' in gee_branch

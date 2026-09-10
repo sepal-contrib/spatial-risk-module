@@ -202,6 +202,12 @@ def _variable_to_entry(key: str, var, project) -> dict:
         entry["scale"] = (
             str(var.default_scale) if getattr(var, "default_scale", None) else ""
         )
+        if var.raster_type is not None:
+            entry["raster_type"] = (
+                var.raster_type.value
+                if hasattr(var.raster_type, "value")
+                else str(var.raster_type)
+            )
     elif vtype == "LocalVectorVar":
         entry["path"] = str(var.path)
         entry["rasterization_method"] = (
@@ -245,6 +251,7 @@ def _build_variable(entry: dict, project):
         return GEEVar(
             path=entry["path"],
             default_scale=entry.get("default_scale"),
+            raster_type=entry.get("raster_type"),
             data_type=entry["data_type"],
             # Download clips the export to ``aoi.geometry()``; without it a
             # custom asset only fails later, at download time.

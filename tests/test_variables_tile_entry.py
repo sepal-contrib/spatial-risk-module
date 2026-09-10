@@ -326,3 +326,53 @@ def test_custom_gee_asset_gets_current_aoi(monkeypatch):
     )
 
     assert var.aoi is aoi
+
+
+def test_custom_gee_asset_carries_raster_type(monkeypatch):
+    """The modal's raster-type pick for a GEE asset must reach the GEEVar.
+
+    ``to_local_raster`` refuses to convert without one ("raster_type must be
+    provided ..."), so dropping it turns every custom asset download into an
+    error after the export has already succeeded.
+    """
+    import ee
+
+    import gui.scripts.predefined_variables as predefined
+    from gui.store.state_manager import app_state
+    from gui.tile.variables_tile import _build_variable
+    from spatialrisk import Project
+
+    monkeypatch.setattr(app_state.aoi_result, "value", object())
+    monkeypatch.setattr(
+        predefined, "resolve_aoi_ee", lambda _r: ee.Geometry.__new__(ee.Geometry)
+    )
+
+    var = _build_variable(
+        {
+            "source": "custom",
+            "type": "GEEVar",
+            "name": "custom_layer",
+            "year": None,
+            "path": "projects/p/assets/x",
+            "default_scale": None,
+            "data_type": DataType.raster,
+            "raster_type": RasterType.categorical,
+        },
+        Project(project_name="p"),
+    )
+
+    assert var.raster_type == RasterType.categorical
+
+
+def test_custom_gee_asset_roundtrips_raster_type():
+    """Editing a custom GEE asset must prefill the raster type it was saved with."""
+    var = GEEVar(
+        name="custom_layer",
+        data_type=DataType.raster,
+        raster_type=RasterType.categorical,
+        path="projects/p/assets/x",
+    )
+    entry = _variable_to_entry("custom_layer", var, _FakeProject())
+
+    assert entry["source"] == "custom"
+    assert entry["raster_type"] == "categorical"

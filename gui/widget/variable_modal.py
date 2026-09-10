@@ -248,6 +248,8 @@ def VariableModal(
                 else f"projects/dummy/assets/{name.strip()}"
             )
             entry["default_scale"] = float(scale) if scale.strip() else None
+            # to_local_raster refuses to convert without a raster type.
+            entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
         elif var_type == "LocalVectorVar":
             entry["path"] = (
