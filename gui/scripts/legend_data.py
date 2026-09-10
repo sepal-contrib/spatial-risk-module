@@ -196,11 +196,13 @@ def _catalogue_entry(var):
     return PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
 
 
-def _is_categorical(render_kind: str, cat) -> bool:
+def _is_categorical(render_kind: str, cat, var=None) -> bool:
     """Does this layer draw discrete classes rather than a continuous ramp?
 
     A catalogue palette can be either (``slope`` is continuous, ``protected_area``
-    is categorical), so the entry's own ``raster_type`` decides there.
+    is categorical), so the entry's own ``raster_type`` decides there; a
+    user-picked palette (``custom_palette``) likewise follows the variable's
+    ``raster_type``.
     """
     if render_kind == "postprocess_change":
         return True
@@ -208,6 +210,10 @@ def _is_categorical(render_kind: str, cat) -> bool:
         return True
     if render_kind == "catalogue_palette" and cat is not None:
         return cat.get("raster_type") == "categorical"
+    if render_kind == "custom_palette":
+        rt = getattr(var, "raster_type", None)
+        rt = rt.value if hasattr(rt, "value") else (str(rt) if rt is not None else "")
+        return rt == "categorical"
     return False
 
 
@@ -270,7 +276,7 @@ def variable_spec(
             labels=tuple(Label(key=key) for key in class_keys),
         )
 
-    if _is_categorical(render_kind, cat):
+    if _is_categorical(render_kind, cat, var):
         class_keys = tuple((cat or {}).get("legend_class_keys") or DEFAULT_CLASS_KEYS)
         return LegendSpec(
             kind="chips",
@@ -305,7 +311,7 @@ def variable_spec_from_style(style: dict, var, title: Label) -> LegendSpec:
         # resolve_postprocess_legend's own class_colors, so there is nothing
         # useful to sample from the colormap here.
         colors = ()
-    elif _is_categorical(render_kind, _catalogue_entry(var)):
+    elif _is_categorical(render_kind, _catalogue_entry(var), var):
         # Chips need the palette's own colours, not a sampled ramp: read the
         # colormap at its ends (0/1 masks) so the chips match the tiles.
         colors = (
@@ -332,7 +338,7 @@ def variable_spec_from_vis(
     palette = [_with_hash(c) for c in (vis or {}).get("palette", [])]
     if render_kind == "random_visualizer" or not palette:
         colors = tuple(palette)
-    elif _is_categorical(render_kind, _catalogue_entry(var)):
+    elif _is_categorical(render_kind, _catalogue_entry(var), var):
         colors = tuple(palette)
     else:
         from gui.scripts.variable_styles import _colormap_from_palette

@@ -26,6 +26,10 @@ class Variable(BaseModel):
     year: Optional[int] = None  # Optional year for temporal variables
     active: bool = True  # Variables are active by default
     tags: List[str] = Field(default_factory=list)  # Tags for categorizing variables
+    # Optional map visualization chosen by the user (GEE ``vis_params`` shape:
+    # ``{"palette": [hex, ...], "min": .., "max": ..}``; hex without ``#``).
+    # Catalogue layers leave it None and take their look from the catalogue.
+    vis_params: Optional[Dict[str, Any]] = None
     project: Optional["Project"] = Field(
         default=None, repr=False, exclude=True, validate_default=False
     )  # Excluded from JSON serialization and __repr__

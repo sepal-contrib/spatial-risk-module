@@ -54,13 +54,19 @@ def add_satellite_basemap(map_, basemap: str = GOOGLE_SATELLITE) -> bool:
 def is_mappable(var) -> bool:
     """True if a variable can be drawn on the map.
 
-    A variable is mappable when it carries a fetched GEE image (``gee_images``)
-    or is a local file-backed layer (``LocalRasterVar`` / ``LocalVectorVar``).
+    A variable is mappable when it carries a fetched GEE image (``gee_images``),
+    is a GEE asset the map toggle can still resolve by id (``GEEVar`` whose
+    ``path`` is a ``users/`` or ``projects/`` asset id), or is a local
+    file-backed layer (``LocalRasterVar`` / ``LocalVectorVar``).
     Kept type-name based so this module stays free of the variable import chain.
     """
     if getattr(var, "gee_images", None):
         return True
-    return type(var).__name__ in ("LocalRasterVar", "LocalVectorVar")
+    type_name = type(var).__name__
+    if type_name == "GEEVar":
+        path = getattr(var, "path", None)
+        return isinstance(path, str) and path.startswith(("users/", "projects/"))
+    return type_name in ("LocalRasterVar", "LocalVectorVar")
 
 
 def add_vector_on_map(map_, path, name: str, key: str, style: dict = None):
