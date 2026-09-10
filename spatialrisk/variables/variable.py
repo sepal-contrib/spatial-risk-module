@@ -1,9 +1,12 @@
+"""Base model shared by every variable (local rasters, vectors, GEE-backed)."""
+
 from pathlib import Path
-from typing import List, Union, Optional, Any, Dict
+from typing import Any, Dict, List, Optional, Union
+
+import ee
 from pydantic import BaseModel, ConfigDict, Field
 
 from spatialrisk.variables.models import DataType
-import ee
 
 
 class Variable(BaseModel):
@@ -38,8 +41,8 @@ class Variable(BaseModel):
         exclude: Any = None,
         **kwargs,
     ) -> Dict[str, Any]:
-        """
-        Override model_dump to ensure project and aoi are always excluded.
+        """Override model_dump to ensure project and aoi are always excluded.
+
         This prevents issues with forward references during serialization.
         """
         # Ensure project and aoi are in the exclude set
@@ -67,12 +70,12 @@ class Variable(BaseModel):
         auto_save : bool, optional
             If True (default), automatically saves the project after activation.
 
-        Returns
+        Returns:
         -------
         Variable
             Returns self for method chaining.
 
-        Examples
+        Examples:
         --------
         >>> var.activate()
         >>> var.deactivate().activate()  # Toggle state
@@ -97,12 +100,12 @@ class Variable(BaseModel):
         auto_save : bool, optional
             If True (default), automatically saves the project after deactivation.
 
-        Returns
+        Returns:
         -------
         Variable
             Returns self for method chaining.
 
-        Examples
+        Examples:
         --------
         >>> var.deactivate()
         >>> var.deactivate(auto_save=False)  # Skip auto-save
