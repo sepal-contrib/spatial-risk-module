@@ -246,6 +246,9 @@ def _build_variable(entry: dict, project):
             path=entry["path"],
             default_scale=entry.get("default_scale"),
             data_type=entry["data_type"],
+            # Download clips the export to ``aoi.geometry()``; without it a
+            # custom asset only fails later, at download time.
+            aoi=_current_aoi_ee(),
             **common,
         )
     if vtype == "LocalVectorVar":
@@ -258,19 +261,25 @@ def _build_variable(entry: dict, project):
     raise ValueError(f"Unknown variable type: {vtype}")
 
 
-def _build_predefined(entry: dict, project):
-    """Build a GEEVar from a predefined catalogue entry."""
-    from gui.scripts.predefined_variables import PREDEFINED_CATALOGUE, resolve_aoi_ee
+def _current_aoi_ee():
+    """The selected AOI as an ee object, or raise if the AOI step is not done."""
+    from gui.scripts.predefined_variables import resolve_aoi_ee
     from gui.store.state_manager import app_state
-
-    key = entry["predefined_key"]
-    cat = PREDEFINED_CATALOGUE[key]
 
     aoi_result = app_state.aoi_result.value
     if aoi_result is None:
         raise ValueError("No AOI selected — complete the AOI step first.")
+    return resolve_aoi_ee(aoi_result)
 
-    aoi_ee = resolve_aoi_ee(aoi_result)
+
+def _build_predefined(entry: dict, project):
+    """Build a GEEVar from a predefined catalogue entry."""
+    from gui.scripts.predefined_variables import PREDEFINED_CATALOGUE
+
+    key = entry["predefined_key"]
+    cat = PREDEFINED_CATALOGUE[key]
+
+    aoi_ee = _current_aoi_ee()
     year = entry.get("year")
     # Declared params (e.g. forest_gfc's tree_cover_threshold) travel as kwargs;
     # entries for unparameterised layers carry none and call through unchanged.

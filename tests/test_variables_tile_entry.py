@@ -290,3 +290,39 @@ def test_build_predefined_without_scale_stays_none(monkeypatch):
     )
 
     assert var.default_scale is None
+
+
+def test_custom_gee_asset_gets_current_aoi(monkeypatch):
+    """A custom GEE asset variable must carry the selected AOI.
+
+    ``_download`` clips the export to ``self.aoi.geometry()``; a custom asset
+    built without an AOI fails at download time instead of at add time.
+    """
+    import ee
+
+    import gui.scripts.predefined_variables as predefined
+    from gui.store.state_manager import app_state
+    from gui.tile.variables_tile import _build_variable
+    from spatialrisk import Project
+
+    # Pydantic validates ``aoi`` against ee types and ``project`` against
+    # Project; an uninitialised-client-safe stand-in, as elsewhere in this file.
+    aoi = ee.Geometry.__new__(ee.Geometry)
+    monkeypatch.setattr(app_state.aoi_result, "value", object())
+    monkeypatch.setattr(predefined, "resolve_aoi_ee", lambda _r: aoi)
+    project = Project(project_name="p")
+
+    var = _build_variable(
+        {
+            "source": "custom",
+            "type": "GEEVar",
+            "name": "custom_layer",
+            "year": None,
+            "path": "projects/p/assets/x",
+            "default_scale": None,
+            "data_type": DataType.raster,
+        },
+        project,
+    )
+
+    assert var.aoi is aoi

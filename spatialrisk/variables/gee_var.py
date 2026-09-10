@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+import ee
 from pydantic import Field, model_validator
 
 from spatialrisk.gee.ee_raster_export import download_ee_image
@@ -95,9 +96,17 @@ class GEEVar(Variable):
         output_path: Path = None
         extensions = {"vector": ".shp", "raster": ".tif"}
 
-        # Ensure gee_images is set
+        # An asset-id GEEVar (``path`` set, no ``gee_images``) is valid per
+        # ``_chk_source``; resolve it lazily here so the same variable is also
+        # mappable afterwards. Lazy, because ``ee.Image`` needs an
+        # initialised client, which construction must not require.
         if not self.gee_images:
-            raise ValueError("gee_images must be provided for download.")
+            if isinstance(self.path, str) and (
+                self.path.startswith("users/") or self.path.startswith("projects/")
+            ):
+                self.gee_images = [ee.Image(self.path)]
+            else:
+                raise ValueError("gee_images must be provided for download.")
 
         # Get the output folder
         output_folder = self.project.folders.data_raw_folder
