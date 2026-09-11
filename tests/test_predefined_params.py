@@ -291,3 +291,78 @@ def test_resolve_rejects_malformed_choice_names(name):
 def test_resolve_bare_temperature_key():
     """The bare key resolves with no params (same contract as forest_gfc)."""
     assert resolve_predefined("temperature_2m") == ("temperature_2m", {})
+
+
+# ---------------------------------------------------------------------------
+# spatial pre-filters must use the AOI's bounds, never the AOI itself
+# ---------------------------------------------------------------------------
+
+
+def _fake_ee_recording_filter_bounds(monkeypatch):
+    """Stub ``ee`` so every ``filterBounds`` argument is recorded.
+
+    Returns the list of recorded arguments and the fake AOI whose
+    ``geometry().bounds()`` is the ``"BOUNDS"`` sentinel.
+    """
+    import types
+
+    import gui.scripts.predefined_variables as pv
+
+    seen = []
+
+    class _Rec:
+        """Chainable stand-in recording ``filterBounds`` arguments."""
+
+        def __getattr__(self, method):
+            def _call(*args, **kwargs):
+                if method == "filterBounds":
+                    seen.append(args[0])
+                return self
+
+            return _call
+
+    class _Geometry:
+        """Fake ee.Geometry: only ``isinstance`` and ``bounds`` matter."""
+
+        def bounds(self):
+            return "BOUNDS"
+
+    class _Aoi:
+        """Fake FeatureCollection AOI."""
+
+        def geometry(self):
+            return _Geometry()
+
+    fake_ee = types.SimpleNamespace(
+        Image=lambda *a, **k: _Rec(),
+        ImageCollection=lambda *a, **k: _Rec(),
+        FeatureCollection=lambda *a, **k: _Rec(),
+        Filter=_Rec(),
+        Geometry=_Geometry,
+    )
+    monkeypatch.setattr(pv, "ee", fake_ee)
+    return seen, _Aoi()
+
+
+@pytest.mark.parametrize(
+    "layer",
+    ["_get_protected_area", "_get_forest_tmf", "_get_rivers"],
+)
+def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, layer):
+    """``filterBounds`` gets the AOI's bounding rectangle.
+
+    Filtering a collection by the AOI object (or its ``geometry()``) makes
+    Earth Engine materialise the AOI's geometry inside the download request;
+    a large table asset then fails every tile with "Description length
+    exceeds maximum" (reproduced 2026-09-11 with a ~1.1M-coordinate asset).
+    The pre-filter is only an optimisation — the layer is clipped to the AOI
+    afterwards — so its bounds are sufficient.
+    """
+    import gui.scripts.predefined_variables as pv
+
+    seen, aoi = _fake_ee_recording_filter_bounds(monkeypatch)
+
+    getattr(pv, layer)(aoi, 2010)
+
+    assert seen, "layer is expected to pre-filter with filterBounds"
+    assert all(arg == "BOUNDS" for arg in seen), seen

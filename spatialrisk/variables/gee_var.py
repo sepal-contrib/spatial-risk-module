@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+import ee
 from pydantic import Field, model_validator
 
 from spatialrisk.gee.ee_raster_export import download_ee_image
@@ -70,6 +71,24 @@ class GEEVar(Variable):
             return -32768
         return 255
 
+    def resolve_images(self) -> List[Any]:
+        """The layer's ``ee.Image`` list, building it from an asset id if needed.
+
+        An asset-id GEEVar (``path`` set, no ``gee_images``) is valid per
+        ``_chk_source``. The image is built lazily here — ``ee.Image`` needs an
+        initialised client, which construction must not require — and kept, so
+        both the map toggle and the download see the same variable become
+        mappable after the first call.
+        """
+        if not self.gee_images:
+            if isinstance(self.path, str) and (
+                self.path.startswith("users/") or self.path.startswith("projects/")
+            ):
+                self.gee_images = [ee.Image(self.path)]
+            else:
+                raise ValueError("gee_images must be provided for download.")
+        return self.gee_images
+
     def _download(
         self,
         overwrite: bool = False,
@@ -95,9 +114,7 @@ class GEEVar(Variable):
         output_path: Path = None
         extensions = {"vector": ".shp", "raster": ".tif"}
 
-        # Ensure gee_images is set
-        if not self.gee_images:
-            raise ValueError("gee_images must be provided for download.")
+        images = self.resolve_images()
 
         # Get the output folder
         output_folder = self.project.folders.data_raw_folder
@@ -119,7 +136,7 @@ class GEEVar(Variable):
                 from spatialrisk.gee.vector_export import ee_export_vector
 
                 ee_export_vector(
-                    self.gee_images[0],
+                    images[0],
                     output_path,
                     selectors=["gaul0_name", "iso3_code"],
                     keep_zip=False,
@@ -130,11 +147,16 @@ class GEEVar(Variable):
             elif self.data_type == DataType.raster:
                 nodata = self._resolve_export_nodata(raster_type)
                 download_ee_image(
-                    self.gee_images[0],
+                    images[0],
                     output_path,
                     scale=self.default_scale or 30,
                     crs=self.default_crs or "EPSG:4326",
-                    region=self.aoi.geometry(),
+                    # The AOI object itself: the helper clips with it and
+                    # exports over its bounds. ``self.aoi.geometry()`` inlines
+                    # a table asset's computed geometry into every tile
+                    # request and large AOIs fail with "Description length
+                    # exceeds maximum".
+                    region=self.aoi,
                     overwrite=True,
                     unmask_value=nodata,
                     nodata_value=nodata,
@@ -319,6 +341,7 @@ class GEEVar(Variable):
                     data_type=DataType.raster,
                     active=True,
                     tags=self.tags.copy(),  # Copy tags from GEEVar
+                    vis_params=self.vis_params,
                     year=self.year,
                 )
                 local_vars.append(local_var)

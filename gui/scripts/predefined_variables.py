@@ -41,6 +41,22 @@ def resolve_aoi_ee(aoi_result):
     )
 
 
+def _aoi_bounds(aoi):
+    """Bounding rectangle of an AOI (Geometry, Feature or FeatureCollection).
+
+    Use this — never the AOI itself or ``aoi.geometry()`` — as the
+    ``filterBounds`` argument of a spatial pre-filter. Passing the AOI makes
+    Earth Engine materialise its geometry inside the download request, and a
+    large table asset (a single feature of ~1.1M coordinates, reproduced
+    2026-09-11) then fails every tile with "Description length exceeds
+    maximum". Pre-filters are an optimisation only: each layer is clipped to
+    the AOI afterwards (``clip`` accepts the AOI object directly), so the
+    rectangle is sufficient.
+    """
+    geom = aoi if isinstance(aoi, ee.Geometry) else aoi.geometry()
+    return geom.bounds()
+
+
 # ---------------------------------------------------------------------------
 # Individual get_image functions
 # ---------------------------------------------------------------------------
@@ -65,26 +81,26 @@ def _get_protected_area(aoi, year=None):
     ``WDPAID`` property that the current ``WCMC/WDPA/current/polygons`` schema no
     longer exposes (it was renamed to ``SITE_ID`` / ``SITE_PID``), which silently
     produced an all-zero raster. ``aoi`` may be a Geometry, Feature, or
-    FeatureCollection; ``filterBounds`` requires a Geometry.
+    FeatureCollection; the pre-filter uses its bounds (see ``_aoi_bounds``)
+    and ``clip`` takes the AOI as given.
     """
-    geom = aoi if isinstance(aoi, ee.Geometry) else aoi.geometry()
     wdpa = (
         ee.FeatureCollection("WCMC/WDPA/current/polygons")
-        .filterBounds(geom)
+        .filterBounds(_aoi_bounds(aoi))
         .filter(
             ee.Filter.inList(
                 "STATUS", ["Designated", "Inscribed", "Established", "Proposed"]
             )
         )
     )
-    return ee.Image(0).paint(wdpa, 1).clip(geom).toByte()
+    return ee.Image(0).paint(wdpa, 1).clip(aoi).toByte()
 
 
 def _get_rivers(aoi, year=None):
     """OSM water layer — binary mask (rivers/streams)."""
     return (
         ee.ImageCollection("projects/sat-io/open-datasets/OSM_waterLayer")
-        .filterBounds(aoi)
+        .filterBounds(_aoi_bounds(aoi))
         .mosaic()
         .clip(aoi)
         .gte(2)
@@ -138,7 +154,7 @@ def _get_forest_tmf(aoi, year):
     """
     tmf = (
         ee.ImageCollection("projects/JRC/TMF/v1_2024/AnnualChanges")
-        .filterBounds(aoi)
+        .filterBounds(_aoi_bounds(aoi))
         .mosaic()
     )
     band = tmf.select("Dec" + str(year - 1))

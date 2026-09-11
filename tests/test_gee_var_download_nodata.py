@@ -112,3 +112,45 @@ def test_to_local_raster_raster_type_override_reaches_download(
     assert captured_download[0]["unmask_value"] == -32768
     assert captured_download[0]["nodata_value"] == -32768
     assert local.raster_type == RasterType.continuous
+
+
+def test_asset_id_path_resolves_to_image_for_download(
+    tmp_path, captured_download, monkeypatch
+):
+    """A GEEVar built from an asset id (``path``, no ``gee_images``) must download.
+
+    The validator accepts ``path`` set to an asset id, so ``_download`` has to
+    resolve it to an ee.Image instead of raising
+    "gee_images must be provided for download".
+    """
+    loaded = []
+
+    def fake_image(asset_id):
+        loaded.append(asset_id)
+        return _FakeImage()
+
+    monkeypatch.setattr(gee_var_module.ee, "Image", fake_image)
+    var = _gee_var(tmp_path, name="custom", gee_images=None, path="projects/p/assets/x")
+
+    paths = var._download()
+
+    assert loaded == ["projects/p/assets/x"]
+    assert len(captured_download) == 1
+    assert paths[0].name == "custom.tif"
+    # The resolved image is kept so the layer is mappable afterwards.
+    assert var.gee_images and isinstance(var.gee_images[0], _FakeImage)
+
+
+def test_download_region_is_the_aoi_object_not_its_geometry(
+    tmp_path, captured_download
+):
+    """The AOI object itself travels to download_ee_image.
+
+    Passing ``aoi.geometry()`` puts the *computed* geometry of a table asset in
+    the download request; for large assets Earth Engine answers "Description
+    length exceeds maximum". The export helper derives clip area and bounds
+    from the object it is given.
+    """
+    var = _gee_var(tmp_path)
+    var._download()
+    assert captured_download[0]["region"] is var.aoi
