@@ -1,7 +1,6 @@
-"""
-FAO GAUL Data Utilities
+"""FAO GAUL data utilities.
 
-This module provides functions for downloading and working with FAO GAUL (Global Administrative Unit Layers) data
+Functions for selecting FAO GAUL (Global Administrative Unit Layers) features
 from Google Earth Engine.
 """
 
@@ -14,8 +13,9 @@ def get_fao_gaul_features(
     """
     Selects features from FAO GAUL 2024 dataset based on the level and code provided.
 
-    This function allows users to select administrative features at any level (0, 1, or 2)
-    using ISO codes. It returns a FeatureCollection containing the selected features.
+    This function allows users to select administrative features at any level
+    (0, 1, or 2) using ISO codes. It returns a FeatureCollection containing the
+    selected features.
 
     Parameters
     ----------
@@ -28,26 +28,26 @@ def get_fao_gaul_features(
         ISO code for level 0, or identifier for levels 1 and 2.
         For level 0: ISO-3 country code (e.g., "BRA" for Brazil)
         For level 1: ADM1_CODE value (e.g., "DZA01" for Adrar, Algeria)
-        For level 2: ADM2_CODE value (e.g., "DZA0101" for Adrar district in Adrar province, Algeria)
+        For level 2: ADM2_CODE value (e.g., "DZA0101" for Adrar district in
+        Adrar province, Algeria)
     filter_attribute : str, optional
         The attribute name to use for filtering. Default is "iso3_code".
 
-    Returns
+    Returns:
     -------
     ee.FeatureCollection
         The selected FeatureCollection from the FAO GAUL 2024 dataset.
 
-    Raises
+    Raises:
     ------
     ValueError
         If level is not 0, 1, or 2, or if code is not provided.
 
-    Notes
+    Notes:
     -----
     The function assumes Earth Engine has already been initialized (`ee.Initialize()`)
     in your script or notebook.
     """
-
     # Validate inputs
     if level not in (0, 1, 2):
         raise ValueError("`level` must be 0, 1, or 2.")
@@ -87,12 +87,12 @@ def get_fao_gaul_subj(level: int, feature_collection: ee.FeatureCollection):
     feature_collection : ee.FeatureCollection
         A FeatureCollection used to filter the FAO GAUL dataset.
 
-    Returns
+    Returns:
     -------
     ee.FeatureCollection
         The selected FeatureCollection from the FAO GAUL 2024 dataset
 
-    Raises
+    Raises:
     ------
     ValueError
         If `level` is not 1 or 2.
