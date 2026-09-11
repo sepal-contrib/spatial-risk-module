@@ -94,6 +94,8 @@ def _grayscale_vis(image, var, gee_interface):
 def _styled_layer(image, var, gee_interface):
     """Choose visualization for a source variable.
 
+    A variable carrying its own ``vis_params`` (custom layers, picked in the
+    modal) renders with exactly that.
     Predefined catalogue variables carry their own visualization spec (keyed by
     name): a ``random_visualizer`` flag (random RGB per class) or a ``vis_params``
     dict whose palette is stretched dynamically when no min/max is given.
@@ -104,8 +106,9 @@ def _styled_layer(image, var, gee_interface):
 
     Returns (image_to_add, vis_params, render_kind). GEE variables are never
     post-process outputs (post-processing runs on downloaded rasters), so its
-    render_kind vocabulary is the catalogue subset: "random_visualizer",
-    "catalogue_palette", "categorical_fallback", "continuous_fallback".
+    render_kind vocabulary is the catalogue subset: "custom_palette",
+    "random_visualizer", "catalogue_palette", "categorical_fallback",
+    "continuous_fallback".
     Synchronous — any GEE stretch it computes goes through the blocking
     interface, so call it from a worker thread.
     """
@@ -113,6 +116,13 @@ def _styled_layer(image, var, gee_interface):
         PREDEFINED_CATALOGUE,
         resolve_predefined,
     )
+
+    # A palette the user picked in the Variables modal wins over the catalogue
+    # and the raster-type fallbacks. Applied verbatim: a categorical pick is
+    # pinned to 0..1, a ramp is palette-only and GEE stretches it.
+    own = getattr(var, "vis_params", None) or {}
+    if own.get("palette"):
+        return image, dict(own), "custom_palette"
 
     # The name may carry a param suffix (forest_gfc_tc30), so resolve it back to
     # the catalogue key rather than looking the raw name up.
@@ -142,6 +152,10 @@ def _styled_layer(image, var, gee_interface):
 def _add_gee_layer(map_, image, var, name: str, layer_key: str):
     """Style and add a GEE image layer to ``map_`` (blocking; run in a thread).
 
+    ``image`` may be None for an asset-id GEEVar that has not been downloaded
+    yet: the image is then built here, on the worker thread, through
+    ``GEEVar.resolve_images`` (``ee.Image`` needs the initialised client).
+
     Returns ``(vis, render_kind)`` — plain data the caller uses to build the
     layer's legend on the main thread. Legend text must not be resolved here:
     ``t()`` reads a session-scoped reactive translator, and this runs on a
@@ -155,6 +169,8 @@ def _add_gee_layer(map_, image, var, name: str, layer_key: str):
     this blocking call with ``asyncio.to_thread`` keeps Solara's loop free, the
     same pattern the local raster/vector branches use.
     """
+    if image is None:
+        image = var.resolve_images()[0]
     styled_image, vis, render_kind = _styled_layer(image, var, map_.gee_interface)
     map_.add_ee_layer(styled_image, vis, name=name, key=layer_key, use_map_vis=False)
     return vis, render_kind
@@ -190,6 +206,8 @@ def _variable_to_entry(key: str, var, project) -> dict:
         "name": var.name,
         "year": str(var.year) if var.year else "",
     }
+    if getattr(var, "vis_params", None):
+        entry["vis_params"] = dict(var.vis_params)
     if vtype == "LocalRasterVar":
         entry["path"] = str(var.path)
         entry["raster_type"] = (
@@ -202,6 +220,12 @@ def _variable_to_entry(key: str, var, project) -> dict:
         entry["scale"] = (
             str(var.default_scale) if getattr(var, "default_scale", None) else ""
         )
+        if var.raster_type is not None:
+            entry["raster_type"] = (
+                var.raster_type.value
+                if hasattr(var.raster_type, "value")
+                else str(var.raster_type)
+            )
     elif vtype == "LocalVectorVar":
         entry["path"] = str(var.path)
         entry["rasterization_method"] = (
@@ -232,6 +256,8 @@ def _build_variable(entry: dict, project):
         name=entry["name"],
         year=entry.get("year"),
         project=project,
+        # Palette picked in the modal (custom raster layers); None otherwise.
+        vis_params=entry.get("vis_params"),
     )
     vtype = entry["type"]
     if vtype == "LocalRasterVar":
@@ -245,7 +271,11 @@ def _build_variable(entry: dict, project):
         return GEEVar(
             path=entry["path"],
             default_scale=entry.get("default_scale"),
+            raster_type=entry.get("raster_type"),
             data_type=entry["data_type"],
+            # Download clips the export to ``aoi.geometry()``; without it a
+            # custom asset only fails later, at download time.
+            aoi=_current_aoi_ee(),
             **common,
         )
     if vtype == "LocalVectorVar":
@@ -258,19 +288,25 @@ def _build_variable(entry: dict, project):
     raise ValueError(f"Unknown variable type: {vtype}")
 
 
-def _build_predefined(entry: dict, project):
-    """Build a GEEVar from a predefined catalogue entry."""
-    from gui.scripts.predefined_variables import PREDEFINED_CATALOGUE, resolve_aoi_ee
+def _current_aoi_ee():
+    """The selected AOI as an ee object, or raise if the AOI step is not done."""
+    from gui.scripts.predefined_variables import resolve_aoi_ee
     from gui.store.state_manager import app_state
-
-    key = entry["predefined_key"]
-    cat = PREDEFINED_CATALOGUE[key]
 
     aoi_result = app_state.aoi_result.value
     if aoi_result is None:
         raise ValueError("No AOI selected — complete the AOI step first.")
+    return resolve_aoi_ee(aoi_result)
 
-    aoi_ee = resolve_aoi_ee(aoi_result)
+
+def _build_predefined(entry: dict, project):
+    """Build a GEEVar from a predefined catalogue entry."""
+    from gui.scripts.predefined_variables import PREDEFINED_CATALOGUE
+
+    key = entry["predefined_key"]
+    cat = PREDEFINED_CATALOGUE[key]
+
+    aoi_ee = _current_aoi_ee()
     year = entry.get("year")
     # Declared params (e.g. forest_gfc's tree_cover_threshold) travel as kwargs;
     # entries for unparameterised layers carry none and call through unchanged.
@@ -455,9 +491,16 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             label = raw_layer_label(key)
             generation = legend_port.generation() if legend_port is not None else None
             legend = None
-            if images:
+            if images or type(var).__name__ == "GEEVar":
+                # An asset-id GEEVar has no image before download; the worker
+                # resolves it (see _add_gee_layer).
                 vis, render_kind = await asyncio.to_thread(
-                    _add_gee_layer, map_, images[0], var, label, layer_key
+                    _add_gee_layer,
+                    map_,
+                    images[0] if images else None,
+                    var,
+                    label,
+                    layer_key,
                 )
                 legend = _var_legend(key, var, vis=vis, render_kind=render_kind)
             elif type(var).__name__ == "LocalVectorVar":

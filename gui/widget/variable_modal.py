@@ -5,9 +5,13 @@ from typing import Callable, Optional
 
 import reacton.ipyvuetify as rv
 import solara
-from pysepal.solara.components.inputs import FileInputComponent
+from pysepal.solara.components.inputs import (
+    AssetSelectComponent,
+    FileInputComponent,
+)
 
 from gui.i18n import t
+from gui.scripts import variable_palettes as palettes
 from gui.scripts.predefined_variables import (
     PREDEFINED_CATALOGUE,
     build_predefined_name,
@@ -61,6 +65,17 @@ def _type_items():
     return [{"text": t(_TYPE_LABEL_KEYS[v]), "value": v} for v in VAR_TYPES]
 
 
+def custom_vis(raster_type: str, presence_hex: str, ramp: str, invert: bool):
+    """The ``vis_params`` a custom raster layer submits for its raster type.
+
+    Categorical: white -> the presence colour, pinned to 0..1. Continuous: the
+    named ramp, reversed when inverted, stretched by the renderer.
+    """
+    if raster_type == RasterType.categorical.value:
+        return palettes.categorical_vis(presence_hex)
+    return palettes.continuous_vis(ramp, invert)
+
+
 def _type_display(var_type: str) -> str:
     """Friendly label for a variable-type discriminator (falls back to raw)."""
     key = _TYPE_LABEL_KEYS.get(var_type)
@@ -90,10 +105,15 @@ def VariableModal(
     file_path, set_file_path = solara.use_state("")
     asset_id, set_asset_id = solara.use_state("")
     scale, set_scale = solara.use_state("")
-    raster_type, set_raster_type = solara.use_state(RasterType.continuous.value)
+    # Categorical first: most user layers are 0/1 masks.
+    raster_type, set_raster_type = solara.use_state(RasterType.categorical.value)
     rasterization_method, set_rasterization_method = solara.use_state(
         RasterizationMethod.binary.value
     )
+    # Palette pick for custom raster layers (see gui.scripts.variable_palettes).
+    presence_hex, set_presence_hex = solara.use_state(f"#{palettes.DEFAULT_PRESENCE}")
+    ramp, set_ramp = solara.use_state(palettes.DEFAULT_RAMP)
+    invert, set_invert = solara.use_state(False)
     error, set_error = solara.use_state(None)
 
     is_edit = editing_key is not None
@@ -134,8 +154,11 @@ def VariableModal(
         set_file_path("")
         set_asset_id("")
         set_scale("")
-        set_raster_type(RasterType.continuous.value)
+        set_raster_type(RasterType.categorical.value)
         set_rasterization_method(RasterizationMethod.binary.value)
+        set_presence_hex(f"#{palettes.DEFAULT_PRESENCE}")
+        set_ramp(palettes.DEFAULT_RAMP)
+        set_invert(False)
         set_error(None)
 
     def prefill_from_initial():
@@ -154,10 +177,16 @@ def VariableModal(
         set_file_path(initial_entry.get("path", ""))
         set_asset_id(initial_entry.get("asset_id", ""))
         set_scale(initial_entry.get("scale", ""))
-        set_raster_type(initial_entry.get("raster_type", RasterType.continuous.value))
+        set_raster_type(initial_entry.get("raster_type", RasterType.categorical.value))
         set_rasterization_method(
             initial_entry.get("rasterization_method", RasterizationMethod.binary.value)
         )
+        vis = initial_entry.get("vis_params")
+        saved_hex = palettes.presence_color(vis)
+        saved_ramp, saved_invert = palettes.ramp_choice(vis)
+        set_presence_hex(saved_hex or f"#{palettes.DEFAULT_PRESENCE}")
+        set_ramp(saved_ramp or palettes.DEFAULT_RAMP)
+        set_invert(saved_invert)
         set_error(None)
 
     solara.use_effect(prefill_from_initial, [open_.value])
@@ -226,6 +255,14 @@ def VariableModal(
         if not name.strip():
             set_error(t("vars.modal.error_name_required"))
             return
+        is_raster = var_type in ("LocalRasterVar", "GEEVar")
+        if (
+            is_raster
+            and raster_type == RasterType.categorical.value
+            and not palettes.is_hex(presence_hex)
+        ):
+            set_error(t("vars.modal.error_hex_invalid"))
+            return
         yr = int(year) if year and str(year).strip() else None
         entry = {
             "source": "custom",
@@ -241,6 +278,7 @@ def VariableModal(
             )
             entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
+            entry["vis_params"] = custom_vis(raster_type, presence_hex, ramp, invert)
         elif var_type == "GEEVar":
             entry["path"] = (
                 asset_id.strip()
@@ -248,7 +286,10 @@ def VariableModal(
                 else f"projects/dummy/assets/{name.strip()}"
             )
             entry["default_scale"] = float(scale) if scale.strip() else None
+            # to_local_raster refuses to convert without a raster type.
+            entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
+            entry["vis_params"] = custom_vis(raster_type, presence_hex, ramp, invert)
         elif var_type == "LocalVectorVar":
             entry["path"] = (
                 Path(file_path.strip())
@@ -340,6 +381,12 @@ def VariableModal(
                         sepal_client=sepal_client,
                         storage_key=storage_key,
                         key_exists=key_exists,
+                        presence_hex=presence_hex,
+                        set_presence_hex=set_presence_hex,
+                        ramp=ramp,
+                        set_ramp=set_ramp,
+                        invert=invert,
+                        set_invert=set_invert,
                     )
 
                 if error:
@@ -497,6 +544,12 @@ def _render_custom_fields(
     sepal_client,
     storage_key,
     key_exists,
+    presence_hex="",
+    set_presence_hex=None,
+    ramp=palettes.DEFAULT_RAMP,
+    set_ramp=None,
+    invert=False,
+    set_invert=None,
 ):
     """Fields shown when source == 'custom'."""
     ArtifactNameField(
@@ -541,13 +594,16 @@ def _render_custom_fields(
             clearable=True,
         )
     if var_type == "GEEVar":
-        rv.TextField(
-            label=t("vars.modal.custom_asset_id_label"),
-            v_model=asset_id,
-            on_v_model=set_asset_id,
-            dense=True,
-            outlined=True,
-            placeholder=t("vars.modal.custom_asset_id_placeholder"),
+        # pysepal's selector lists the user's assets and validates whatever is
+        # typed against Earth Engine; IMAGE only, a TABLE is not a raster layer.
+        # It publishes {asset_id, type, column, value} and treats ``value`` as
+        # output-only, so an edited layer's id is restored through ``initial``
+        # (snapshotted once at mount). The dialog is persistent and both ways
+        # out run reset(), so the selector always mounts after the prefill.
+        AssetSelectComponent(
+            types=["IMAGE"],
+            initial={"asset_id": asset_id} if asset_id else None,
+            on_value=lambda sel: set_asset_id((sel or {}).get("asset_id") or ""),
         )
         rv.TextField(
             label=t("vars.modal.custom_scale_label"),
@@ -570,6 +626,15 @@ def _render_custom_fields(
             hint=t("vars.modal.custom_raster_type_hint"),
             persistent_hint=True,
         )
+        _render_palette_fields(
+            raster_type,
+            presence_hex,
+            set_presence_hex,
+            ramp,
+            set_ramp,
+            invert,
+            set_invert,
+        )
     if var_type == "LocalVectorVar":
         rv.Select(
             label=t("vars.modal.custom_rasterization_method_label"),
@@ -580,4 +645,135 @@ def _render_custom_fields(
             outlined=True,
             hint=t("vars.modal.custom_rasterization_method_hint"),
             persistent_hint=True,
+        )
+
+
+_SWATCH_STYLE = (
+    "min-width:32px;width:32px;height:32px;border-radius:50%;padding:0;"
+    "background-color:{color};"
+)
+# Ramp cards: a gradient bar over its name, in a bordered card; the selected
+# card is ringed and bold (the mockup's look).
+_RAMP_GRID = (
+    "display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));"
+    "gap:8px;width:100%;"
+)
+_RAMP_CARD = (
+    "display:block;height:auto;min-width:0;width:100%;padding:6px;"
+    "text-transform:none;letter-spacing:normal;font-weight:400;text-align:left;"
+    "border:1px solid rgba(128,128,128,0.5);border-radius:4px;background:transparent;"
+)
+_RAMP_CARD_SELECTED = "box-shadow:0 0 0 2px currentColor;font-weight:600;"
+_RAMP_BAR = (
+    "display:block;height:14px;border-radius:3px;margin-bottom:6px;"
+    "border:1px solid rgba(0,0,0,0.1);background:{gradient};"
+)
+# Selection ring drawn on a wrapper, not the button: Vuetify's elevation
+# classes own the button's box-shadow, and its focus rules its outline.
+_WRAP_STYLE = (
+    "display:inline-block;margin:0 8px 8px 0;border-radius:{radius};padding:2px;"
+)
+_WRAP_SELECTED = "box-shadow:0 0 0 2px currentColor;"
+# Outlined box with a floating legend, the look of the dialog's outlined fields.
+_FIELDSET_STYLE = (
+    "border:1px solid rgba(128,128,128,0.6);border-radius:4px;"
+    "padding:8px 12px 4px;margin:4px 0 0;min-width:0;"
+)
+_LEGEND_STYLE = "padding:0 4px;font-size:0.75rem;opacity:0.75;"
+
+
+def _render_palette_fields(
+    raster_type,
+    presence_hex,
+    set_presence_hex,
+    ramp,
+    set_ramp,
+    invert,
+    set_invert,
+):
+    """Palette pick under the raster-type select for custom raster layers.
+
+    Categorical: unlabelled presence swatches (absence stays white) plus a hex
+    field that always shows the stored value — a swatch fills it, typing a
+    valid hex deselects the swatches. Continuous: the named ramps with an
+    invert switch. Buttons go through ``solara.Button`` (a raw ``rv.Btn``
+    drops clicks); the ``sr-swatch`` / ``sr-ramp`` classes and the
+    ``--selected`` modifier are what tests key on. The selected swatch also
+    carries a check mark, so the choice reads without relying on the ring.
+    """
+    is_categorical = raster_type == RasterType.categorical.value
+    legend = t(
+        "vars.modal.presence_color_label" if is_categorical else "vars.modal.ramp_label"
+    )
+    with rv.Html(tag="fieldset", style_=_FIELDSET_STYLE):
+        rv.Html(tag="legend", children=[legend], style_=_LEGEND_STYLE)
+        if is_categorical:
+            current = presence_hex.strip().lstrip("#").lower()
+            with solara.Row(gap="0", style="flex-wrap:wrap;align-items:center;"):
+                for color in palettes.PRESENCE_COLORS:
+                    selected = color == current
+                    with rv.Html(
+                        tag="div",
+                        style_=_WRAP_STYLE.format(radius="50%")
+                        + (_WRAP_SELECTED if selected else ""),
+                    ):
+                        solara.Button(
+                            label="",
+                            icon_name="mdi-check" if selected else None,
+                            on_click=lambda *_, c=color: set_presence_hex(f"#{c}"),
+                            style=_SWATCH_STYLE.format(color=f"#{color}"),
+                            classes=["sr-swatch"]
+                            + (["sr-swatch--selected"] if selected else []),
+                            elevation=0,
+                            dark=True,
+                        )
+            rv.TextField(
+                label=t("vars.modal.presence_hex_label"),
+                v_model=presence_hex,
+                on_v_model=set_presence_hex,
+                dense=True,
+                outlined=True,
+                hint=t("vars.modal.presence_hex_hint"),
+                persistent_hint=True,
+                style_="max-width:180px;",
+                class_="mt-2",
+            )
+            return
+
+        with rv.Html(tag="div", style_=_RAMP_GRID):
+            for key in palettes.RAMPS:
+                selected = key == ramp
+                solara.Button(
+                    # One full-width block: v-btn__content is a centred flex
+                    # row, so two direct children would sit side by side.
+                    children=[
+                        rv.Html(
+                            tag="span",
+                            style_="display:block;width:100%;",
+                            children=[
+                                rv.Html(
+                                    tag="span",
+                                    style_=_RAMP_BAR.format(
+                                        gradient=palettes.ramp_css(key, invert)
+                                    ),
+                                ),
+                                rv.Html(
+                                    tag="span",
+                                    children=[t(f"vars.modal.ramp_{key}")],
+                                ),
+                            ],
+                        )
+                    ],
+                    on_click=lambda *_, k=key: set_ramp(k),
+                    style=_RAMP_CARD + (_RAMP_CARD_SELECTED if selected else ""),
+                    classes=["sr-ramp"] + (["sr-ramp--selected"] if selected else []),
+                    text=True,
+                )
+        rv.Switch(
+            label=t("vars.modal.ramp_invert_label"),
+            v_model=invert,
+            on_v_model=set_invert,
+            dense=True,
+            hide_details=True,
+            class_="mt-0 mb-1",
         )

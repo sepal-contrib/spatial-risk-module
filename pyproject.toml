@@ -10,6 +10,7 @@ license = {text = "MIT"}
 # binary with no PyPI package) and python itself (see requires-python).
 dependencies = [
     "dask[distributed]", # distributed: dask.distributed is imported
+    "ee-client>=3.2.0,<4", # <3.1.1 binds one httpx pool to the first event loop; the sync/async GEEInterface bridge needs the per-loop resources of 3.1.1+
     "fiona",
     "forestatrisk>=1.3.2",
     "formulaic",

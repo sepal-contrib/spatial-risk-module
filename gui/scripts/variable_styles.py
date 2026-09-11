@@ -53,14 +53,17 @@ def resolve_variable_style(var) -> dict:
     "render_kind": str}``. ``vmin``/``vmax`` are ``None`` when the value range
     should auto-stretch to the file's actual min/max (localtileserver does this
     when they are not pinned). ``render_kind`` names which branch was taken, one
-    of ``"postprocess_distance"``, ``"postprocess_change"``, ``"catalogue_palette"``,
-    ``"random_visualizer"``, ``"categorical_fallback"``, ``"continuous_fallback"`` —
+    of ``"postprocess_distance"``, ``"postprocess_change"``, ``"custom_palette"``,
+    ``"catalogue_palette"``, ``"random_visualizer"``, ``"categorical_fallback"``,
+    ``"continuous_fallback"`` —
     the legend builder uses it instead of re-deriving this dispatch logic.
 
     Selection mirrors ``_styled_layer`` (the GEE-side authority):
 
     * post-process output (edge/dist/loss/gain, per ``postprocess_styles``) -> its
       QGIS-derived ramp, pinned;
+    * the variable's own ``vis_params`` (picked in the Variables modal) -> that
+      palette, pinned to its ``min``/``max`` when given (else auto-stretched);
     * predefined catalogue entry with ``vis_params.palette`` -> that palette,
       pinned to its ``min``/``max`` when given (else auto-stretched);
     * predefined ``random_visualizer`` (multi-class categorical, e.g. subj) ->
@@ -86,6 +89,19 @@ def resolve_variable_style(var) -> dict:
         return {**postprocess, "render_kind": render_kind}
 
     name = getattr(var, "name", "") or ""
+
+    # A palette the user picked in the Variables modal (custom layers have no
+    # catalogue entry to take one from) wins over everything below. Same shape
+    # the GEE side applies verbatim; a missing min/max means auto-stretch.
+    own = getattr(var, "vis_params", None) or {}
+    if own.get("palette"):
+        return {
+            "colormap": _colormap_from_palette(own["palette"], name),
+            "vmin": own.get("min"),
+            "vmax": own.get("max"),
+            "render_kind": "custom_palette",
+        }
+
     # Parameterised layers are named <key>_<suffix> (forest_gfc_tc30) — resolve
     # back to the catalogue key so they keep the palette they had as GEE layers.
     cat_key, _params = resolve_predefined(name)
