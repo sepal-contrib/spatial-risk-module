@@ -56,8 +56,6 @@
       "custom_year_label": "Année (facultatif)",
       "custom_year_hint": "À renseigner pour les couches temporelles afin d'ajouter la même variable par année ; laissez vide pour les couches statiques.",
       "custom_file_label": "Sélectionner un fichier",
-      "custom_asset_id_label": "ID de l'asset GEE",
-      "custom_asset_id_placeholder": "projects/your-project/assets/name",
       "custom_scale_label": "Échelle (m, facultatif)",
       "custom_scale_hint": "Taille de pixel nominale en mètres utilisée lors de l'export de cet asset GEE.",
       "custom_raster_type_label": "Type de raster",

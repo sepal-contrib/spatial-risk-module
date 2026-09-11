@@ -5,7 +5,10 @@ from typing import Callable, Optional
 
 import reacton.ipyvuetify as rv
 import solara
-from pysepal.solara.components.inputs import FileInputComponent
+from pysepal.solara.components.inputs import (
+    AssetSelectComponent,
+    FileInputComponent,
+)
 
 from gui.i18n import t
 from gui.scripts import variable_palettes as palettes
@@ -591,13 +594,16 @@ def _render_custom_fields(
             clearable=True,
         )
     if var_type == "GEEVar":
-        rv.TextField(
-            label=t("vars.modal.custom_asset_id_label"),
-            v_model=asset_id,
-            on_v_model=set_asset_id,
-            dense=True,
-            outlined=True,
-            placeholder=t("vars.modal.custom_asset_id_placeholder"),
+        # pysepal's selector lists the user's assets and validates whatever is
+        # typed against Earth Engine; IMAGE only, a TABLE is not a raster layer.
+        # It publishes {asset_id, type, column, value} and treats ``value`` as
+        # output-only, so an edited layer's id is restored through ``initial``
+        # (snapshotted once at mount). The dialog is persistent and both ways
+        # out run reset(), so the selector always mounts after the prefill.
+        AssetSelectComponent(
+            types=["IMAGE"],
+            initial={"asset_id": asset_id} if asset_id else None,
+            on_value=lambda sel: set_asset_id((sel or {}).get("asset_id") or ""),
         )
         rv.TextField(
             label=t("vars.modal.custom_scale_label"),

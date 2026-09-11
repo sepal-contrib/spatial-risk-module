@@ -56,8 +56,6 @@
       "custom_year_label": "Año (opcional)",
       "custom_year_hint": "Establecelo para capas temporales, así la misma variable se puede agregar por año; dejalo vacío para las estáticas.",
       "custom_file_label": "Seleccionar archivo",
-      "custom_asset_id_label": "ID de asset de GEE",
-      "custom_asset_id_placeholder": "projects/your-project/assets/name",
       "custom_scale_label": "Escala (m, opcional)",
       "custom_scale_hint": "Tamaño de píxel nominal en metros usado al exportar este asset de GEE.",
       "custom_raster_type_label": "Tipo de ráster",

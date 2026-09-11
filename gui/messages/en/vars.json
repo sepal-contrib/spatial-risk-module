@@ -56,8 +56,6 @@
       "custom_year_label": "Year (optional)",
       "custom_year_hint": "Set for temporal layers so the same variable can be added per year; leave blank for static ones.",
       "custom_file_label": "Select file",
-      "custom_asset_id_label": "GEE asset ID",
-      "custom_asset_id_placeholder": "projects/your-project/assets/name",
       "custom_scale_label": "Scale (m, optional)",
       "custom_scale_hint": "Nominal pixel size in metres used when exporting this GEE asset.",
       "custom_raster_type_label": "Raster type",

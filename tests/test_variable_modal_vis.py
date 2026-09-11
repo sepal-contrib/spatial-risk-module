@@ -6,6 +6,7 @@ submitted as ``vis_params`` and prefilled when editing.
 """
 
 import ipyvuetify as vw
+import pytest
 import reacton
 import solara
 
@@ -14,8 +15,25 @@ from gui.i18n import t
 # See test_manage_projects_render: warm the translator before the first render.
 t("common.cancel")
 
+import gui.widget.variable_modal as mod  # noqa: E402
 from gui.scripts import variable_palettes as vp  # noqa: E402
 from gui.widget.variable_modal import VariableModal  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _stub_asset_selector(monkeypatch):
+    """Stand in for pysepal's AssetSelectComponent on the GEE branch.
+
+    The real one schedules GEE coroutines with ``solara.lab.use_task``, which
+    needs a running event loop that a bare ``reacton.render`` does not have.
+    The selector's own wiring is covered by test_variable_modal_asset_select.
+    """
+
+    @solara.component
+    def FakeSelector(**_):
+        solara.Text("asset-select stub")
+
+    monkeypatch.setattr(mod, "AssetSelectComponent", FakeSelector)
 
 
 def _find(widget, cls, out=None):
