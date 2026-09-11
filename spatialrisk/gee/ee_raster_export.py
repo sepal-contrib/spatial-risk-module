@@ -6,13 +6,30 @@ import ee
 import geedim as gd  # noqa
 
 
+def _export_bounds(region: Any) -> Any:
+    """The export region for geedim: the *bounds* of ``region``, never its geometry.
+
+    Putting the computed ``.geometry()`` of a table asset in a download request
+    makes Earth Engine materialise it into the request description; for a
+    large AOI (a single-feature asset of ~1.1M coordinates reproduced this,
+    2026-09-11) the server answers "Description length exceeds maximum" on
+    every tile. The export grid only depends on the bounding rectangle anyway
+    — ``bounds()`` yields the identical transform and shape — while the
+    footprint itself is applied by ``clip``, which accepts the collection.
+    """
+    if region is None:
+        return None
+    geom = region.geometry() if hasattr(region, "geometry") else region
+    return geom.bounds()
+
+
 # ------------------------------------------------------------------
 #  Download gee raster data using geedim
 # ------------------------------------------------------------------
 def download_ee_image(
     image: ee.Image,
     filename: str,
-    region: Optional[Union[ee.Geometry, ee.FeatureCollection]] = None,
+    region: Optional[Union[ee.Geometry, ee.Feature, ee.FeatureCollection]] = None,
     crs: Optional[str] = None,
     crs_transform: Optional[list] = None,
     scale: Optional[float] = None,
@@ -37,8 +54,10 @@ def download_ee_image(
         The image to be downloaded.
     filename : str
         Name of the destination file.
-    region : ee.Geometry | ee.FeatureCollection | None, optional
-        Region defined by geojson polygon in WGS84. Defaults to the entire image
+    region : ee.Geometry | ee.Feature | ee.FeatureCollection | None, optional
+        Area of interest. Used as the ``clip`` footprint (when ``unmask_value``
+        is set) and, through its bounds, as the export extent. Pass the AOI
+        object itself, not ``aoi.geometry()``. Defaults to the entire image
         granule.
     crs : str | None, optional
         Reproject image(s) to this EPSG or WKT CRS. Where image bands have
@@ -91,15 +110,17 @@ def download_ee_image(
     if not isinstance(image, ee.Image):  # pragma: no cover
         raise ValueError("image must be an ee.Image.")
 
-    # Apply unmasking/clip logic before export.
+    # Apply unmasking/clip logic before export. ``clip`` takes a Geometry,
+    # Feature or FeatureCollection as given — never ``region.geometry()``, see
+    # ``_export_bounds``.
     if unmask_value is not None:
-        if isinstance(region, (ee.Geometry, ee.FeatureCollection)):
+        if region is not None:
             image = image.clip(region)
         image = image.unmask(unmask_value, sameFootprint=False)
 
     img = image.gd.prepareForExport(
         crs=crs,
-        region=region,
+        region=_export_bounds(region),
         scale=scale,
         resampling=resampling,
         dtype=dtype,

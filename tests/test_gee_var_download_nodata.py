@@ -139,3 +139,18 @@ def test_asset_id_path_resolves_to_image_for_download(
     assert paths[0].name == "custom.tif"
     # The resolved image is kept so the layer is mappable afterwards.
     assert var.gee_images and isinstance(var.gee_images[0], _FakeImage)
+
+
+def test_download_region_is_the_aoi_object_not_its_geometry(
+    tmp_path, captured_download
+):
+    """The AOI object itself travels to download_ee_image.
+
+    Passing ``aoi.geometry()`` puts the *computed* geometry of a table asset in
+    the download request; for large assets Earth Engine answers "Description
+    length exceeds maximum". The export helper derives clip area and bounds
+    from the object it is given.
+    """
+    var = _gee_var(tmp_path)
+    var._download()
+    assert captured_download[0]["region"] is var.aoi

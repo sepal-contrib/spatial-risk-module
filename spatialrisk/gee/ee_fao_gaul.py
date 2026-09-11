@@ -71,6 +71,21 @@ def get_fao_gaul_features(
     return selected_features
 
 
+def _as_feature_collection(aoi):
+    """Wrap a Geometry / Feature / FeatureCollection AOI as a FeatureCollection.
+
+    The spatial join in :func:`get_fao_gaul_subj` needs a collection on the
+    secondary side. Only asset-backed collections keep their geometry out of
+    the request; an inline Geometry/Feature (drawn or uploaded AOI) is small
+    enough to serialise, and is wrapped as is.
+    """
+    if isinstance(aoi, ee.FeatureCollection):
+        return aoi
+    if isinstance(aoi, ee.Feature):
+        return ee.FeatureCollection([aoi])
+    return ee.FeatureCollection([ee.Feature(aoi)])
+
+
 def get_fao_gaul_subj(level: int, feature_collection: ee.FeatureCollection):
     """
     Selects features from FAO GAUL 2024 dataset based on the level provided.
@@ -118,8 +133,25 @@ def get_fao_gaul_subj(level: int, feature_collection: ee.FeatureCollection):
     # Get the attribute name for the specified level
     fao_gaul_attribute = gaul_names_attribute[level]
 
-    # Select features based on the geometry of the provided feature collection
-    selected_features = fao_gaul_fc.filterBounds(feature_collection.geometry())
+    # Select the GAUL features intersecting the AOI *without* putting the
+    # AOI's computed geometry in the expression: ``filterBounds(aoi)`` (or
+    # ``aoi.geometry()``) inlines it into any download request built on the
+    # result, and a large table asset then fails every tile with
+    # "Description length exceeds maximum". A bounding-box pre-filter is not
+    # enough on its own — it can select far more districts than actually
+    # intersect (345 vs 106 for a Peruvian Amazon AOI), and the consecutive
+    # codes are exported as a byte. So: cheap bbox pre-filter, then an exact
+    # spatial join against the AOI *collection*, whose geometry EE loads
+    # server-side instead of serialising it into the request. Verified
+    # 2026-09-11 to select exactly the same features as ``filterBounds`` for
+    # admin, drawn and asset AOIs, and to stay lazy (no getInfo at build time).
+    aoi_fc = _as_feature_collection(feature_collection)
+    candidates = fao_gaul_fc.filterBounds(aoi_fc.geometry().bounds())
+    selected_features = ee.Join.simple().apply(
+        candidates,
+        aoi_fc,
+        ee.Filter.intersects(leftField=".geo", rightField=".geo", maxError=10),
+    )
 
     # You might want to use fao_gaul_attribute here for further operations
     # For example, you could select features based on this attribute

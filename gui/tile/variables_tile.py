@@ -273,7 +273,7 @@ def _build_variable(entry: dict, project):
             default_scale=entry.get("default_scale"),
             raster_type=entry.get("raster_type"),
             data_type=entry["data_type"],
-            # Download clips the export to ``aoi.geometry()``; without it a
+            # Download clips the export to the AOI; without it a
             # custom asset only fails later, at download time.
             aoi=_current_aoi_ee(),
             **common,

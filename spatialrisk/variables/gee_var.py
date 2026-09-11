@@ -151,7 +151,12 @@ class GEEVar(Variable):
                     output_path,
                     scale=self.default_scale or 30,
                     crs=self.default_crs or "EPSG:4326",
-                    region=self.aoi.geometry(),
+                    # The AOI object itself: the helper clips with it and
+                    # exports over its bounds. ``self.aoi.geometry()`` inlines
+                    # a table asset's computed geometry into every tile
+                    # request and large AOIs fail with "Description length
+                    # exceeds maximum".
+                    region=self.aoi,
                     overwrite=True,
                     unmask_value=nodata,
                     nodata_value=nodata,
