@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 TASK_TILES = [
+    ("gui/tile/variables_tile.py", "download_task"),
     ("gui/tile/process_tile.py", "process_task"),
 ]
 

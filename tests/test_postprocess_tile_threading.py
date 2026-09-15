@@ -18,12 +18,22 @@ whole call), unlike the forestatrisk MCMC case that needed a subprocess.
 
 import threading
 
+import pytest
 import reacton
 import solara
 
 # Long enough that a synchronous handler visibly blocks, short enough that the
 # regression case fails fast instead of hanging the suite.
 BLOCK_TIMEOUT = 5.0
+
+
+@pytest.fixture(autouse=True)
+def _drain_derived_inflight():
+    """Leave no claim behind in the tile's module-level in-flight set."""
+    yield
+    from gui.tile import postprocess_tile
+
+    postprocess_tile.derived_inflight.release(*postprocess_tile.derived_inflight.value)
 
 
 def _project_with_processed_var():

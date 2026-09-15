@@ -36,16 +36,20 @@ def _run_derived_job(entry, output_name, p, project_reactive, notifier):
     the worker finished (raster written, registered, saved) but the republish
     after the ``await`` never ran, so the layer never appeared.
     """
-    is_change = entry["op"] in CHANGE_OPS
-    if is_change:
-        title = t("notifications.task_change", op=entry["op"])
-        error_key = "tiles.postprocess.error_change"
-    else:
-        title = t(
-            "notifications.task_postprocess", step=entry["op"], name=entry["pp_key"]
-        )
-        error_key = "tiles.postprocess.error_post_processing"
     try:
+        # Inside the try: anything that raises before the job opens — a bad
+        # entry, a title lookup — must still reach the release below, or the
+        # name stays claimed for the session (dead progress bar, layer can
+        # never be submitted again).
+        is_change = entry["op"] in CHANGE_OPS
+        if is_change:
+            title = t("notifications.task_change", op=entry["op"])
+            error_key = "tiles.postprocess.error_change"
+        else:
+            title = t(
+                "notifications.task_postprocess", step=entry["op"], name=entry["pp_key"]
+            )
+            error_key = "tiles.postprocess.error_post_processing"
         with writing(p.project_name):
             with tracked_job(
                 notifier, title, error_format=lambda exc: t(error_key, exc=exc)
@@ -60,7 +64,9 @@ def _run_derived_job(entry, output_name, p, project_reactive, notifier):
                     )
             publish_if_current(project_reactive, p)
     except Exception:
-        logger.exception("derived layer job failed")  # toast from tracked_job
+        # tracked_job already toasted anything raised inside it; a failure
+        # before it opened only reaches the log, but the key is still freed.
+        logger.exception("derived layer job failed")
     finally:
         derived_inflight.release(output_name)
 
@@ -118,7 +124,21 @@ def PostProcessTile(project, map_=None, legend_port=None):
                 timeout=ERROR_TOAST_TIMEOUT,
             )
             return
-        spawn_in_context(_run_derived_job, (entry, name, cur, project, notifications))
+        try:
+            spawn_in_context(
+                _run_derived_job, (entry, name, cur, project, notifications)
+            )
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread that
+            # never starts would hold the name for the rest of the session.
+            derived_inflight.release(name)
+            logger.exception("could not start the derived layer worker")
+            failed_key = (
+                "tiles.postprocess.error_change"
+                if entry["op"] in CHANGE_OPS
+                else "tiles.postprocess.error_post_processing"
+            )
+            notifications.error(t(failed_key, exc=exc), timeout=ERROR_TOAST_TIMEOUT)
 
     with solara.Column(style="gap:16px;"):
         with solara.Row(style="gap:4px;align-items:center;"):

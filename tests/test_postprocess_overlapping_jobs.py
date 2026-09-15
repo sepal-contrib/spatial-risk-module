@@ -11,10 +11,20 @@ the worker thread finished anyway. Now each submission is its own
 
 import threading
 
+import pytest
 import reacton
 import solara
 
 TIMEOUT = 10.0
+
+
+@pytest.fixture(autouse=True)
+def _drain_derived_inflight():
+    """Leave no claim behind in the tile's module-level in-flight set."""
+    yield
+    from gui.tile import postprocess_tile
+
+    postprocess_tile.derived_inflight.release(*postprocess_tile.derived_inflight.value)
 
 
 def _project():
@@ -162,10 +172,12 @@ def test_resubmitting_an_in_flight_layer_is_refused_with_a_toast(monkeypatch):
         assert _wait(lambda: len(notifier.errors) == 1)
         assert "forest_dist" in notifier.errors[0]
         assert calls == ["forest_2010"]  # the second click started nothing
+        gate.set()  # let the one running job finish
+        assert _wait(lambda: not postprocess_tile.derived_inflight.value)
     finally:
         gate.set()
         rc.close()
-        assert _wait(lambda: not postprocess_tile.derived_inflight.value)
+        postprocess_tile.derived_inflight.release("forest_dist")
 
 
 def test_a_failing_job_releases_its_key(monkeypatch):
