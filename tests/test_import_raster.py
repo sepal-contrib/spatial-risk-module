@@ -109,6 +109,20 @@ def test_range_excludes_nodata_and_nan(tmp_path):
     assert vmax == pytest.approx(0.8, abs=1e-6)
 
 
+def test_range_rejects_unreadable_file(tmp_path):
+    """A corrupt file raises ImportRasterError instead of a silent bogus range.
+
+    Without scoping gdal.ExceptionMgr, gdal.Open on a corrupt file just
+    returns None (or logs and returns None) depending on process-wide GDAL
+    exception state, rather than reliably raising; this pins the
+    deterministic, always-raises behaviour.
+    """
+    src = tmp_path / "garbage.tif"
+    src.write_bytes(b"not a real tiff file" * 20)
+    with pytest.raises(ImportRasterError, match="Cannot open"):
+        raster_range(src)
+
+
 # --- check_scale --------------------------------------------------------------
 
 
@@ -135,6 +149,12 @@ def test_any_scale_rejects_negative_values():
         check_scale(-1.0, 0.5, "probability")
     with pytest.raises(ImportRasterError, match="negative"):
         check_scale(-1.0, 10.0, "risk")
+
+
+def test_negative_value_message_states_observed_range():
+    """The negative-values error names both the min and the max, not just min."""
+    with pytest.raises(ImportRasterError, match=r"-1(\.0)? to 0\.5"):
+        check_scale(-1.0, 0.5, "probability")
 
 
 def test_constant_raster_is_rejected():

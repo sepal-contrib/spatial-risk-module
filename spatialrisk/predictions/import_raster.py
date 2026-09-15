@@ -95,17 +95,28 @@ def raster_range(path: PathLike) -> Tuple[float, float]:
     """
     from osgeo import gdal
 
-    ds = gdal.Open(str(path))
-    if ds is None:
-        raise ImportRasterError(f"Cannot open raster: {path}")
-    try:
-        band = ds.GetRasterBand(1)
-        vmin, vmax = band.ComputeRasterMinMax(False)
-    except RuntimeError as exc:
-        raise ImportRasterError(f"Could not compute the value range of {path}: {exc}")
-    finally:
-        band = None
-        ds = None
+    # GDAL's default (non-exception) mode is process-global: whether a failed
+    # gdal.Open/ComputeRasterMinMax raises or just returns None/logs depends on
+    # whether unrelated code already flipped gdal.UseExceptions() elsewhere in
+    # the process. Scope exceptions on for this call only, so the failure mode
+    # here is deterministic regardless of load order.
+    with gdal.ExceptionMgr(useExceptions=True):
+        try:
+            ds = gdal.Open(str(path))
+        except RuntimeError as exc:
+            raise ImportRasterError(f"Cannot open raster: {path} ({exc})") from exc
+        if ds is None:
+            raise ImportRasterError(f"Cannot open raster: {path}")
+        try:
+            band = ds.GetRasterBand(1)
+            vmin, vmax = band.ComputeRasterMinMax(False)
+        except RuntimeError as exc:
+            raise ImportRasterError(
+                f"Could not compute the value range of {path}: {exc}"
+            ) from exc
+        finally:
+            band = None
+            ds = None
     return float(vmin), float(vmax)
 
 
@@ -117,13 +128,14 @@ def check_scale(vmin: float, vmax: float, scale: str) -> None:
         )
     if vmin < 0:
         raise ImportRasterError(
-            f"The raster holds negative values (min {vmin:g}); a risk map cannot. "
-            "Check that fill values are declared as the raster's nodata."
+            f"The raster holds negative values (range {vmin:g} to {vmax:g}); a "
+            "risk map cannot. Check that fill values are declared as the "
+            "raster's nodata."
         )
     if vmax == vmin:
         raise ImportRasterError(
-            f"The raster is constant (every pixel is {vmin:g}); it carries no "
-            "risk information."
+            f"The raster is constant (range {vmin:g} to {vmax:g}, every pixel "
+            "is the same value); it carries no risk information."
         )
     if scale == "probability" and vmax > 1:
         raise ImportRasterError(
