@@ -69,8 +69,13 @@ def test_temporal_vectors_get_distinct_paths(tmp_path, base):
     """The whole point: two years, two files."""
     a = _vector(tmp_path, "roads", 2000)
     b = _vector(tmp_path, "roads", 2020)
-    written_a, _ = _rasterize(a, base)
-    written_b, _ = _rasterize(b, base)
+    written_a, registered_a = _rasterize(a, base)
+    written_b, registered_b = _rasterize(b, base)
     assert written_a.name == "roads_2000.tif"
     assert written_b.name == "roads_2020.tif"
     assert written_a != written_b
+    # The registered path must be the one actually written: harmonization_status
+    # stats the registered path, so a divergence here would have it inspecting a
+    # file the rasterization never produced.
+    assert registered_a == written_a
+    assert registered_b == written_b
