@@ -1,5 +1,7 @@
-"""External (.ovr) overview generation for prediction rasters: idempotent, and
-non-destructive to the source GeoTIFF."""
+"""External (.ovr) overview generation for prediction rasters.
+
+Idempotent, size-gated, and non-destructive to the source GeoTIFF.
+"""
 
 import hashlib
 
@@ -32,6 +34,7 @@ def _digest(path):
 
 
 def test_build_creates_external_overviews(tmp_path):
+    """The pyramid lands in a sidecar; the raster keeps its bytes."""
     tif = tmp_path / "pred.tif"
     _write_raster(tif)
     before = _digest(tif)
@@ -48,6 +51,7 @@ def test_build_creates_external_overviews(tmp_path):
 
 
 def test_second_call_is_noop(tmp_path):
+    """A raster that already has overviews is left alone."""
     tif = tmp_path / "pred.tif"
     _write_raster(tif)
 
