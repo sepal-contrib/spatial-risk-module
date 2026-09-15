@@ -193,7 +193,6 @@
       "pred_name_required": "Requis.",
       "run_button": "Créer la prédiction",
       "import_button": "Importer une prédiction",
-      "generate_overviews_label": "Générer les aperçus avant l'affichage",
       "error_no_project": "Aucun projet actif.",
       "error_invalid_model": "Sélectionnez un modèle entraîné valide.",
       "error_invalid_dataset": "Sélectionnez un jeu de données valide.",

@@ -576,6 +576,9 @@ class Project(BaseModel):
             return False
         if delete_file and getattr(prediction, "path", None):
             self._safe_unlink(prediction.path)
+            # The viewer's overview sidecar: GDAL would serve a leftover .ovr
+            # to the next raster written under this name.
+            self._safe_unlink(str(prediction.path) + ".ovr")
         logger.info("Prediction deleted: project.predictions['%s']", key)
         if auto_save:
             self.save()

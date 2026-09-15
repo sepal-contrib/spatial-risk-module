@@ -131,42 +131,37 @@ def test_far_palette_pins_range_regardless_of_model_key(monkeypatch, tmp_path):
     assert captured["vmin"] == 1 and captured["vmax"] == 65535
 
 
-def test_overviews_built_only_when_flag_set(monkeypatch, tmp_path):
-    """Overviews are built only when build_overviews=True is passed."""
+def test_overviews_are_always_built(monkeypatch, tmp_path):
+    """The pyramid is not optional.
+
+    A tiled prediction without one makes every zoomed-out tile decode the whole
+    raster, so there is no useful way to display one un-optimised.
+    """
     _patch_localtileserver(monkeypatch)
     calls = []
     monkeypatch.setattr(
         "spatialrisk.overviews.ensure_overviews",
-        lambda p, *a, **k: calls.append(p) or True,
+        lambda p, **k: calls.append((p, k)) or True,
     )
     tif = tmp_path / "p.tif"
     tif.write_bytes(b"")
 
     pm.add_prediction_on_map(
-        FakeMap(),
-        str(tif),
-        model_key="mw_5",
-        layer_name="n",
-        key="k",
-        build_overviews=False,
+        FakeMap(), str(tif), model_key="mw_5", layer_name="n", key="k"
     )
-    assert calls == []  # flag off -> no build
 
-    pm.add_prediction_on_map(
-        FakeMap(),
-        str(tif),
-        model_key="mw_5",
-        layer_name="n",
-        key="k",
-        build_overviews=True,
-    )
-    assert calls == [str(tif)]  # flag on -> built once
+    assert [c[0] for c in calls] == [str(tif)]
+    # ...but small rasters stay untouched: they decimate fast enough already.
+    import spatialrisk.overviews as ov
+
+    assert calls[0][1]["min_pixels"] == ov.OVERVIEW_MIN_PIXELS
 
 
 def test_inference_tile_uses_palette_helper_and_overview_option():
     """Predictions route through the QGIS-faithful helper, not bare add_raster.
 
-    Overviews are an opt-in checkbox, and the add runs off the Solara loop.
+    The helper always builds the overview pyramid, and the add runs off the
+    Solara loop.
     """
     import inspect
 
@@ -175,9 +170,10 @@ def test_inference_tile_uses_palette_helper_and_overview_option():
     src = inspect.getsource(inference_tile.InferenceTile)
     assert "add_prediction_on_map" in src  # value-pinned palette path
     assert "map_.add_raster(" not in src  # no more bare grayscale add
-    assert "gen_overviews" in src  # opt-in overviews reactive
-    assert "tiles.inference.generate_overviews_label" in src  # localized checkbox label
-    assert "build_overviews=" in src  # flag forwarded to helper
+    # No overview opt-out: a tiled prediction with no pyramid makes every
+    # zoomed-out tile decode the whole raster, so a country-scale map never draws.
+    assert "gen_overviews" not in src
+    assert "build_overviews" not in src
     assert "to_thread" in src  # add offloaded to a thread
     assert "use_task" in src  # threaded via solara.lab.use_task
     assert "pending_toggle" in src  # toggle routed through the reactive

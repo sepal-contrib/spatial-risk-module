@@ -108,3 +108,19 @@ def test_mw_output_files_includes_ldefrate_rasters():
         model_path=None, samples_path=None, ldefrate_files={"5": d5}
     )
     assert d5 in mw.output_files()
+
+
+def test_delete_prediction_removes_the_overview_sidecar(tmp_path, monkeypatch):
+    """A left-behind .ovr would be picked up by the next raster of that name."""
+    p, data_dir = _setup(tmp_path, monkeypatch)
+    raster = data_dir / "pred.tif"
+    raster.write_bytes(b"x")
+    sidecar = data_dir / "pred.tif.ovr"
+    sidecar.write_bytes(b"o")
+    p.predictions["glm__ds"] = Prediction(
+        path=raster, model_key="glm", dataset_name="ds"
+    )
+
+    assert p.delete_prediction("glm__ds") is True
+    assert not raster.exists()
+    assert not sidecar.exists()

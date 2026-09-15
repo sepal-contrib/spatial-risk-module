@@ -19,7 +19,6 @@ def add_prediction_on_map(
     layer_name,
     key,
     fit_bounds=True,
-    build_overviews=False,
     opacity=1.0,
     display_palette=None,
 ):
@@ -31,8 +30,12 @@ def add_prediction_on_map(
     same data values as in QGIS. Replaces any layer already registered under
     ``key``.
 
-    When ``build_overviews`` is set, external ``.ovr`` overviews are built first
-    (idempotent, best-effort: a failure is logged and display proceeds).
+    The external ``.ovr`` pyramid is built first, always: predictions are
+    written as 256 px tiles, and a tiled raster with no pyramid makes every
+    zoomed-out tile decode the whole file, which is what stops a country-scale
+    prediction from ever drawing. The build is idempotent and threshold-gated,
+    so it is a no-op for a raster that already has one or is small enough to
+    decimate quickly, and best-effort: a failure is logged and display proceeds.
 
     ``map_`` is the first positional arg (not a keyword) so callers read
     naturally; everything after ``path`` is keyword-only.
@@ -43,13 +46,12 @@ def add_prediction_on_map(
 
     path = str(path)
 
-    if build_overviews:
-        try:
-            from spatialrisk.overviews import ensure_overviews
+    try:
+        import spatialrisk.overviews as overviews
 
-            ensure_overviews(path)
-        except Exception:
-            logger.exception("overview build failed for %s; adding un-optimised", path)
+        overviews.ensure_overviews(path, min_pixels=overviews.OVERVIEW_MIN_PIXELS)
+    except Exception:
+        logger.exception("overview build failed for %s; adding un-optimised", path)
 
     style = resolve_display_style(model_key, display_palette)
     client = TileClient(path)

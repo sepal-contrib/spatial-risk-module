@@ -193,7 +193,6 @@
       "pred_name_required": "Obligatorio.",
       "run_button": "Crear predicción",
       "import_button": "Importar predicción",
-      "generate_overviews_label": "Generar vistas generales antes de mostrar",
       "error_no_project": "No hay proyecto activo.",
       "error_invalid_model": "Seleccioná un modelo entrenado válido.",
       "error_invalid_dataset": "Seleccioná un conjunto de datos válido.",

@@ -7,12 +7,15 @@ Provides a generic Pydantic-based foundation for ML models that:
 - Serialize to/from JSON for project persistence
 """
 
+import logging
 import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+
+logger = logging.getLogger("spatial_risk")
 
 
 class BaseRiskModel(BaseModel):
@@ -395,6 +398,23 @@ class BaseRiskModel(BaseModel):
         """
         return [Path(p) for p in (self.model_path, self.samples_path) if p]
 
+    @staticmethod
+    def _ensure_display_overviews(path: Union[str, Path]) -> None:
+        """Build the viewer's overview pyramid for a written output raster.
+
+        Best-effort: a raster that cannot be optimised (read-only folder, a
+        stubbed writer that produced nothing) still registers as a prediction,
+        it just draws slower.
+        """
+        import spatialrisk.overviews as overviews
+
+        if not Path(path).exists():
+            return
+        try:
+            overviews.ensure_overviews(path, min_pixels=overviews.OVERVIEW_MIN_PIXELS)
+        except Exception:
+            logger.exception("Could not build overviews for %s", path)
+
     def _register_prediction(
         self,
         path: Union[str, Path],
@@ -425,6 +445,12 @@ class BaseRiskModel(BaseModel):
             Per-category deforestation-rate table written alongside this output
             (MW/JNR). Consumed by the allocation tool.
         """
+        # A written prediction is above all a display artifact: the viewer
+        # draws it from 256 px tiles, and without a pyramid every zoomed-out
+        # tile decodes the whole raster (see spatialrisk.overviews). Done
+        # before the project guard so a direct apply() gets it too.
+        self._ensure_display_overviews(path)
+
         if self.project is None:
             return None
 

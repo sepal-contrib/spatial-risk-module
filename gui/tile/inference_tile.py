@@ -326,7 +326,6 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
         remaining.discard(row_key)
         preds_on_map.set(remaining)
 
-    gen_overviews = solara.use_reactive(False)
     pending_toggle = solara.use_reactive(None)
 
     @solara.lab.use_task(dependencies=None, raise_error=False)
@@ -367,7 +366,6 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
                             layer_name=sk,
                             key=_pred_layer_key(sk),
                             fit_bounds=False,
-                            build_overviews=gen_overviews.value,
                             display_palette=getattr(pred, "display_palette", None),
                         )
                         added_any = True
@@ -468,12 +466,6 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
         if form_error:
             rv.Alert(type_="error", dense=True, children=[form_error])
 
-        # Optional raster optimisation before predictions hit the map.
-        solara.Checkbox(
-            label=t("tiles.inference.generate_overviews_label"),
-            value=gen_overviews.value,
-            on_value=gen_overviews.set,
-        )
         if _apply_pred_toggle.pending:
             rv.ProgressLinear(indeterminate=True, color="primary")
 

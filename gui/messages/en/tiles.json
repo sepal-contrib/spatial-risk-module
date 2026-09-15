@@ -193,7 +193,6 @@
       "pred_name_required": "Required.",
       "run_button": "Create prediction",
       "import_button": "Import prediction",
-      "generate_overviews_label": "Generate overviews before display",
       "error_no_project": "No active project.",
       "error_invalid_model": "Select a valid trained model.",
       "error_invalid_dataset": "Select a valid dataset.",

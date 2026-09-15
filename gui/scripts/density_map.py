@@ -67,6 +67,15 @@ def add_density_on_map(
     from localtileserver import TileClient, get_leaflet_tile_layer
 
     path = str(path)
+    # The density map is written in the same tiled layout as predictions, so it
+    # needs the same overview pyramid to draw when zoomed out. Idempotent,
+    # threshold-gated and best-effort.
+    try:
+        import spatialrisk.overviews as overviews
+
+        overviews.ensure_overviews(path, min_pixels=overviews.OVERVIEW_MIN_PIXELS)
+    except Exception:
+        logger.exception("overview build failed for %s; adding un-optimised", path)
     vmin, vmax = density_value_range(path)
     client = TileClient(path)
     layer = get_leaflet_tile_layer(
