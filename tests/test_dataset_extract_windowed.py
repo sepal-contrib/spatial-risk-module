@@ -212,22 +212,10 @@ def test_extract_at_points_never_reads_a_full_band():
         ), f"unwindowed read in extract_at_points: {m.group(0)}"
 
 
-def test_extract_num_threads_env_override_and_floor(monkeypatch):
-    """The env override wins and the thread count never drops below one."""
-    from spatialrisk.dataset import _extract_num_threads
-
-    monkeypatch.delenv("SPATIAL_RISK_EXTRACT_NUM_THREADS", raising=False)
-    assert _extract_num_threads() >= 1
-    monkeypatch.setenv("SPATIAL_RISK_EXTRACT_NUM_THREADS", "3")
-    assert _extract_num_threads() == 3
-    monkeypatch.setenv("SPATIAL_RISK_EXTRACT_NUM_THREADS", "0")
-    assert _extract_num_threads() == 1
-
-
 @pytest.mark.parametrize("threads", ["1", "4"])
 def test_windowed_extract_threaded_matches_reference(stack, monkeypatch, threads):
     """The thread pool must be invisible in the output, whatever its size."""
-    monkeypatch.setenv("SPATIAL_RISK_EXTRACT_NUM_THREADS", threads)
+    monkeypatch.setenv("SPATIAL_RISK_NUM_THREADS", threads)
     pts = _points(3000, seed=11)
     for drop in (True, False):
         pd.testing.assert_frame_equal(

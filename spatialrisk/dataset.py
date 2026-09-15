@@ -6,7 +6,6 @@ Provides data in different formats for different model types.
 Works exclusively with LocalRasterVar instances.
 """
 
-import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 import numpy as np
@@ -15,42 +14,7 @@ import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from pydantic import BaseModel, Field, ConfigDict
 
-
-_EXTRACT_NUM_THREADS_ENV = "SPATIAL_RISK_EXTRACT_NUM_THREADS"
-
-EXTRACT_GDAL_CACHEMAX_BYTES = 64 * 1024 * 1024
-"""``GDAL_CACHEMAX`` while extracting point values.
-
-GDAL's block cache defaults to ~5% of physical RAM and keeps every decoded
-tile the extraction touches, so on a 60 GB host a windowed read of a 1.6 Gpx
-stack still peaked at 1.5 GiB (measured 2026-09-15). Each tile is read
-exactly once here, so the cache buys nothing; 64 MiB caps it while leaving
-room for the handful of tiles in flight across the reader threads.
-"""
-
-
-def _extract_num_threads() -> int:
-    """Reader threads for :func:`_read_values_at`: half the cores, min 1.
-
-    Tile decoding is CPU-bound and GDAL releases the GIL, so a pool of
-    per-thread dataset handles scales almost linearly (2.5 s -> 0.55 s per
-    layer with 8 threads on a 400 Mpx DEFLATE layer, 2026-09-15).
-    ``GDAL_NUM_THREADS`` does not help: it only parallelises *within* one
-    read call, and each call here decodes a single tile.
-
-    Uses the affinity mask rather than ``os.cpu_count()`` because SEPAL runs
-    the app in a container whose cgroup quota is smaller than the host. Half
-    the cores leaves room for the Solara server and concurrent jobs.
-    ``SPATIAL_RISK_EXTRACT_NUM_THREADS`` overrides the default.
-    """
-    env_val = os.environ.get(_EXTRACT_NUM_THREADS_ENV)
-    if env_val:
-        return max(1, int(env_val))
-    try:
-        cores = len(os.sched_getaffinity(0))
-    except (AttributeError, OSError):
-        cores = os.cpu_count() or 1
-    return max(1, cores // 2)
+from spatialrisk.parallel import scan_env, worker_threads
 
 
 def _read_values_at(src, rows, cols, num_threads: int = 1):
@@ -63,7 +27,9 @@ def _read_values_at(src, rows, cols, num_threads: int = 1):
 
     With ``num_threads > 1`` the touched blocks are dealt round-robin to a
     thread pool where every worker opens its own handle on ``src.name``
-    (rasterio dataset handles are not thread-safe). Workers write disjoint
+    (rasterio dataset handles are not thread-safe; see ``spatialrisk.parallel``
+    for why threads beat ``GDAL_NUM_THREADS`` here: 2.5 s -> 0.55 s per
+    400 Mpx layer with 8 threads, 2026-09-15). Workers write disjoint
     slices of the output, so no locking is needed. Small jobs stay serial:
     the pool is only worth its start-up when there are blocks to share.
 
@@ -584,7 +550,7 @@ class Dataset(BaseModel):
         target_ncols = None
         target_cell = None
 
-        num_threads = _extract_num_threads()
+        num_threads = worker_threads()
         # Reproject once per distinct CRS, not once per layer.
         reprojected = {}
 
@@ -596,7 +562,7 @@ class Dataset(BaseModel):
                 reprojected[key] = points.to_crs(crs)
             return reprojected[key]
 
-        with rasterio.Env(GDAL_CACHEMAX=EXTRACT_GDAL_CACHEMAX_BYTES):
+        with scan_env():
             for i, var in enumerate(all_vars):
                 with rasterio.open(var.path) as src:
                     nodata = src.nodata
