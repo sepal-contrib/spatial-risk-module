@@ -1,6 +1,5 @@
 """Step 2 — Variables tile."""
 
-import asyncio
 import logging
 
 import ee
@@ -48,6 +47,73 @@ vars_on_map = solara.reactive(set())
 # second click on a row from starting a second copy of the same download
 # while different rows download in parallel.
 download_inflight = InflightKeys(key="download_inflight")
+
+# Source-variable keys whose map toggle is running. A re-click on a loading
+# layer is ignored rather than queued: the first worker's outcome is what the
+# user will see, and the button reflects it as soon as the worker releases.
+vars_inflight = InflightKeys(key="vars_inflight")
+
+
+def _toggle_var_on_map(key, p, map_, legend_port, notifier):
+    """Background worker: add or remove one source variable's map layer.
+
+    The blocking adds (GEE session calls, tile-server/raster reads) run here,
+    and so does every piece of bookkeeping that follows them — the on-map set
+    and the legend. A shared ``use_task`` used to do this after an ``await``,
+    and toggling a second layer cancelled the first coroutine there: its
+    layer still landed on the map, but the toggle stayed off and no legend
+    was published.
+    """
+    var = p.raw_variables.get(key) if p is not None else None
+    try:
+        if var is None or not is_mappable(var):
+            return
+        if key in vars_on_map.value:
+            _drop_from_map(key, map_, legend_port)
+            return
+
+        images = getattr(var, "gee_images", None)
+        layer_key = _map_layer_key(key)
+        label = raw_layer_label(key)
+        generation = legend_port.generation() if legend_port is not None else None
+        legend = None
+        if images or type(var).__name__ == "GEEVar":
+            # An asset-id GEEVar has no image before download; the worker
+            # resolves it (see _add_gee_layer).
+            vis, render_kind = _add_gee_layer(
+                map_, images[0] if images else None, var, label, layer_key
+            )
+            legend = _var_legend(key, var, vis=vis, render_kind=render_kind)
+        elif type(var).__name__ == "LocalVectorVar":
+            add_vector_on_map(map_, str(var.path), label, layer_key)
+        else:  # LocalRasterVar — reuse the palette it had as a GEE layer
+            add_raster_var_on_map(
+                map_,
+                str(var.path),
+                var=var,
+                layer_name=label,
+                key=layer_key,
+                fit_bounds=False,
+            )
+            legend = _var_legend(key, var)
+
+        # A project switch during the add means this layer is stale — take it
+        # back off rather than publish a legend for it.
+        if legend_port is not None and legend_port.generation() != generation:
+            map_.remove_layer(layer_key, none_ok=True)
+            return
+
+        vars_on_map.set(set(vars_on_map.value) | {key})
+        if legend is not None and legend_port is not None:
+            legend_port.register(legend)
+    except Exception as exc:
+        logger.exception("map toggle failed for %s", key)
+        notifier.error(
+            t("tiles.variables.error_toggle_map", key=key, exc=exc),
+            timeout=ERROR_TOAST_TIMEOUT,
+        )
+    finally:
+        vars_inflight.release(key)
 
 
 def _run_download(keys, bulk, p, project_reactive, notifier):
@@ -465,93 +531,30 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     """
     modal_open = solara.use_reactive(False)
     editing_key, set_editing_key = solara.use_state(None)
-    pending_toggle = solara.use_reactive(None)
     notifications = use_notifications()
     downloading = download_inflight.value  # subscribes the tile
 
-    @solara.lab.use_task(dependencies=None, raise_error=False)
-    async def _apply_map_toggle():
-        """Add or remove a variable's layer on the map.
-
-        Every layer-add is offloaded to a worker thread. GEE-backed layers use
-        the GEE interface's blocking API (via ``_add_gee_layer``) so the session
-        calls run on the interface's own event loop; the async map API crashes
-        with "bound to a different event loop" when awaited on Solara's loop.
-        Local raster/vector layers use the blocking ``add_raster_var_on_map`` /
-        ``add_vector_on_map`` helpers the same way. Downloaded rasters keep the
-        palette they had as a GEE layer (see ``add_raster_var_on_map``) instead of
-        rendering grayscale.
-        """
-        key = pending_toggle.value
-        if key is None or map_ is None:
+    def on_toggle_map(key: str):
+        """One worker per toggle; a re-click while it runs is a no-op."""
+        if map_ is None:
             return
-        p = project.value
-        var = p.raw_variables.get(key) if p is not None else None
-        if var is None or not is_mappable(var):
+        cur = project.value
+        if cur is None or not vars_inflight.claim(key):
             return
         try:
-            if key in vars_on_map.value:
-                _drop_from_map(key, map_, legend_port)
-                return
-
-            images = getattr(var, "gee_images", None)
-            layer_key = _map_layer_key(key)
-            label = raw_layer_label(key)
-            generation = legend_port.generation() if legend_port is not None else None
-            legend = None
-            if images or type(var).__name__ == "GEEVar":
-                # An asset-id GEEVar has no image before download; the worker
-                # resolves it (see _add_gee_layer).
-                vis, render_kind = await asyncio.to_thread(
-                    _add_gee_layer,
-                    map_,
-                    images[0] if images else None,
-                    var,
-                    label,
-                    layer_key,
-                )
-                legend = _var_legend(key, var, vis=vis, render_kind=render_kind)
-            elif type(var).__name__ == "LocalVectorVar":
-                await asyncio.to_thread(
-                    add_vector_on_map, map_, str(var.path), label, layer_key
-                )
-            else:  # LocalRasterVar — reuse the palette it had as a GEE layer
-                await asyncio.to_thread(
-                    add_raster_var_on_map,
-                    map_,
-                    str(var.path),
-                    var=var,
-                    layer_name=label,
-                    key=layer_key,
-                    fit_bounds=False,
-                )
-                legend = _var_legend(key, var)
-
-            # A project switch during the await means this layer is stale
-            # (see the InferenceTile add branch for the same guard, kept
-            # outside `finally` there because a `return` inside `finally`
-            # would discard an in-flight exception) — take it back off
-            # rather than publish a legend for it.
-            if legend_port is not None and legend_port.generation() != generation:
-                map_.remove_layer(layer_key, none_ok=True)
-                return
-
-            vars_on_map.set(set(vars_on_map.value) | {key})
-            if legend is not None and legend_port is not None:
-                legend_port.register(legend)
+            spawn_in_context(
+                _toggle_var_on_map, (key, cur, map_, legend_port, notifications)
+            )
         except Exception as exc:
-            logger.exception("map toggle failed for %s", key)
+            # The worker's finally is what releases the claim, so a thread
+            # that never starts would hold this key for the rest of the
+            # session.
+            vars_inflight.release(key)
+            logger.exception("could not start the map-toggle worker")
             notifications.error(
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
                 timeout=ERROR_TOAST_TIMEOUT,
             )
-
-    def on_toggle_map(key: str):
-        """Trigger the async toggle task for one source variable."""
-        if map_ is None:
-            return
-        pending_toggle.set(key)
-        _apply_map_toggle()
 
     pending_add, set_pending_add = solara.use_state(None)
 
