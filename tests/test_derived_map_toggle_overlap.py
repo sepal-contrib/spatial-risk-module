@@ -2,10 +2,23 @@
 
 import threading
 
+import pytest
 import reacton
 import solara
 
 TIMEOUT = 10.0
+
+
+@pytest.fixture(autouse=True)
+def _drain_derived_toggle_inflight_and_on_map():
+    """Leave no claim or on-map key behind in derived_map's module-level state."""
+    yield
+    from gui.tile import derived_map
+
+    derived_map.derived_toggle_inflight.release(
+        *derived_map.derived_toggle_inflight.value
+    )
+    derived_map.derived_on_map.set(set())
 
 
 class FakeMap:
@@ -109,6 +122,9 @@ def test_second_toggle_keeps_the_first_toggles_bookkeeping(monkeypatch):
         gate.set()
         rc.close()
         derived_map.derived_on_map.set(set())
+        # Defensive, not load-bearing: the asserts above already waited for
+        # the in-flight set to empty, so this is a no-op on the happy path —
+        # it only matters if an assertion above fails first.
         derived_map.derived_toggle_inflight.release("roads_dist", "rivers_dist")
 
 
