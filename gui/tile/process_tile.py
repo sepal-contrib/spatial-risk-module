@@ -18,6 +18,7 @@ from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.help import InfoButton
 from gui.widget.text_style import MUTED
 from gui.widget.variable_list import DerivedVariableList
+from spatialrisk.harmonization import harmonization_status
 
 logger = logging.getLogger("spatial_risk")
 
@@ -215,6 +216,39 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 t("tiles.process.error_set_base", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
 
+    # Rebuilt from scalars on every render: the project reactive is republished
+    # via model_copy(), which compares equal to its predecessor, so a use_task
+    # keyed on it would never retrigger. `processing.value` is what refreshes
+    # the hint after a run whose key sets did not change (a re-harmonization
+    # after the reference raster moved).
+    hint_key = (
+        base_raster_key(p),
+        getattr(p.base_raster, "default_crs", None) if p and p.base_raster else None,
+        (
+            getattr(p.base_raster, "default_resolution", None)
+            if p and p.base_raster
+            else None
+        ),
+        tuple(sorted(p.raw_variables)) if p else (),
+        tuple(sorted(p.processed_variables)) if p else (),
+        processing.value,
+    )
+
+    @solara.lab.use_task(
+        dependencies=[hint_key], raise_error=False, prefer_threaded=True
+    )
+    async def harmonization_hint():
+        """How many layers Run would actually process, checked off-thread.
+
+        Reading each output's header and mtime is disk I/O; done in the render
+        body it would block the session's websocket loop. Returns None when
+        there is nothing to say — no project, no reference raster, or a run in
+        flight rewriting the very files we would be inspecting.
+        """
+        if p is None or p.base_raster is None or processing.value:
+            return None
+        return await asyncio.to_thread(harmonization_status, p)
+
     @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
     async def process_task():
         if p is None:
@@ -327,6 +361,25 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # on_click straight to their task (same gap, filed as a follow-up).
             disabled=processing.value or process_task.pending or not has_base,
         )
+        if harmonization_hint.pending:
+            solara.Text(
+                t("tiles.process.checking_status"),
+                style=MUTED + "font-size:0.8rem;font-style:italic;",
+            )
+        elif harmonization_hint.value is not None:
+            status = harmonization_hint.value
+            solara.Text(
+                (
+                    t("tiles.process.hint_all_current", total=status.total)
+                    if not status.pending
+                    else t(
+                        "tiles.process.hint_pending",
+                        pending=len(status.pending),
+                        total=status.total,
+                    )
+                ),
+                style=MUTED + "font-size:0.8rem;",
+            )
         if processing.value:
             solara.ProgressLinear(True)
 
