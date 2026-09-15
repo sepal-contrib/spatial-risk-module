@@ -1,4 +1,4 @@
-"""The shared GeoTIFF layout: ZSTD tiles by default, deflate when unavailable."""
+"""The shared GeoTIFF layout: deflate tiles, ZSTD only when asked for."""
 
 import numpy as np
 import pytest
@@ -14,32 +14,38 @@ def _no_env_override(monkeypatch):
     monkeypatch.delenv(rp.COMPRESS_ENV, raising=False)
 
 
-def test_prefers_zstd_when_both_backends_support_it(monkeypatch):
-    """Default codec is ZSTD for rasterio and GDAL writers alike."""
+def test_deflate_is_the_default_for_both_backends(monkeypatch):
+    """Predictions are shared outside this app, so they use the portable codec.
+
+    Deflate is what every GDAL build can read, even where ZSTD is available.
+    """
     monkeypatch.setattr(rp, "rasterio_supports", lambda codec: True)
     monkeypatch.setattr(rp, "gdal_supports", lambda codec: True)
-    assert rp.compression("rasterio") == "zstd"
-    assert rp.compression("gdal") == "zstd"
-    assert rp.rasterio_profile("uint16")["compress"] == "zstd"
-    assert "COMPRESS=ZSTD" in rp.gdal_creation_options("uint16")
-
-
-def test_falls_back_to_deflate_per_backend(monkeypatch):
-    """A backend without ZSTD gets deflate; the other keeps ZSTD."""
-    monkeypatch.setattr(rp, "rasterio_supports", lambda codec: codec != "zstd")
-    monkeypatch.setattr(rp, "gdal_supports", lambda codec: True)
     assert rp.compression("rasterio") == "deflate"
-    assert rp.compression("gdal") == "zstd"
+    assert rp.compression("gdal") == "deflate"
+    assert rp.rasterio_profile("uint16")["compress"] == "deflate"
+    assert "COMPRESS=DEFLATE" in rp.gdal_creation_options("uint16")
 
 
 def test_env_override_wins_and_is_validated(monkeypatch):
-    """An explicit codec beats the probes; unknown names are rejected."""
+    """An explicit codec beats the default; unknown names are rejected."""
     monkeypatch.setattr(rp, "rasterio_supports", lambda codec: True)
+    monkeypatch.setenv(rp.COMPRESS_ENV, "zstd")
+    assert rp.compression("rasterio") == "zstd"
     monkeypatch.setenv(rp.COMPRESS_ENV, "lzw")
     assert rp.compression() == "lzw"
     monkeypatch.setenv(rp.COMPRESS_ENV, "bogus")
     with pytest.raises(ValueError):
         rp.compression()
+
+
+def test_an_override_the_backend_cannot_write_falls_back(monkeypatch):
+    """Forcing ZSTD on a libgdal without it writes deflate, per backend."""
+    monkeypatch.setattr(rp, "rasterio_supports", lambda codec: codec != "zstd")
+    monkeypatch.setattr(rp, "gdal_supports", lambda codec: True)
+    monkeypatch.setenv(rp.COMPRESS_ENV, "zstd")
+    assert rp.compression("rasterio") == "deflate"
+    assert rp.compression("gdal") == "zstd"
 
 
 def test_layout_is_256_tiles_with_a_dtype_aware_predictor():

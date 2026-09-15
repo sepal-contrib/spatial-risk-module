@@ -15,11 +15,20 @@ autocorrelation (30% nodata), 16-core box::
     tiles 256, deflate + pred 2     10.2 s  439 MB  0.24 s
     tiles 256, ZSTD + pred 2         2.3 s  433 MB  0.17 s
 
-So: 256 px tiles, ZSTD with a predictor, BIGTIFF. ZSTD needs a libgdal built
-with libzstd; both the conda-forge GDAL on SEPAL and the rasterio wheels
-carry it, but the probes below fall back to deflate (same tiling, same
-viewer speed-up, slower writes) wherever it is missing, and
-``SPATIAL_RISK_RASTER_COMPRESS`` forces a codec explicitly.
+So: 256 px tiles with a predictor and BIGTIFF. Nearly all of that win is the
+tiling; the codec is the small remainder. Head to head at the same tiling
+(2026-09-16, same raster, encode time excluding data generation)::
+
+    codec     encode   size   200 tiles   whole-raster decode   band scan
+    deflate     5.4 s  493 MB     0.20 s                1.6 s      1.8 s
+    ZSTD        1.4 s  493 MB     0.14 s                1.4 s      1.5 s
+
+Deflate is the default anyway: predictions leave this app (QGIS, ArcGIS,
+collaborators on older GDAL builds) and deflate is readable everywhere, while
+ZSTD needs a libgdal built with libzstd. It buys a ~4x faster encode and a
+15-40% faster decode at the same size, so ``SPATIAL_RISK_RASTER_COMPRESS=zstd``
+turns it on where the outputs stay inside a SEPAL sandbox; a forced codec the
+writing backend cannot produce falls back to deflate rather than failing.
 """
 
 import logging
@@ -35,8 +44,9 @@ logger = logging.getLogger("spatial_risk")
 COMPRESS_ENV = "SPATIAL_RISK_RASTER_COMPRESS"
 """Environment override for the codec (``zstd``, ``deflate``, ``lzw``)."""
 
-PREFERRED_COMPRESS = "zstd"
-FALLBACK_COMPRESS = "deflate"
+DEFAULT_COMPRESS = "deflate"
+"""Readable by any GDAL build — the outputs are shared outside this app."""
+
 BLOCK_SIZE = 256
 _CODECS = ("zstd", "deflate", "lzw")
 
@@ -80,27 +90,28 @@ def gdal_supports(codec: str) -> bool:
 
 
 def compression(backend: str = "rasterio") -> str:
-    """The codec to write with: the env override, else ZSTD, else deflate.
+    """The codec to write with: deflate, or the env override where it works.
 
     ``backend`` names the library that will do the writing (``"rasterio"`` or
     ``"gdal"``), because in some environments they are two different libgdal
-    builds with different codec sets.
+    builds with different codec sets — an overridden codec has to be probed
+    against the one that will actually write the file.
     """
-    supports = rasterio_supports if backend == "rasterio" else gdal_supports
     forced = os.environ.get(COMPRESS_ENV, "").strip().lower()
-    if forced:
-        if forced not in _CODECS:
-            raise ValueError(f"{COMPRESS_ENV}={forced!r}: expected one of {_CODECS}")
+    if not forced:
+        return DEFAULT_COMPRESS
+    if forced not in _CODECS:
+        raise ValueError(f"{COMPRESS_ENV}={forced!r}: expected one of {_CODECS}")
+    supports = rasterio_supports if backend == "rasterio" else gdal_supports
+    if supports(forced):
         return forced
-    if supports(PREFERRED_COMPRESS):
-        return PREFERRED_COMPRESS
     logger.info(
         "GDAL (%s) has no %s support; writing rasters with %s instead.",
         backend,
-        PREFERRED_COMPRESS.upper(),
-        FALLBACK_COMPRESS.upper(),
+        forced.upper(),
+        DEFAULT_COMPRESS.upper(),
     )
-    return FALLBACK_COMPRESS
+    return DEFAULT_COMPRESS
 
 
 def predictor_for(dtype) -> int:
