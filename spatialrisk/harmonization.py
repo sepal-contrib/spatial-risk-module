@@ -9,10 +9,18 @@ the wall clock.
 
 "Already harmonized" is deliberately a statement about the *files*, not about
 the registry. A ``processed_variables`` entry survives a base-raster change and
-the old output is then on the wrong grid, so the grid is checked directly. The
-mtime check on top of it catches a raw variable edited in place to point at a
-different file: ``variables_tile.on_save`` re-registers it under the same
-``{name}_{year}`` key, so neither the registry nor the grid would notice.
+the old output is then on the wrong grid, so the grid is checked directly.
+
+The mtime check on top of it catches exactly one thing: a source *newer* than
+its output — a re-download, or a file rewritten in place. It cannot detect the
+converse, a raw variable re-pointed at an OLDER file, because the output then
+stays the newer of the two. Edits are therefore handled upstream, not here:
+``variables_tile.on_save`` unregisters the processed entry on every edit, which
+trips condition one, so an edited layer is always pending regardless of which
+way the mtimes fall. What remains is a source replaced in place, at its own
+path, with its mtime preserved (``cp -p``, ``rsync --times``) and no edit made
+in the GUI — an accepted residual risk. Removing the layer from the harmonized
+list (``remove_processed_variable``) forces it through.
 
 Solara-free and Project-free on purpose (duck-typed on ``name``/``year``/
 ``path``/``data_type``), so the whole predicate is unit-testable without a
@@ -70,12 +78,14 @@ def expected_raster_type(var: Any):
     rasterization mode: ``rasterize`` sets categorical for ``unique`` and
     continuous otherwise.
 
-    Comparing this against the registered output is what catches an edit that
-    changed *how* a layer is harmonized without changing the file it comes
-    from. ``variables_tile._build_variable`` rebuilds the variable from the
-    modal's ``raster_type`` / ``rasterization_method`` and re-registers it under
-    the same ``{name}_{year}`` key, so neither the key, the output grid, nor
-    either mtime would move — the old output would otherwise be kept forever.
+    Comparing this against the registered output catches a layer that is
+    harmonized differently now than the output on disk was: neither the
+    registry key, the output grid, nor either mtime moves when only the
+    ``raster_type`` / ``rasterization_method`` changes. A GUI edit no longer
+    needs this — ``variables_tile.on_save`` unregisters the processed entry
+    outright — so it stands as the second line of defence, for an entry that
+    survived one (a project written by an older version, or a variable changed
+    outside the tile).
     """
     if getattr(var, "data_type", None) == DataType.vector:
         method = getattr(var, "rasterization_method", None)
@@ -119,6 +129,14 @@ def is_current(var: Any, output: Any, geobox) -> bool:
     """
     if output is None:
         return False
+    # Every enum in ``spatialrisk/variables/models.py`` is a ``(str, Enum)``,
+    # which is the only reason this comparison (and the ``data_type`` filter in
+    # ``harmonization_status``) works across both construction paths: a
+    # validated variable stores the plain string (``use_enum_values=True`` ->
+    # ``"continuous"``) while a ``model_construct``ed one keeps the member
+    # (``RasterType.continuous``). Drop that ``str`` mixin and no layer is ever
+    # current here, and — far worse — the ``data_type`` filter matches nothing,
+    # so Run silently becomes a no-op.
     if getattr(output, "raster_type", None) != expected_raster_type(var):
         return False  # the layer is harmonized differently now
     src_path = getattr(var, "path", None)
@@ -132,6 +150,11 @@ def is_current(var: Any, output: Any, geobox) -> bool:
         # Left pending on purpose: the run then fails the same way it does
         # today rather than silently trusting an output we cannot verify.
         return False
+    # Catches a *newer* source only (a re-download, a file rewritten in place):
+    # an output older than its source cannot have been derived from the bytes
+    # that are there now. The converse is invisible from here — re-pointing the
+    # variable at an older file leaves the output the newer of the two — which
+    # is why ``variables_tile.on_save`` drops the processed entry on every edit.
     if out_path.stat().st_mtime < src_path.stat().st_mtime:
         return False
     return _matches_geobox(out_path, geobox)
@@ -187,7 +210,10 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     current: List[str] = []
     for key, var in candidates:
         output = processed.get(output_key(var))
-        shared = str(getattr(output, "path", None)) in shared_paths
+        # Guarded rather than ``str(getattr(...))``: a missing output would
+        # otherwise be compared as the literal string "None".
+        out_path = getattr(output, "path", None)
+        shared = out_path is not None and str(out_path) in shared_paths
         fresh = not shared and is_current(var, output, geobox)
         (current if fresh else pending).append(key)
     return HarmonizationStatus(pending=pending, current=current)

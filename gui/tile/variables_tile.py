@@ -623,6 +623,20 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             var = _build_variable(new_entry, p)
             new_key = f"{var.name}_{var.year}" if var.year else var.name
             p.raw_variables[new_key] = var
+            # An edit is an explicit statement that the layer changed, so its
+            # harmonized output must be re-derived. Step 3's freshness check
+            # (spatialrisk/harmonization.py) cannot see every edit on its own:
+            # keeping name+year keeps the `{name}_{year}` registry key, and
+            # re-pointing at an OLDER file leaves the output newer than its
+            # source, so the layer would read as already harmonized and the
+            # stale raster would survive. Dropping the entry here is condition
+            # one of that check, so the layer is pending on the next run.
+            # Both keys: an edit that renames or re-years the variable leaves
+            # the old output registered under the old key.
+            for stale_key in {old_key, new_key}:
+                process_actions.remove_processed_variable(
+                    p, stale_key, map_, legend_port
+                )
             set_editing_key(None)
             project.set(p.model_copy())
         except Exception as exc:

@@ -129,6 +129,24 @@ def test_grid_mismatch_is_pending(tmp_path):
     assert harmonization_status(p).pending == ["altitude"]
 
 
+def test_shape_mismatch_is_pending(tmp_path):
+    """Same CRS and transform, fewer rows/columns — a cropped base extent.
+
+    The origin and pixel size are untouched, so only ``src.shape`` differs; an
+    output covering a smaller area than the current reference grid cannot be
+    reused, and the model would train on layers that do not overlap.
+    """
+    src = _write(tmp_path / "src.tif")
+    out = _write(tmp_path / "out.tif", shape=(10, 40))
+    _touch(src, 1000)
+    _touch(out, 2000)
+    p = _project(
+        {"altitude": _var("altitude", src)},
+        {"altitude": _var("altitude", out)},
+    )
+    assert harmonization_status(p).pending == ["altitude"]
+
+
 def test_crs_mismatch_is_pending(tmp_path):
     """Same transform and shape, different CRS — still the wrong grid."""
     src = _write(tmp_path / "src.tif")
