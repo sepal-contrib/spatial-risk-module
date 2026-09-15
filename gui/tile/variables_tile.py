@@ -1,6 +1,7 @@
 """Step 2 — Variables tile."""
 
 import logging
+import threading
 
 import ee
 import solara
@@ -42,6 +43,13 @@ LocalVectorVar.model_rebuild()
 # Keys of source variables currently displayed on the map (drives the toggle state).
 vars_on_map = solara.reactive(set())
 
+# Guards the two read-modify-write updates to ``vars_on_map`` — the worker's
+# add (below) and ``_drop_from_map``'s discard — which now run concurrently
+# on independent worker threads (one per toggle) and, for the discard side,
+# also from the kernel thread via the remove/edit paths. A plain read of
+# ``.value`` or a wholesale ``vars_on_map.set(set())`` reset needs no lock.
+vars_on_map_lock = threading.Lock()
+
 # Raw-variable keys whose download is running. A per-row download claims its
 # key; "download all" claims every pending key not already claimed. Keeps a
 # second click on a row from starting a second copy of the same download
@@ -63,9 +71,15 @@ def _toggle_var_on_map(key, p, map_, legend_port, notifier):
     and toggling a second layer cancelled the first coroutine there: its
     layer still landed on the map, but the toggle stayed off and no legend
     was published.
+
+    Concurrency contract: several of these run at once, one per toggle, on
+    independent worker threads. The only shared state this worker mutates is
+    ``vars_on_map`` (added to under ``vars_on_map_lock``, via ``_drop_from_map``
+    for the remove branch) and the legend registry, which ``legend_port``
+    already serializes internally.
     """
-    var = p.raw_variables.get(key) if p is not None else None
     try:
+        var = p.raw_variables.get(key) if p is not None else None
         if var is None or not is_mappable(var):
             return
         if key in vars_on_map.value:
@@ -103,7 +117,8 @@ def _toggle_var_on_map(key, p, map_, legend_port, notifier):
             map_.remove_layer(layer_key, none_ok=True)
             return
 
-        vars_on_map.set(set(vars_on_map.value) | {key})
+        with vars_on_map_lock:
+            vars_on_map.set(set(vars_on_map.value) | {key})
         if legend is not None and legend_port is not None:
             legend_port.register(legend)
     except Exception as exc:
@@ -511,10 +526,11 @@ def _drop_from_map(key: str, map_, legend_port=None):
         map_.remove_layer(_map_layer_key(key), none_ok=True)
     if legend_port is not None:
         legend_port.unregister(_map_layer_key(key))
-    if key in vars_on_map.value:
-        remaining = set(vars_on_map.value)
-        remaining.discard(key)
-        vars_on_map.set(remaining)
+    with vars_on_map_lock:
+        if key in vars_on_map.value:
+            remaining = set(vars_on_map.value)
+            remaining.discard(key)
+            vars_on_map.set(remaining)
 
 
 @solara.component

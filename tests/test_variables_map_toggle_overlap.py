@@ -9,10 +9,21 @@ tried to add it again.
 
 import threading
 
+import pytest
 import reacton
 import solara
 
 TIMEOUT = 10.0
+
+
+@pytest.fixture(autouse=True)
+def _drain_vars_inflight_and_on_map():
+    """Leave no claim or on-map key behind in the tile's module-level state."""
+    yield
+    from gui.tile import variables_tile
+
+    variables_tile.vars_inflight.release(*variables_tile.vars_inflight.value)
+    variables_tile.vars_on_map.set(set())
 
 
 class FakeMap:
