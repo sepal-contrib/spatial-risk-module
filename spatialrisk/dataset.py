@@ -6,6 +6,7 @@ Provides data in different formats for different model types.
 Works exclusively with LocalRasterVar instances.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
 import numpy as np
@@ -13,6 +14,101 @@ import pandas as pd
 import rasterio
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from pydantic import BaseModel, Field, ConfigDict
+
+
+_EXTRACT_NUM_THREADS_ENV = "SPATIAL_RISK_EXTRACT_NUM_THREADS"
+
+EXTRACT_GDAL_CACHEMAX_BYTES = 64 * 1024 * 1024
+"""``GDAL_CACHEMAX`` while extracting point values.
+
+GDAL's block cache defaults to ~5% of physical RAM and keeps every decoded
+tile the extraction touches, so on a 60 GB host a windowed read of a 1.6 Gpx
+stack still peaked at 1.5 GiB (measured 2026-09-15). Each tile is read
+exactly once here, so the cache buys nothing; 64 MiB caps it while leaving
+room for the handful of tiles in flight across the reader threads.
+"""
+
+
+def _extract_num_threads() -> int:
+    """Reader threads for :func:`_read_values_at`: half the cores, min 1.
+
+    Tile decoding is CPU-bound and GDAL releases the GIL, so a pool of
+    per-thread dataset handles scales almost linearly (2.5 s -> 0.55 s per
+    layer with 8 threads on a 400 Mpx DEFLATE layer, 2026-09-15).
+    ``GDAL_NUM_THREADS`` does not help: it only parallelises *within* one
+    read call, and each call here decodes a single tile.
+
+    Uses the affinity mask rather than ``os.cpu_count()`` because SEPAL runs
+    the app in a container whose cgroup quota is smaller than the host. Half
+    the cores leaves room for the Solara server and concurrent jobs.
+    ``SPATIAL_RISK_EXTRACT_NUM_THREADS`` overrides the default.
+    """
+    env_val = os.environ.get(_EXTRACT_NUM_THREADS_ENV)
+    if env_val:
+        return max(1, int(env_val))
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        cores = os.cpu_count() or 1
+    return max(1, cores // 2)
+
+
+def _read_values_at(src, rows, cols, num_threads: int = 1):
+    """Read ``src`` band 1 at ``(rows, cols)`` without loading the whole band.
+
+    Points are grouped by the raster's native block (tile or strip) and each
+    touched block is decoded exactly once, so memory scales with the number
+    of touched blocks rather than the raster size. A country-scale 30 m layer
+    is several GiB as a full band; a few thousand points touch a few MiB.
+
+    With ``num_threads > 1`` the touched blocks are dealt round-robin to a
+    thread pool where every worker opens its own handle on ``src.name``
+    (rasterio dataset handles are not thread-safe). Workers write disjoint
+    slices of the output, so no locking is needed. Small jobs stay serial:
+    the pool is only worth its start-up when there are blocks to share.
+
+    ``rows``/``cols`` must already be clipped in-bounds. Returns an array in
+    the band dtype with one value per point, in input order.
+    """
+    from rasterio.windows import Window
+
+    n = len(rows)
+    out = np.empty(n, dtype=src.dtypes[0])
+    if n == 0:
+        return out
+    bh, bw = src.block_shapes[0]
+    n_bcols = -(-src.width // bw)
+    block_key = (rows // bh) * n_bcols + (cols // bw)
+    order = np.argsort(block_key, kind="stable")
+    keys, starts = np.unique(block_key[order], return_index=True)
+    ends = np.append(starts[1:], n)
+    blocks = list(zip(keys.tolist(), starts.tolist(), ends.tolist()))
+
+    def _read(handle, items):
+        for key, s0, s1 in items:
+            idx = order[s0:s1]
+            br, bc = divmod(key, n_bcols)
+            r0, c0 = br * bh, bc * bw
+            h = min(bh, src.height - r0)
+            w = min(bw, src.width - c0)
+            block = handle.read(1, window=Window(c0, r0, w, h))
+            out[idx] = block[rows[idx] - r0, cols[idx] - c0]
+
+    if num_threads <= 1 or len(blocks) < 2 * num_threads:
+        _read(src, blocks)
+        return out
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _worker(items):
+        with rasterio.open(src.name) as handle:
+            _read(handle, items)
+
+    chunks = [blocks[i::num_threads] for i in range(num_threads)]
+    with ThreadPoolExecutor(max_workers=num_threads) as pool:
+        # list() re-raises any worker exception instead of swallowing it.
+        list(pool.map(_worker, chunks))
+    return out
 
 
 class Dataset(BaseModel):
@@ -443,9 +539,11 @@ class Dataset(BaseModel):
         plt.tight_layout()
         plt.show()
 
-        print(f"\n✅ Displayed {n_vars} variable(s) in {nrows}×{ncols} grid")
+        print(f"\n✅ Displayed {n_vars} variable(s) in {nrows}x{ncols} grid")
 
-    def register(self, project: Any, key: Optional[str] = None, auto_save: bool = True) -> None:
+    def register(
+        self, project: Any, key: Optional[str] = None, auto_save: bool = True
+    ) -> None:
         """Register this dataset with a project. Mirrors model.register()."""
         project.add_dataset(self, key=key, auto_save=auto_save)
 
@@ -486,37 +584,51 @@ class Dataset(BaseModel):
         target_ncols = None
         target_cell = None
 
-        for i, var in enumerate(all_vars):
-            with rasterio.open(var.path) as src:
-                arr = src.read(1)
-                nodata = src.nodata
-                vcrs = src.crs
-                vtransform = src.transform
-                vheight, vwidth = src.height, src.width
+        num_threads = _extract_num_threads()
+        # Reproject once per distinct CRS, not once per layer.
+        reprojected = {}
 
-            vpts = points.to_crs(vcrs) if points.crs != vcrs else points
-            r, c = rasterio.transform.rowcol(
-                vtransform, vpts.geometry.x.to_numpy(), vpts.geometry.y.to_numpy()
-            )
-            r = np.asarray(r, dtype=int)
-            c = np.asarray(c, dtype=int)
-            in_bounds = (r >= 0) & (r < vheight) & (c >= 0) & (c < vwidth)
+        def _pts_in(crs):
+            if points.crs == crs:
+                return points
+            key = crs.to_wkt()
+            if key not in reprojected:
+                reprojected[key] = points.to_crs(crs)
+            return reprojected[key]
 
-            rc = np.clip(r, 0, vheight - 1)
-            cc = np.clip(c, 0, vwidth - 1)
-            vals = arr[rc, cc]
+        with rasterio.Env(GDAL_CACHEMAX=EXTRACT_GDAL_CACHEMAX_BYTES):
+            for i, var in enumerate(all_vars):
+                with rasterio.open(var.path) as src:
+                    nodata = src.nodata
+                    vheight, vwidth = src.height, src.width
 
-            layer_valid = in_bounds.copy()
-            if np.issubdtype(vals.dtype, np.floating):
-                layer_valid &= ~np.isnan(vals)
-            if nodata is not None:
-                layer_valid &= vals != nodata
-            valid &= layer_valid
-            df_data[var.name] = vals
+                    vpts = _pts_in(src.crs)
+                    r, c = rasterio.transform.rowcol(
+                        src.transform,
+                        vpts.geometry.x.to_numpy(),
+                        vpts.geometry.y.to_numpy(),
+                    )
+                    r = np.asarray(r, dtype=int)
+                    c = np.asarray(c, dtype=int)
+                    in_bounds = (r >= 0) & (r < vheight) & (c >= 0) & (c < vwidth)
 
-            if i == 0:  # target raster defines cell_id
-                target_ncols = vwidth
-                target_cell = r * vwidth + c
+                    # Out-of-bounds points are masked out below; clipping keeps
+                    # the block lookup in range (same as the old clipped index).
+                    rc = np.clip(r, 0, vheight - 1)
+                    cc = np.clip(c, 0, vwidth - 1)
+                    vals = _read_values_at(src, rc, cc, num_threads=num_threads)
+
+                layer_valid = in_bounds.copy()
+                if np.issubdtype(vals.dtype, np.floating):
+                    layer_valid &= ~np.isnan(vals)
+                if nodata is not None:
+                    layer_valid &= vals != nodata
+                valid &= layer_valid
+                df_data[var.name] = vals
+
+                if i == 0:  # target raster defines cell_id
+                    target_ncols = vwidth
+                    target_cell = r * vwidth + c
 
         df_data["cell_id"] = target_cell
         df_data["trial"] = 1
@@ -527,7 +639,8 @@ class Dataset(BaseModel):
             if dropped:
                 logger.info(
                     "extract_at_points: dropped %d/%d points on nodata/out-of-bounds.",
-                    dropped, n_pts,
+                    dropped,
+                    n_pts,
                 )
             df = df[valid].reset_index(drop=True)
         return df
