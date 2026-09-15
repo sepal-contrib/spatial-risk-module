@@ -1,5 +1,18 @@
 """Helpers for running background work from Solara event handlers.
 
+Which tool for which job:
+
+* ``spawn_in_context`` — one thread per user-fired action (a job, a download,
+  a map toggle). ALL continuation code (republish, on-map state, legends)
+  goes inside the worker; guard re-clicks with ``gui.scripts.inflight.
+  InflightKeys``. This is the default.
+* ``solara.lab.use_task`` — a *latest-request-wins* slot. Re-invoking it
+  cancels the in-flight coroutine at its ``await`` (a BaseException, so
+  ``except Exception`` will not see it) while any thread it started finishes
+  anyway. Use it only for dependency-driven values read via ``.value``, or
+  for a single-shot action whose handler checks ``if task.pending: return``
+  first. ``tests/test_use_task_sites_guarded.py`` enforces the latter.
+
 Reactive updates (``some_reactive.set(...)``) made from a *bare*
 ``threading.Thread`` never reach the browser session, so status cards stay
 stuck on "running" even after the backend has finished. Registering the render
