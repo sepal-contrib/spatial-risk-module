@@ -135,26 +135,31 @@ def run_processing(project) -> dict:
     Status is read *after* downloading: a GEEVar has no local file to compare
     until it is materialized, and a freshly downloaded file is newer than any
     prior output, so it lands in ``pending`` on its own. A *skipped* download
-    (the file was already there) is the exception, which is why the early
-    return still saves when anything was materialized.
+    (the file was already there) is the exception, which is one of the reasons
+    the nothing-pending branch saves too — see the comment there.
 
     Returns ``{"processed": [...], "skipped": [...]}`` — raw-variable keys.
     Requires base_raster to be set.
     """
     if project.base_raster is None:
         raise ValueError("Set a base raster before running processing.")
-    materialized = materialize_raw_layers(project)
+    materialize_raw_layers(project)
 
     status = harmonization_status(project)
     if not status.pending:
-        if materialized:
-            # materialize_raw_layers replaced GEEVars with local vars using
-            # add_as_raw(auto_save=False). Reaching here with work done is not
-            # hypothetical: GEEVar.to_local_raster skips the download when the
-            # file already exists (gee_var.py:164), so the "new" local file can
-            # carry an old mtime and read as current. Returning without saving
-            # would drop the replacements on the next load.
-            project.save()
+        # Unconditional: two kinds of in-memory-only change reach this branch,
+        # and before Step 3 became incremental the save at the end of every run
+        # persisted both.
+        #  - materialize_raw_layers replaced GEEVars with local vars using
+        #    add_as_raw(auto_save=False). Not hypothetical: GEEVar
+        #    .to_local_raster skips the download when the file already exists
+        #    (gee_var.py:164), so the "new" local file can carry an old mtime
+        #    and read as current.
+        #  - the Variables tile mutates raw_variables in memory only (add, edit
+        #    and remove all just write the dict). A user who removes a source
+        #    variable and then presses Run with nothing pending would get the
+        #    removal back on the next load.
+        project.save()
         logger.info(
             "All %d layer(s) are already harmonized — nothing to do.",
             len(status.current),

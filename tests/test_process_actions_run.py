@@ -120,8 +120,8 @@ def test_run_processing_only_passes_pending_keys():
     assert out == {"processed": ["new_layer"], "skipped": ["old_a", "old_b"]}
 
 
-def test_run_processing_skips_everything_when_nothing_is_pending():
-    """Nothing pending and nothing downloaded means no bulk call and no save."""
+def test_run_processing_skips_the_bulk_calls_when_nothing_is_pending():
+    """Nothing pending means no reproject/rasterize work at all."""
     p = _Proj()
     p.base_raster = MagicMock(name="base")
     status = SimpleNamespace(pending=[], current=["old_a"])
@@ -132,8 +132,26 @@ def test_run_processing_skips_everything_when_nothing_is_pending():
 
     assert p.reproject_keys is None
     assert p.rasterize_keys is None
-    assert p.saved is False
     assert out == {"processed": [], "skipped": ["old_a"]}
+
+
+def test_run_processing_saves_even_when_nothing_was_pending_or_downloaded():
+    """The early return must still persist in-memory-only edits.
+
+    The Variables tile mutates ``raw_variables`` in memory and never saves, so
+    before Step 3 became incremental the unconditional save at the end of every
+    run was what persisted an add / edit / remove. Skipping the save here loses
+    a source-variable removal on the next project load.
+    """
+    p = _Proj()
+    p.base_raster = MagicMock(name="base")
+    status = SimpleNamespace(pending=[], current=["old_a"])
+    with patch(
+        "gui.scripts.process_actions.materialize_raw_layers", return_value=[]
+    ), patch("gui.scripts.process_actions.harmonization_status", return_value=status):
+        process_actions.run_processing(p)
+
+    assert p.saved is True
 
 
 def test_run_processing_saves_materialization_even_with_nothing_pending():
@@ -186,5 +204,7 @@ def test_run_processing_logs_both_counts(caplog):
             "gui.scripts.process_actions.harmonization_status", return_value=status
         ):
             process_actions.run_processing(p)
-    assert "1" in caplog.text and "2" in caplog.text
-    assert "already" in caplog.text.lower()
+    # The exact rendered message, not "a 1 and a 2 appear somewhere": caplog.text
+    # embeds module paths and line numbers, so a loose substring check drifts
+    # towards vacuous as the file grows.
+    assert "Harmonizing 1 layer(s); 2 already aligned." in caplog.text
