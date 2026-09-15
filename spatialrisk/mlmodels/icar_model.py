@@ -494,6 +494,8 @@ class ICARModel(BaseRiskModel):
         import rasterio
         from patsy.highlevel import build_design_matrices
 
+        from spatialrisk.raster_profile import rasterio_profile
+
         if self._ml_model is None:
             self.load_model()
 
@@ -529,7 +531,10 @@ class ICARModel(BaseRiskModel):
             profile = ref.profile.copy()
             target_transform = ref.transform
 
+        # Tiled + ZSTD (deflate fallback) rather than the target's own
+        # layout: see spatialrisk.raster_profile for the measurements.
         profile.update(dtype="uint16", count=1, nodata=0)
+        profile.update(rasterio_profile("uint16"))
 
         mod = self._ml_model
         betas = np.array(mod["betas"])
