@@ -7,8 +7,9 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
-from gui.scripts.notify_bridge import tracked_job
-from gui.scripts.solara_threads import publish_if_current, to_thread_in_context
+from gui.scripts.inflight import InflightKeys
+from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
+from gui.scripts.solara_threads import publish_if_current, spawn_in_context
 from gui.store.project_writers import writing
 from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
 from gui.widget.confirm_dialog import ConfirmDialog
@@ -17,6 +18,57 @@ from gui.widget.help import InfoButton
 from gui.widget.variable_list import DerivedVariableList
 
 logger = logging.getLogger("spatial_risk")
+
+# Output names whose derived-layer job is currently running. Keyed by the
+# registry name the job will write, so the same layer cannot be generated
+# twice at once (two GDAL runs on one .tif) while different layers run in
+# parallel.
+derived_inflight = InflightKeys(key="derived_inflight")
+
+
+def _run_derived_job(entry, output_name, p, project_reactive, notifier):
+    """Background worker: one derived layer, from the operation to the republish.
+
+    Everything that must happen *after* the work — the project republish that
+    makes the new layer appear in the list — runs on this thread. A shared
+    ``solara.lab.use_task`` used to own this flow, and submitting a second
+    layer re-invoked it, which cancelled the first coroutine at its ``await``:
+    the worker finished (raster written, registered, saved) but the republish
+    after the ``await`` never ran, so the layer never appeared.
+    """
+    try:
+        # Inside the try: anything that raises before the job opens — a bad
+        # entry, a title lookup — must still reach the release below, or the
+        # name stays claimed for the session (dead progress bar, layer can
+        # never be submitted again).
+        is_change = entry["op"] in CHANGE_OPS
+        if is_change:
+            title = t("notifications.task_change", op=entry["op"])
+            error_key = "tiles.postprocess.error_change"
+        else:
+            title = t(
+                "notifications.task_postprocess", step=entry["op"], name=entry["pp_key"]
+            )
+            error_key = "tiles.postprocess.error_post_processing"
+        with writing(p.project_name):
+            with tracked_job(
+                notifier, title, error_format=lambda exc: t(error_key, exc=exc)
+            ):
+                if is_change:
+                    process_actions.generate_change_var(
+                        p, entry["op"], entry["start_key"], entry["end_key"]
+                    )
+                else:
+                    process_actions.apply_post_processing(
+                        p, entry["pp_key"], entry["op"]
+                    )
+            publish_if_current(project_reactive, p)
+    except Exception:
+        # tracked_job already toasted anything raised inside it; a failure
+        # before it opened only reaches the log, but the key is still freed.
+        logger.exception("derived layer job failed")
+    finally:
+        derived_inflight.release(output_name)
 
 
 @solara.component
@@ -31,8 +83,6 @@ def PostProcessTile(project, map_=None, legend_port=None):
             one).
     """
     dialog_open = solara.use_reactive(False)
-    pending_change = solara.use_reactive(None)
-    pending_post = solara.use_reactive(None)
     notifications = use_notifications()
     on_toggle_map = use_derived_map_toggle(
         project, map_, notifications, legend_port=legend_port
@@ -40,82 +90,55 @@ def PostProcessTile(project, map_=None, legend_port=None):
     pending_remove, set_pending_remove = solara.use_state(None)
 
     p = project.value
+    running = derived_inflight.value  # subscribes: progress bar follows the jobs
 
     def _do_remove(key: str):
         """Unregister a derived layer (the raster stays on disk)."""
         if process_actions.remove_processed_variable(p, key, map_, legend_port):
             project.set(p.model_copy())
 
-    @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
-    async def change_task():
-        entry = pending_change.value
-        if p is None or entry is None:
-            return
-        title = t("notifications.task_change", op=entry["op"])
-
-        def _tracked_change():
-            with tracked_job(
-                notifications,
-                title,
-                error_format=lambda exc: t("tiles.postprocess.error_change", exc=exc),
-            ):
-                process_actions.generate_change_var(
-                    p,
-                    entry["op"],
-                    entry["start_key"],
-                    entry["end_key"],
-                )
-
-        with writing(p.project_name):
-            try:
-                await to_thread_in_context(_tracked_change)
-            except Exception:
-                logger.exception("change detection failed")  # toast from tracked_job
-                return
-            publish_if_current(project, p)
-
-    @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
-    async def post_task():
-        entry = pending_post.value
-        if p is None or entry is None:
-            return
-        title = t(
-            "notifications.task_postprocess",
-            step=entry["op"],
-            name=entry["pp_key"],
-        )
-
-        def _tracked_post():
-            with tracked_job(
-                notifications,
-                title,
-                error_format=lambda exc: t(
-                    "tiles.postprocess.error_post_processing", exc=exc
-                ),
-            ):
-                process_actions.apply_post_processing(p, entry["pp_key"], entry["op"])
-
-        with writing(p.project_name):
-            try:
-                await to_thread_in_context(_tracked_post)
-            except Exception:
-                logger.exception("post-processing failed")  # toast from tracked_job
-                return
-            publish_if_current(project, p)
-
     def on_submit(entry):
-        """Dialog-validated entry -> background change or edge/dist task.
+        """Dialog-validated entry -> one background worker per derived layer.
 
-        Neither op may run inline: solara executes widget callbacks inside the
-        session's websocket message loop, so a GDAL proximity pass over a large
-        AOI would freeze the whole UI until it returned.
+        Never inline: solara runs widget callbacks inside the session's
+        websocket message loop, so a GDAL proximity pass over a large AOI
+        would freeze the whole UI. One worker per submission (not a shared
+        task) so a second layer never cancels the first one's continuation.
         """
-        if entry["op"] in CHANGE_OPS:
-            pending_change.set(entry)
-            change_task()
+        cur = project.value
+        if cur is None:
             return
-        pending_post.set(entry)
-        post_task()
+        if entry["op"] in CHANGE_OPS:
+            name = process_actions.change_output_name(
+                cur, entry["op"], entry["start_key"], entry["end_key"]
+            )
+        else:
+            name = process_actions.postprocess_output_name(
+                cur, entry["pp_key"], entry["op"]
+            )
+        if name is None:  # the dialog validated; defensive
+            return
+        if not derived_inflight.claim(name):
+            notifications.error(
+                t("tiles.postprocess.already_running", name=name),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+            return
+        try:
+            spawn_in_context(
+                _run_derived_job, (entry, name, cur, project, notifications)
+            )
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread that
+            # never starts would hold the name for the rest of the session.
+            derived_inflight.release(name)
+            logger.exception("could not start the derived layer worker")
+            failed_key = (
+                "tiles.postprocess.error_change"
+                if entry["op"] in CHANGE_OPS
+                else "tiles.postprocess.error_post_processing"
+            )
+            notifications.error(t(failed_key, exc=exc), timeout=ERROR_TOAST_TIMEOUT)
 
     with solara.Column(style="gap:16px;"):
         with solara.Row(style="gap:4px;align-items:center;"):
@@ -135,7 +158,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
             block=True,
             on_click=lambda: dialog_open.set(True),
         )
-        if change_task.pending or post_task.pending:
+        if running:
             solara.ProgressLinear(True)
 
         DerivedVariableList(

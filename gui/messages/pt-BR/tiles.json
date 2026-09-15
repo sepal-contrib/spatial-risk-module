@@ -82,6 +82,7 @@
       "processed_variable_hint": "Entrada — uma máscara binária (0/1), p. ex. cobertura florestal ou estradas.",
       "generate_button": "Criar camada",
       "error_post_processing": "Falha ao criar a camada derivada: {exc}",
+      "already_running": "'{name}' já está sendo criada.",
       "confirm_remove_title": "Remover camada derivada?",
       "confirm_remove_message": "'{name}' será removida do projeto. O arquivo raster permanece no disco e executar a operação novamente vai registrá-lo de novo — mas qualquer conjunto de dados, amostra ou modelo que o use precisará ser reconstruído."
     },

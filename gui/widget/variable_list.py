@@ -44,15 +44,14 @@ def SourceVariableList(
     on_toggle_map: Optional[Callable[[str], None]] = None,
     vars_on_map=None,
     on_download: Optional[Callable[[str], None]] = None,
-    download_pending: bool = False,
-    downloading_key: Optional[str] = None,
+    downloading_keys: frozenset = frozenset(),
 ):
     """Table of source (raw) variables with download/map/edit/remove actions.
 
     Cloud-backed variables (GEEVar) show a "cloud" chip and, when
-    ``on_download`` is given, a per-row download button. ``downloading_key`` is
-    the key currently downloading (None while a bulk download runs); every
-    download button is disabled while ``download_pending``.
+    ``on_download`` is given, a per-row download button. ``downloading_keys``
+    are the keys whose download is running: their button spins and is
+    disabled; every other row stays clickable (downloads run in parallel).
     """
     p = project.value
     raw_variables = (p.raw_variables if p is not None else {}) or {}
@@ -82,8 +81,8 @@ def SourceVariableList(
                 {
                     "kind": "download",
                     "on_click": lambda *_, k=key: on_download(k),
-                    "loading": download_pending and downloading_key == key,
-                    "disabled": download_pending,
+                    "loading": key in downloading_keys,
+                    "disabled": key in downloading_keys,
                 }
             )
         if on_toggle_map is not None and is_mappable(var):

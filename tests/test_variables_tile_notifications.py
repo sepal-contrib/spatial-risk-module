@@ -7,7 +7,7 @@ and test_delete_confirm.
 
 import inspect
 
-from gui.tile.variables_tile import VariablesTile
+from gui.tile.variables_tile import VariablesTile, _run_download
 
 
 def test_variables_tile_has_no_process_error_parameter():
@@ -20,8 +20,10 @@ def test_variables_tile_toasts_every_failure_path():
     """All failure paths in VariablesTile toast, not process_error."""
     src = inspect.getsource(VariablesTile.f)
     assert "process_error" not in src, "no reactive writes may survive"
-    # Download is a tracked job: its message goes through tracked_job.
-    assert "error_format=" in src
+    # Download is a tracked job: its message goes through tracked_job. The job
+    # itself now lives in the module-level per-click worker (one thread per
+    # click) rather than a component-scoped use_task, so look for it there.
+    assert "error_format=" in inspect.getsource(_run_download)
     # Every direct toast (error or warning) passes the shared dwell constant.
     direct_toasts = src.count("notifications.error(") + src.count(
         "notifications.warning("
