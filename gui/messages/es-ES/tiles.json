@@ -82,6 +82,7 @@
       "processed_variable_hint": "Entrada — una máscara binaria (0/1), p. ej. cobertura forestal o caminos.",
       "generate_button": "Crear capa",
       "error_post_processing": "La creación de la capa derivada falló: {exc}",
+      "already_running": "'{name}' ya se está creando.",
       "confirm_remove_title": "¿Eliminar la capa derivada?",
       "confirm_remove_message": "«{name}» se eliminará del proyecto. El archivo ráster permanece en el disco y volver a ejecutar la operación lo registrará de nuevo, pero cualquier conjunto de datos, muestra o modelo que lo utilice deberá reconstruirse."
     },

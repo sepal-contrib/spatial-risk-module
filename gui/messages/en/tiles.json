@@ -82,6 +82,7 @@
       "processed_variable_hint": "Input — a binary (0/1) mask, e.g. forest cover or roads.",
       "generate_button": "Create layer",
       "error_post_processing": "Creating the derived layer failed: {exc}",
+      "already_running": "'{name}' is already being created.",
       "confirm_remove_title": "Remove derived layer?",
       "confirm_remove_message": "'{name}' will be removed from the project. The raster file stays on disk and re-running the operation will register it again — but any dataset, sample or model that uses it will need to be rebuilt."
     },

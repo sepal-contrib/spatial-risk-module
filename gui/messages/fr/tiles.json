@@ -82,6 +82,7 @@
       "processed_variable_hint": "Entrée — un masque binaire (0/1), p. ex. couvert forestier ou routes.",
       "generate_button": "Créer la couche",
       "error_post_processing": "Échec de la création de la couche dérivée : {exc}",
+      "already_running": "'{name}' est déjà en cours de création.",
       "confirm_remove_title": "Retirer la couche dérivée ?",
       "confirm_remove_message": "'{name}' sera retirée du projet. Le fichier raster reste sur le disque et relancer l'opération l'enregistrera de nouveau — mais tout jeu de données, échantillon ou modèle qui l'utilise devra être reconstruit."
     },
