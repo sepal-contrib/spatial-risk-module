@@ -42,3 +42,27 @@ def test_scan_env_caps_the_block_cache():
 
     with scan_env():
         assert rasterio.env.getenv()["GDAL_CACHEMAX"] == SCAN_CACHEMAX_BYTES
+
+
+def test_single_thread_math_pins_blas_and_openmp_inside_the_block_only():
+    """BLAS and OpenMP run on one thread inside the context and are restored after."""
+    from threadpoolctl import threadpool_info
+
+    from spatialrisk.parallel import single_thread_math
+
+    before = {i["filepath"]: i["num_threads"] for i in threadpool_info()}
+    if not before:
+        pytest.skip("no BLAS/OpenMP library loaded")
+    with single_thread_math():
+        inside = [i["num_threads"] for i in threadpool_info()]
+        assert inside and set(inside) == {1}
+    after = {i["filepath"]: i["num_threads"] for i in threadpool_info()}
+    assert after == before
+
+
+def test_predict_band_rows_matches_the_output_tile_height():
+    """Bands must be a whole number of output tiles tall."""
+    from spatialrisk.parallel import PREDICT_BAND_ROWS
+    from spatialrisk.raster_profile import BLOCK_SIZE
+
+    assert PREDICT_BAND_ROWS % BLOCK_SIZE == 0

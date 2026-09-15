@@ -12,12 +12,23 @@ rasters block by block. They share two facts worth stating once:
   every decoded tile. Capping it is what actually bounds process RSS.
 """
 
+import contextlib
 import os
 
 import rasterio
+from threadpoolctl import threadpool_limits
 
 NUM_THREADS_ENV = "SPATIAL_RISK_NUM_THREADS"
 """Environment override for :func:`worker_threads` (integer, min 1)."""
+
+PREDICT_BAND_ROWS = 256
+"""Rows per band when a predictor streams a raster.
+
+Equal to the output tile height (:data:`spatialrisk.raster_profile.BLOCK_SIZE`)
+so every band write covers whole tiles: GDAL never has to hold a half-written
+tile in its cache, nor re-read and re-compress one when the cache is small.
+forestatrisk's default of 128 rows produced exactly that for every tile.
+"""
 
 SCAN_CACHEMAX_BYTES = 64 * 1024 * 1024
 """``GDAL_CACHEMAX`` for single-pass scans.
@@ -64,3 +75,22 @@ def worker_threads(env_var: str = None, cores: int = None) -> int:
 def scan_env() -> rasterio.Env:
     """A ``rasterio.Env`` with the block cache capped for a single-pass scan."""
     return rasterio.Env(GDAL_CACHEMAX=SCAN_CACHEMAX_BYTES)
+
+
+@contextlib.contextmanager
+def single_thread_math():
+    """Run the body with the BLAS and OpenMP pools pinned to one thread each.
+
+    The predictors call ``predict_proba`` on a few hundred thousand rows by
+    a handful of columns at a time. OpenBLAS parallelises that tiny
+    matrix-vector product across every core and its workers spin-wait, and
+    scikit-learn's OpenMP pool (libgomp) spins the same way around it:
+    measured 2026-09-15 on a 256 Mpx GLM prediction, 69 s of CPU for 8 s of
+    wall clock on 16 cores. Pinned, the wall clock and the probabilities are
+    unchanged and CPU drops to the wall clock, leaving the cores to
+    scikit-learn's own tree workers (joblib threads, unaffected) and to the
+    Solara server. Limiting BLAS alone is not enough: the OpenMP workers
+    still burned 7x the wall clock.
+    """
+    with threadpool_limits(limits=1):
+        yield

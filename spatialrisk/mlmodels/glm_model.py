@@ -146,6 +146,7 @@ class GLMModel(BaseRiskModel):
         from osgeo import gdal
         from patsy.highlevel import build_design_matrices
 
+        from spatialrisk.parallel import PREDICT_BAND_ROWS, single_thread_math
         from spatialrisk.raster_profile import rasterio_profile
 
         if self._ml_model is None:
@@ -195,59 +196,65 @@ class GLMModel(BaseRiskModel):
             else None
         )
 
-        with rasterio.open(output_file, "w", **profile) as dst:
-            blockinfo = far.misc.makeblock(str(active_dataset.target.path))
-            nblock, nblock_x = blockinfo[0], blockinfo[1]
-            x_off, y_off, nx, ny = (
-                blockinfo[3],
-                blockinfo[4],
-                blockinfo[5],
-                blockinfo[6],
-            )
-
-            for b in range(nblock):
-                px = b % nblock_x
-                py = b // nblock_x
-                col_start, row_start = x_off[px], y_off[py]
-                n_cols, n_rows = nx[px], ny[py]
-                window = rasterio.windows.Window(col_start, row_start, n_cols, n_rows)
-
-                # Apply mask before prediction
-                mask_invalid = np.zeros(n_rows * n_cols, dtype=bool)
-                if mask is not None:
-                    with rasterio.open(mask) as mask_src:
-                        mask_block = mask_src.read(1, window=window)
-                        mask_nodata = mask_src.nodata
-                    mask_invalid = np.isin(mask_block.ravel(), _mask_values)
-                    if mask_nodata is not None:
-                        mask_invalid |= mask_block.ravel() == mask_nodata
-
-                # Read feature data for this block, replacing nodata with NaN
-                block_dict = {}
-                for name, path in feature_paths.items():
-                    with rasterio.open(path) as src:
-                        arr = src.read(1, window=window).astype(float)
-                        if src.nodata is not None:
-                            arr[arr == src.nodata] = np.nan
-                    block_dict[name] = arr.ravel()
-
-                block_df_full = pd.DataFrame(block_dict)
-                valid_mask = (
-                    ~block_df_full.isnull().any(axis=1).to_numpy() & ~mask_invalid
+        # Tile-aligned bands, BLAS/OpenMP on one thread: see spatialrisk.parallel.
+        with single_thread_math():
+            with rasterio.open(output_file, "w", **profile) as dst:
+                blockinfo = far.misc.makeblock(
+                    str(active_dataset.target.path), blk_rows=PREDICT_BAND_ROWS
                 )
-                block_df = block_df_full[valid_mask]
+                nblock, nblock_x = blockinfo[0], blockinfo[1]
+                x_off, y_off, nx, ny = (
+                    blockinfo[3],
+                    blockinfo[4],
+                    blockinfo[5],
+                    blockinfo[6],
+                )
 
-                out_arr = np.zeros(n_rows * n_cols, dtype=np.uint16)
-
-                if not block_df.empty:
-                    # Apply design matrix transformation
-                    (x_block,) = build_design_matrices(
-                        [self._x_design_info], block_df, NA_action="drop"
+                for b in range(nblock):
+                    px = b % nblock_x
+                    py = b // nblock_x
+                    col_start, row_start = x_off[px], y_off[py]
+                    n_cols, n_rows = nx[px], ny[py]
+                    window = rasterio.windows.Window(
+                        col_start, row_start, n_cols, n_rows
                     )
-                    proba = self._ml_model.predict_proba(np.asarray(x_block))[:, 1]
-                    out_arr[valid_mask] = far.misc.rescale(proba).astype(np.uint16)
 
-                dst.write(out_arr.reshape(n_rows, n_cols), 1, window=window)
+                    # Apply mask before prediction
+                    mask_invalid = np.zeros(n_rows * n_cols, dtype=bool)
+                    if mask is not None:
+                        with rasterio.open(mask) as mask_src:
+                            mask_block = mask_src.read(1, window=window)
+                            mask_nodata = mask_src.nodata
+                        mask_invalid = np.isin(mask_block.ravel(), _mask_values)
+                        if mask_nodata is not None:
+                            mask_invalid |= mask_block.ravel() == mask_nodata
+
+                    # Read feature data for this block, replacing nodata with NaN
+                    block_dict = {}
+                    for name, path in feature_paths.items():
+                        with rasterio.open(path) as src:
+                            arr = src.read(1, window=window).astype(float)
+                            if src.nodata is not None:
+                                arr[arr == src.nodata] = np.nan
+                        block_dict[name] = arr.ravel()
+
+                    block_df_full = pd.DataFrame(block_dict)
+                    valid_mask = (
+                        ~block_df_full.isnull().any(axis=1).to_numpy() & ~mask_invalid
+                    )
+                    block_df = block_df_full[valid_mask]
+
+                    out_arr = np.zeros(n_rows * n_cols, dtype=np.uint16)
+
+                    if not block_df.empty:
+                        # Apply design matrix transformation
+                        (x_block,) = build_design_matrices(
+                            [self._x_design_info], block_df, NA_action="drop"
+                        )
+                        proba = self._ml_model.predict_proba(np.asarray(x_block))[:, 1]
+                        out_arr[valid_mask] = far.misc.rescale(proba).astype(np.uint16)
+
+                    dst.write(out_arr.reshape(n_rows, n_cols), 1, window=window)
 
         # Clean up VRT
         Path(vrt_path).unlink(missing_ok=True)
