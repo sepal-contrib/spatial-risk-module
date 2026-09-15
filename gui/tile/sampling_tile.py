@@ -14,6 +14,7 @@ import solara
 from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
@@ -29,7 +30,7 @@ logger = logging.getLogger("spatial_risk")
 # Module-level reactives shared across re-renders.
 sampling_jobs = solara.reactive([])
 samples_on_map = solara.reactive(set())
-samples_pending = solara.reactive(frozenset())
+samples_pending = InflightKeys(key="samples_pending")
 
 _sampling_slot = threading.Semaphore(1)
 """Single-slot queue: at most one sampling job reads its raster at a time.
@@ -117,7 +118,7 @@ def _toggle_sample_on_map(key, project_reactive, map_, turn_on):
     except Exception:
         logger.exception("sample map toggle failed for %s", key)
     finally:
-        samples_pending.set(samples_pending.value - {key})
+        samples_pending.release(key)
 
 
 def _update_job(job_id, *, skip_if_cancelled=True, **changes):
@@ -276,8 +277,6 @@ def SamplingTile(project, map_=None):
     def on_toggle_map(key):
         if map_ is None:
             return
-        if key in samples_pending.value:  # idempotent: ignore re-clicks
-            return
         cur = project.value
         if cur is None:
             return
@@ -291,8 +290,13 @@ def SamplingTile(project, map_=None):
             and getattr(ss, "pmtiles_path", None) is None
         ):
             return
-        samples_pending.set(samples_pending.value | {key})
-        spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+        if not samples_pending.claim(key):  # idempotent: ignore re-clicks
+            return
+        try:
+            spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+        except Exception:
+            samples_pending.release(key)
+            logger.exception("could not start the map-toggle worker")
 
     def on_dismiss(job_id):
         # Failed job rows only — never touches the sample registry.
