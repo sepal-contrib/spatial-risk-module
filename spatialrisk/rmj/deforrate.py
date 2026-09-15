@@ -384,40 +384,39 @@ def defrate_per_cat(
         Per-category table (cat, nfor, ndefor, rate_obs, rate_mod, rate_abs, ...),
         also written to ``tab_file_defrate`` if provided.
     """
-    defor_ds, defor_band = _open_band(defor_file)
-    forest_ds, forest_band = _open_band(forest_file)
-    cat_ds, cat_band = _open_band(riskmap_file)
+    from spatialrisk.evaluation import _add_parts, count_categories, scan_row_bands
 
+    defor_ds, _ = _open_band(defor_file)
     gt = defor_ds.GetGeoTransform()
     xres = gt[1]
     yres = -gt[5]
-
-    nblock, nblock_x, _, x, y, nx, ny = makeblock(str(defor_file), blk_rows=blk_rows)[
-        :7
-    ]
+    del defor_ds
 
     n_cat = 65535
-    cat = [c + 1 for c in range(n_cat)]
-    df = pd.DataFrame({"cat": cat, "nfor": 0, "ndefor": 0})
+    cat = np.arange(1, n_cat + 1)
 
-    for b in range(nblock):
-        if verbose:
-            progress_bar(nblock, b + 1)
-        px, py = b % nblock_x, b // nblock_x
-        defor_arr = defor_band.ReadAsArray(x[px], y[py], nx[px], ny[py])
-        forest_arr = forest_band.ReadAsArray(x[px], y[py], nx[px], ny[py])
-        cat_arr = cat_band.ReadAsArray(x[px], y[py], nx[px], ny[py])
-
+    def _tally(_i, arrays):
+        defor_arr, forest_arr, cat_arr = arrays
         defor_mask = defor_arr == 1
         forest_start = (forest_arr == 1) | defor_mask
+        return (
+            count_categories(cat_arr[forest_start], cat),
+            count_categories(cat_arr[defor_mask], cat),
+        )
 
-        data_for = cat_arr[forest_start]
-        data_defor = cat_arr[defor_mask]
-
-        cat_for = pd.Categorical(data_for.flatten(), categories=cat)
-        df["nfor"] += cat_for.value_counts().values
-        cat_defor = pd.Categorical(data_defor.flatten(), categories=cat)
-        df["ndefor"] += cat_defor.value_counts().values
+    # Full-width row bands of ``blk_rows`` rows, exactly the blocks
+    # ``riskmapjnr.misc.makeblock`` walked, now decoded in parallel.
+    parts = scan_row_bands(
+        [defor_file, forest_file, riskmap_file],
+        max(1, int(blk_rows)),
+        _tally,
+        combine=_add_parts,
+    )
+    if verbose:
+        progress_bar(1, 1)
+    nfor = np.sum([p[0] for p in parts], axis=0, dtype=np.int64)
+    ndefor = np.sum([p[1] for p in parts], axis=0, dtype=np.int64)
+    df = pd.DataFrame({"cat": cat.tolist(), "nfor": nfor, "ndefor": ndefor})
 
     # Observed annual deforestation rate per category
     df["time_interval"] = time_interval
@@ -441,7 +440,6 @@ def defrate_per_cat(
     if tab_file_defrate is not None:
         df.to_csv(str(tab_file_defrate), sep=",", header=True, index=False)
 
-    del defor_ds, forest_ds, cat_ds
     return df
 
 
