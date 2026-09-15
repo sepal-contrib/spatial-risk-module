@@ -153,6 +153,8 @@ class RFModel(BaseRiskModel):
         import rasterio
         from patsy.highlevel import build_design_matrices
 
+        from spatialrisk.raster_profile import rasterio_profile
+
         if self._ml_model is None:
             self.load_model()
 
@@ -181,7 +183,10 @@ class RFModel(BaseRiskModel):
         with rasterio.open(active_dataset.target.path) as ref:
             profile = ref.profile.copy()
 
+        # Tiled + ZSTD (deflate fallback) rather than the target's own
+        # layout: see spatialrisk.raster_profile for the measurements.
         profile.update(dtype="uint16", count=1, nodata=0)
+        profile.update(rasterio_profile("uint16"))
 
         _mask_values = (
             (mask_value if isinstance(mask_value, (list, tuple)) else [mask_value])

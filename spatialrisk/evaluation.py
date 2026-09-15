@@ -13,7 +13,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import rasterio
 from osgeo import gdal
+from rasterio.windows import Window
+
+from spatialrisk.parallel import scan_env, worker_threads
 
 FAMILY = {"glm": "GLM", "rf": "RF", "icar": "ICAR", "mw": "MW", "jnr": "JNR"}
 FOREST_VAR = "forest_gfc"  # dataset feature used as 'forest at period start'
@@ -258,6 +262,122 @@ class ValidationResult:
     plot_data: PredObsPlotData
 
 
+SCAN_CHUNK_ROWS = 256
+"""Rows decoded at a time inside one band of :func:`scan_row_bands`.
+
+Bounds a worker's footprint to ``chunk x width x (layer bytes + masks)``
+regardless of the band height the caller asked for: a 1000 px coarse cell on
+a 49k-wide raster would otherwise hold ~1 GB of temporaries per thread.
+"""
+
+
+def scan_row_bands(
+    paths, band_rows, fn, *, combine=None, finalize=None, num_threads=None
+):
+    """Apply ``fn(band_index, arrays)`` to every full-width row band of ``paths``.
+
+    ``arrays`` is one 2-D array per path, all for the same ``Window(0, row0,
+    width, rows)``. Bands are dealt to a thread pool where each worker opens
+    its own handles (rasterio handles are not thread-safe), and the results
+    come back as a list in band order, so any accumulation the caller does is
+    deterministic whatever the thread count. Runs under
+    :func:`spatialrisk.parallel.scan_env` so GDAL's block cache does not
+    balloon on a single-pass scan.
+
+    Full-width bands rather than squares because the app writes predictions as
+    row strips: a square read decodes every strip it touches, and the next
+    square in the row decodes them again. One band read decodes each strip
+    exactly once, on tiled and stripped files alike.
+
+    When ``band_rows`` exceeds :data:`SCAN_CHUNK_ROWS` and ``combine`` is
+    given, each band is decoded in sub-windows of at most that many rows and
+    ``combine(acc, part)`` folds the per-chunk results, which keeps worker
+    memory flat for large bands. Callers whose tallies are additive (counts,
+    sums of counts x weights) pass an elementwise add. ``finalize(acc)``, if
+    given, reduces a band's folded result before it is returned, so bulky
+    accumulators (a cells x categories count matrix) die inside the worker
+    instead of being retained for every band until the scan ends.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    paths = [str(p) for p in paths]
+    with rasterio.open(paths[0]) as src:
+        height, width = src.height, src.width
+    starts = list(range(0, height, band_rows))
+    chunk = band_rows if combine is None else min(band_rows, SCAN_CHUNK_ROWS)
+
+    def _read(row0, rows):
+        win = Window(0, row0, width, rows)
+        arrays = []
+        for path in paths:
+            with rasterio.open(path) as src:
+                arrays.append(src.read(1, window=win))
+        return arrays
+
+    def _one(i):
+        row0 = starts[i]
+        end = min(row0 + band_rows, height)
+        acc = None
+        for r0 in range(row0, end, chunk):
+            part = fn(i, _read(r0, min(chunk, end - r0)))
+            acc = part if acc is None else combine(acc, part)
+        return acc if finalize is None else finalize(acc)
+
+    if num_threads is None:
+        num_threads = worker_threads()
+    with scan_env():
+        if num_threads <= 1 or len(starts) < 2:
+            return [_one(i) for i in range(len(starts))]
+        with ThreadPoolExecutor(max_workers=num_threads) as pool:
+            return list(pool.map(_one, range(len(starts))))
+
+
+def _add_parts(acc, part):
+    """Elementwise in-place sum of two tuples of arrays (additive-tally combiner).
+
+    In place because ``acc`` is always the worker's own first chunk result;
+    avoiding a copy matters when a part is a cells x 65535 count matrix.
+    """
+    for a, b in zip(acc, part):
+        a += b
+    return acc
+
+
+def count_categories(values, cat):
+    """Count how often each entry of ``cat`` occurs in ``values``.
+
+    Equivalent to ``pd.Categorical(values, categories=cat).value_counts()``
+    (values outside ``cat`` are ignored, result in ``cat`` order) but ~50x
+    faster: the Categorical rebuilt its 65535-entry index on every call, which
+    was 60% of a validation run. For non-negative integer data a single
+    ``np.bincount`` is taken and indexed by ``cat``; anything else (floats,
+    negatives) goes through ``searchsorted`` so exact-equality semantics hold
+    for any dtype.
+    """
+    cat = np.asarray(cat)
+    values = np.asarray(values).ravel()
+    if values.size == 0:
+        return np.zeros(len(cat), dtype=np.int64)
+    if (
+        values.dtype.kind in "iu"
+        and cat.dtype.kind in "iu"
+        and cat.min() >= 0
+        and cat.max() < 1 << 24
+    ):
+        nonneg = values[values >= 0] if values.dtype.kind == "i" else values
+        counts = np.bincount(nonneg, minlength=int(cat.max()) + 1)
+        return counts[cat]
+    order = np.argsort(cat, kind="stable")
+    sorted_cat = cat[order]
+    pos = np.searchsorted(sorted_cat, values)
+    pos_c = np.minimum(pos, len(cat) - 1)
+    hit = sorted_cat[pos_c] == values
+    counts_sorted = np.bincount(pos_c[hit], minlength=len(cat))
+    out = np.empty(len(cat), dtype=np.int64)
+    out[order] = counts_sorted
+    return out
+
+
 def compute_validation(
     defor_file,
     forest_file,
@@ -278,49 +398,62 @@ def compute_validation(
     riskmap_file : UInt16 categorical risk (categories 1..65535, nodata 0)
     tab_file_defor: per-category defrate CSV (cols 'cat', 'defor_dens')
     """
-    defor_ds = gdal.Open(str(defor_file))
-    defor_band = defor_ds.GetRasterBand(1)
-    forest_ds = gdal.Open(str(forest_file))
-    forest_band = forest_ds.GetRasterBand(1)
-    risk_ds = gdal.Open(str(riskmap_file))
-    risk_band = risk_ds.GetRasterBand(1)
-
     defor_dens_per_cat = pd.read_csv(tab_file_defor)
     cat = defor_dens_per_cat["cat"].values
     defor_dens_period = defor_dens_per_cat["defor_dens"].values * time_interval
 
-    gt = defor_ds.GetGeoTransform()
+    with rasterio.open(str(defor_file)) as src:
+        gt = src.transform.to_gdal()
     pix_area = gt[1] * (-gt[5])
     csize_ha = round(csize_coarse_grid * csize_coarse_grid * pix_area / 10000, 2)
 
-    nsquare, nsquare_x, _, x, y, nx, ny = make_square(defor_file, csize_coarse_grid)
-
-    df = pd.DataFrame(
-        {
-            "cell": list(range(nsquare)),
-            "nfor_obs": 0,
-            "ndefor_obs": 0,
-            "nfor_obs_ha": 0.0,
-            "ndefor_obs_ha": 0.0,
-            "ndefor_pred_ha": 0.0,
-        }
+    nsquare, nsquare_x, nsquare_y, x, _y, nx, _ny = make_square(
+        defor_file, csize_coarse_grid
     )
+    # Column edges of the coarse cells; the last cell may be a remainder.
+    col_edges = np.asarray(x + [x[-1] + nx[-1]])
 
-    for s in range(nsquare):
-        px, py = s % nsquare_x, s // nsquare_x
-        defor_data = defor_band.ReadAsArray(x[px], y[py], nx[px], ny[py])
-        forest_data = forest_band.ReadAsArray(x[px], y[py], nx[px], ny[py])
+    def _tally(_i, arrays):
+        defor_data, forest_data, risk_data = arrays
         defor_mask = defor_data == 1
         forest_start = (forest_data == 1) | defor_mask
-        df.loc[s, "nfor_obs"] = int(forest_start.sum())
-        df.loc[s, "ndefor_obs"] = int(defor_mask.sum())
+        # Per-cell pixel counts: column sums, then one reduceat per cell row.
+        nfor = np.add.reduceat(forest_start.sum(axis=0), col_edges[:-1])
+        ndefor = np.add.reduceat(defor_mask.sum(axis=0), col_edges[:-1])
+        # Integer category counts per cell, NOT the weighted sum: chunks are
+        # folded with exact integer adds and the float sum runs once per cell
+        # below, so the result is bit-identical to the single-pass formula.
+        counts = np.empty((nsquare_x, len(cat)), dtype=np.int64)
+        for px in range(nsquare_x):
+            block = risk_data[:, col_edges[px] : col_edges[px + 1]]
+            counts[px] = count_categories(block, cat)
+        return nfor, ndefor, counts
 
-        risk_data = risk_band.ReadAsArray(x[px], y[py], nx[px], ny[py])
-        risk_cat = pd.Categorical(risk_data.flatten(), categories=cat)
-        risk_count = risk_cat.value_counts().values
-        df.loc[s, "ndefor_pred_ha"] = np.nansum(risk_count * defor_dens_period)
+    def _weigh(acc):
+        nfor, ndefor, counts = acc
+        pred = np.array(
+            [np.nansum(counts[px] * defor_dens_period) for px in range(nsquare_x)]
+        )
+        return nfor, ndefor, pred
 
-    del defor_ds, forest_ds, risk_ds
+    parts = scan_row_bands(
+        [defor_file, forest_file, riskmap_file],
+        csize_coarse_grid,
+        _tally,
+        combine=_add_parts,
+        finalize=_weigh,
+    )
+    assert len(parts) == nsquare_y
+    df = pd.DataFrame(
+        {
+            "cell": np.arange(nsquare),
+            "nfor_obs": np.concatenate([p[0] for p in parts]).astype(np.int64),
+            "ndefor_obs": np.concatenate([p[1] for p in parts]).astype(np.int64),
+            "nfor_obs_ha": 0.0,
+            "ndefor_obs_ha": 0.0,
+            "ndefor_pred_ha": np.concatenate([p[2] for p in parts]),
+        }
+    )
 
     df = df[df["nfor_obs"] > 0]
     ncell = df.shape[0]

@@ -7,6 +7,7 @@ sample and a dataset, then extracts features at the sample points.
 """
 
 import logging
+import threading
 import uuid
 
 import solara
@@ -20,6 +21,7 @@ from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.help import InfoButton
 from gui.widget.sample_form_dialog import SampleDetailsDialog, SampleFormDialog
 from gui.widget.sample_set_list import SampleSetList
+from spatialrisk.gdal_env import sampling_gdal_env
 
 logger = logging.getLogger("spatial_risk")
 
@@ -28,6 +30,21 @@ logger = logging.getLogger("spatial_risk")
 sampling_jobs = solara.reactive([])
 samples_on_map = solara.reactive(set())
 samples_pending = solara.reactive(frozenset())
+
+_sampling_slot = threading.Semaphore(1)
+"""Single-slot queue: at most one sampling job reads its raster at a time.
+
+Sampling is memory-heavy -- a single job can peak in the tens of GiB on a
+country-scale raster (see Track E baseline). `spawn_in_context` starts one
+real thread per sample name, so distinct sample names used to run their reads
+concurrently in this process, multiplying peak memory. Acquiring this
+semaphore around the read (`sample.generate()`) forces jobs to queue: a job
+still gets its own thread and its status card still shows "running" the whole
+time (this app has no "queued" status to show instead), but only one job is
+actually inside the raster read at once. This does not reduce how much memory
+sampling needs in total -- it only stops several peaks from stacking up in one
+process; the fix for the size of a single peak lives in `spatialrisk/sampling`.
+"""
 
 
 def _sample_layer_key(name: str) -> str:
@@ -146,7 +163,13 @@ def _run_sampling(
                 seed=seed,
                 points_path=folder / f"{name}.gpkg",
             )
-            sample.generate()
+            # Serialize the raster read across concurrent sampling jobs (see
+            # `_sampling_slot`) and budget GDAL's own block cache for it --
+            # bounding the numpy arrays in `spatialrisk/sampling` does not
+            # bound process RSS, since GDAL's native cache is separate from
+            # them (see `spatialrisk.gdal_env.sampling_gdal_env`).
+            with _sampling_slot, sampling_gdal_env():
+                sample.generate()
             p.add_sample(sample, auto_save=True)
             publish_if_current(project_reactive, p)
             _update_job(

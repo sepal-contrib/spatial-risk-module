@@ -22,9 +22,46 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import rasterio
 from osgeo import gdal
 
+from spatialrisk.parallel import available_cores, worker_threads
+
 logger = logging.getLogger("spatial_risk")
+
+DEFAULT_SAMPLING_CACHEMAX_BYTES = 512 * 1024 * 1024
+"""Default ``GDAL_CACHEMAX`` budget (bytes) for the sampling raster read path.
+
+GDAL's block cache defaults to ~5% of physical RAM, so it scales with the host
+machine rather than with anything we control -- bounding the numpy working set
+of one row-stripe (see ``spatialrisk/sampling``) does **not** bound process
+RSS, because GDAL's own native cache lives outside those arrays. 512 MiB is
+comfortably above one stripe's decoded size for the raster widths this module
+targets while still capping the unbounded default.
+"""
+
+_SAMPLING_CACHEMAX_ENV = "SPATIAL_RISK_SAMPLING_CACHEMAX_BYTES"
+_SAMPLING_NUM_THREADS_ENV = "SPATIAL_RISK_SAMPLING_NUM_THREADS"
+
+
+# Kept as a module attribute (not a bare re-export) so tests can monkeypatch
+# the core count seen by sampling_num_threads(); the policy lives in
+# spatialrisk.parallel, shared with point extraction and evaluation.
+_available_cores = available_cores
+
+
+def sampling_num_threads() -> int:
+    """``GDAL_NUM_THREADS`` for the sampling read path: half the cores, min 1.
+
+    Multi-threaded DEFLATE/LZW tile decoding is where the sampling scan is
+    bound once the numpy work is amortised -- measured on the 2.2 Gpx Bolivia
+    loss raster plus mask, one stripe pass decodes in 3.2 s single-threaded and
+    0.9 s with all 16 cores. Same half-the-cores policy as every other raster
+    scan (:func:`spatialrisk.parallel.worker_threads`);
+    ``SPATIAL_RISK_SAMPLING_NUM_THREADS`` overrides it for sampling alone and
+    ``SPATIAL_RISK_NUM_THREADS`` for all scans.
+    """
+    return worker_threads(_SAMPLING_NUM_THREADS_ENV, cores=_available_cores())
 
 
 def _is_usable(d: Path) -> bool:
@@ -122,3 +159,52 @@ def configure_gdal_tmpdir() -> Optional[Path]:
             e,
         )
         return None
+
+
+def sampling_gdal_env(
+    cachemax_bytes: Optional[int] = None, num_threads: Optional[int] = None
+) -> rasterio.Env:
+    """A ``rasterio.Env`` that budgets GDAL's block cache and decode threads.
+
+    Use as ``with sampling_gdal_env(): ...`` around the raster reads done for
+    sample generation.
+
+    IMPORTANT -- this budget is **process-wide, not per-thread.** A
+    ``rasterio.Env`` sets GDAL config through GDAL's global (not thread-local)
+    store, so while this context is open *every* thread sees the reduced
+    ``GDAL_CACHEMAX``, including unrelated raster work (training, processing,
+    map tiles). Measured directly: with ``rasterio.Env(GDAL_CACHEMAX=64)`` open
+    on the main thread, a second thread read back 64, not the default. Do not
+    reintroduce a per-thread claim here without re-measuring.
+
+    Two things keep that acceptable rather than harmful: the sampling jobs are
+    serialized (see ``gui/tile/sampling_tile.py``), so at most one such budget
+    is ever live, and the previous value is restored when the context exits. The
+    cost is that concurrent non-sampling raster work may re-decode more blocks
+    while a sampling job runs. If that ever shows up as a slowdown, the fix is
+    to move the read into a subprocess, which is the only way to get a genuinely
+    isolated GDAL cache.
+
+    This bounds the *cache* footprint of a single read; it does not limit how
+    many sampling jobs can run at once. That is a separate concern (see the
+    job serialization in ``gui/tile/sampling_tile.py``) -- running jobs one at
+    a time caps how many such budgets are live simultaneously, it does not by
+    itself reduce what any one job needs.
+
+    Parameters
+    ----------
+    cachemax_bytes : int, optional
+        Explicit ``GDAL_CACHEMAX`` value in bytes. Defaults to
+        ``SPATIAL_RISK_SAMPLING_CACHEMAX_BYTES`` if set, else
+        :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES`.
+    num_threads : int, optional
+        Explicit ``GDAL_NUM_THREADS`` for tile decoding. Defaults to
+        :func:`sampling_num_threads` (half the available cores). The same
+        process-wide caveat as the cache budget applies.
+    """
+    if cachemax_bytes is None:
+        env_val = os.environ.get(_SAMPLING_CACHEMAX_ENV)
+        cachemax_bytes = int(env_val) if env_val else DEFAULT_SAMPLING_CACHEMAX_BYTES
+    if num_threads is None:
+        num_threads = sampling_num_threads()
+    return rasterio.Env(GDAL_CACHEMAX=cachemax_bytes, GDAL_NUM_THREADS=num_threads)

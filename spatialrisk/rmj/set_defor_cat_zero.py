@@ -3,6 +3,8 @@
 from pathlib import Path
 from typing import Union
 
+from spatialrisk.raster_profile import reencode_in_place
+
 
 def set_defor_cat_zero(
     ldefrate_file: Union[str, Path],
@@ -48,3 +50,8 @@ def set_defor_cat_zero(
         blk_rows=blk_rows,
         verbose=verbose,
     )
+    # riskmapjnr writes LZW row strips; the app reads this map as random
+    # tiles (viewer) and full-width bands (evaluation), so re-encode it in
+    # the canonical tiled layout. Guarded so a stubbed upstream is harmless.
+    if Path(output_file).exists():
+        reencode_in_place(output_file)
