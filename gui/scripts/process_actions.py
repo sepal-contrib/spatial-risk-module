@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import List
 
+from spatialrisk.harmonization import harmonization_status
+
 logger = logging.getLogger("spatial_risk")
 
 
@@ -116,17 +118,61 @@ def set_base_raster(project, base_key: str, epsg: str, resolution: float):
     return reprojected
 
 
-def run_processing(project) -> None:
-    """Full Process run, in notebook order. Requires base_raster to be set."""
+def run_processing(project) -> dict:
+    """Harmonize the raw variables that are not already on the base grid.
+
+    Incremental by design: with N layers already aligned, adding one variable
+    used to cost N+1 reprojections. ``harmonization_status`` decides what is
+    still pending — see ``spatialrisk/harmonization.py`` for the three
+    conditions. Re-deriving an aligned layer is a no-op in output terms, so
+    skipping it is safe; a changed reference raster invalidates every layer's
+    grid and they all re-run automatically.
+
+    To force one layer through again, remove its harmonized output from the
+    list (``remove_processed_variable``): that drops the registry entry, which
+    is condition one, so the layer is pending on the next run.
+
+    Status is read *after* downloading: a GEEVar has no local file to compare
+    until it is materialized, and a freshly downloaded file is newer than any
+    prior output, so it lands in ``pending`` on its own. A *skipped* download
+    (the file was already there) is the exception, which is why the early
+    return still saves when anything was materialized.
+
+    Returns ``{"processed": [...], "skipped": [...]}`` — raw-variable keys.
+    Requires base_raster to be set.
+    """
     if project.base_raster is None:
         raise ValueError("Set a base raster before running processing.")
-    materialize_raw_layers(project)
-    logger.info("Reprojecting & matching all raw variables…")
-    project.reproject_and_match_all(source="raw")
-    logger.info("Rasterizing all raw variables…")
-    project.rasterize_all(source="raw")
+    materialized = materialize_raw_layers(project)
+
+    status = harmonization_status(project)
+    if not status.pending:
+        if materialized:
+            # materialize_raw_layers replaced GEEVars with local vars using
+            # add_as_raw(auto_save=False). Reaching here with work done is not
+            # hypothetical: GEEVar.to_local_raster skips the download when the
+            # file already exists (gee_var.py:164), so the "new" local file can
+            # carry an old mtime and read as current. Returning without saving
+            # would drop the replacements on the next load.
+            project.save()
+        logger.info(
+            "All %d layer(s) are already harmonized — nothing to do.",
+            len(status.current),
+        )
+        return {"processed": [], "skipped": list(status.current)}
+
+    logger.info(
+        "Harmonizing %d layer(s); %d already aligned.",
+        len(status.pending),
+        len(status.current),
+    )
+    logger.info("Reprojecting & matching pending raw variables…")
+    project.reproject_and_match_all(source="raw", keys=status.pending)
+    logger.info("Rasterizing pending raw variables…")
+    project.rasterize_all(source="raw", keys=status.pending)
     project.save()
     logger.info("Processing complete.")
+    return {"processed": list(status.pending), "skipped": list(status.current)}
 
 
 def apply_post_processing(project, processed_key: str, step: str):
