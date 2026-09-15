@@ -185,3 +185,39 @@ def test_sampling_gdal_env_is_process_wide_not_per_thread():
     )
     # ...and it is restored on exit, which is what keeps that acceptable.
     assert get_gdal_config("GDAL_CACHEMAX") == default
+
+
+def test_sampling_gdal_env_sets_num_threads_to_half_the_affinity_mask(monkeypatch):
+    """Decoding gets half the cores this process may run on, never zero.
+
+    Uses the affinity mask, not ``os.cpu_count()``: on SEPAL the process is a
+    container whose cgroup quota is smaller than the host core count.
+    """
+    from rasterio.env import get_gdal_config
+
+    import spatialrisk.gdal_env as ge
+
+    monkeypatch.delenv(ge._SAMPLING_NUM_THREADS_ENV, raising=False)
+    monkeypatch.setattr(ge, "_available_cores", lambda: 16)
+    assert ge.sampling_num_threads() == 8
+    with ge.sampling_gdal_env():
+        assert get_gdal_config("GDAL_NUM_THREADS") == 8
+
+    monkeypatch.setattr(ge, "_available_cores", lambda: 1)
+    assert ge.sampling_num_threads() == 1
+
+
+def test_sampling_gdal_env_num_threads_env_override(monkeypatch):
+    """``SPATIAL_RISK_SAMPLING_NUM_THREADS`` wins over the half-cores default."""
+    from rasterio.env import get_gdal_config
+
+    import spatialrisk.gdal_env as ge
+
+    monkeypatch.setattr(ge, "_available_cores", lambda: 16)
+    monkeypatch.setenv(ge._SAMPLING_NUM_THREADS_ENV, "3")
+    assert ge.sampling_num_threads() == 3
+    with ge.sampling_gdal_env():
+        assert get_gdal_config("GDAL_NUM_THREADS") == 3
+
+    with ge.sampling_gdal_env(num_threads=5):
+        assert get_gdal_config("GDAL_NUM_THREADS") == 5
