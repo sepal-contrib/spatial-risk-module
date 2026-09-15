@@ -572,6 +572,13 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                     )
                 _drop_from_map(key, map_, legend_port)
             p.raw_variables[key] = var
+            # Same freshness gap on_save closes for edits: harmonization's
+            # mtime check only catches a source *newer* than its output, so
+            # re-adding this key pointed at an OLDER file (after a remove, or
+            # over a confirmed duplicate) would still read as harmonized.
+            # Dropping the entry here trips condition one instead, so the
+            # layer is pending on the next run regardless of the mtimes.
+            process_actions.remove_processed_variable(p, key, map_, legend_port)
             logger.debug(
                 "Added var '%s', raw_variables now: %s",
                 key,

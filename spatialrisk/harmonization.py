@@ -14,10 +14,12 @@ the old output is then on the wrong grid, so the grid is checked directly.
 The mtime check on top of it catches exactly one thing: a source *newer* than
 its output — a re-download, or a file rewritten in place. It cannot detect the
 converse, a raw variable re-pointed at an OLDER file, because the output then
-stays the newer of the two. Edits are therefore handled upstream, not here:
-``variables_tile.on_save`` unregisters the processed entry on every edit, which
-trips condition one, so an edited layer is always pending regardless of which
-way the mtimes fall. What remains is a source replaced in place, at its own
+stays the newer of the two. That converse is therefore handled upstream, not
+here: ``variables_tile.on_save`` (every edit) and ``variables_tile._do_add``
+(every add — a re-add after removal, or a confirmed duplicate-key replace)
+both unregister the processed entry under the key they just wrote, which trips
+condition one, so the layer is always pending regardless of which way the
+mtimes fall. What remains is a source replaced in place, at its own
 path, with its mtime preserved (``cp -p``, ``rsync --times``) and no edit made
 in the GUI — an accepted residual risk. Removing the layer from the harmonized
 list (``remove_processed_variable``) forces it through.

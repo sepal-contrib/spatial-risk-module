@@ -100,6 +100,24 @@ def _capture_on_save(monkeypatch, project):
     return captured["on_save"], rc
 
 
+def _capture_on_add(monkeypatch, project):
+    """Mount the real VariablesTile and return its on_add closure plus the context."""
+    captured = {}
+
+    @solara.component
+    def _StubModal(**kwargs):
+        # The modal itself needs the GEE stack and a SEPAL client; only the
+        # callbacks it is handed matter here.
+        captured.update(kwargs)
+        solara.Text("modal")
+
+    monkeypatch.setattr(variables_tile, "VariableModal", _StubModal)
+    _, rc = reacton.render(
+        variables_tile.VariablesTile(project=project), handle_error=False
+    )
+    return captured["on_add"], rc
+
+
 def _edit_entry(path):
     """The modal entry an edit that only swaps the file produces."""
     return {
@@ -172,3 +190,37 @@ def test_renaming_a_variable_drops_the_output_registered_under_the_old_key(
     assert "altitude" not in p.raw_variables
     assert "altitude" not in p.processed_variables
     assert p.raw_variables["elevation"].path == new_src
+
+
+def test_readding_a_removed_variable_onto_an_older_file_makes_it_pending(
+    monkeypatch, tmp_path
+):
+    """The add route's own version of the gap on_save closes for edits."""
+    p, out = _harmonized_project(tmp_path)
+    assert harmonization_status(p).current == ["altitude"]
+
+    # "Remove the source variable": _do_remove never touches
+    # processed_variables, so the stale output stays registered exactly like
+    # this in production.
+    del p.raw_variables["altitude"]
+
+    new_src = _write(tmp_path / "my_dem.tif")
+    import os
+
+    os.utime(new_src, (FEBRUARY, FEBRUARY))
+    # The trap, pinned: the replacement is older than the harmonized output, so
+    # the mtime condition stays False and cannot save it on its own.
+    assert out.stat().st_mtime > new_src.stat().st_mtime
+
+    project = solara.reactive(p, equals=lambda a, b: a is b)
+    on_add, rc = _capture_on_add(monkeypatch, project)
+    try:
+        # _edit_entry's shape is exactly what the modal emits for add too.
+        on_add(_edit_entry(new_src))
+    finally:
+        rc.close()
+
+    # The add landed (on_add/_do_add swallow and toast their own failures).
+    assert p.raw_variables["altitude"].path == new_src
+    assert "altitude" not in p.processed_variables
+    assert harmonization_status(p).pending == ["altitude"]
