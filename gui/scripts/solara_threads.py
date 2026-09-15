@@ -84,7 +84,7 @@ def spawn_in_context(target, args=(), *, daemon=True):
     daemon : bool
         Whether the thread is a daemon (default ``True``).
 
-    Returns
+    Returns:
     -------
     threading.Thread
         The started thread.
