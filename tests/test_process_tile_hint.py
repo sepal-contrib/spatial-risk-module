@@ -5,6 +5,7 @@ the render body (a blocking call there runs inside the websocket receive loop
 and freezes the session).
 """
 
+import inspect
 import threading
 import time
 from pathlib import Path
@@ -19,7 +20,11 @@ from spatialrisk.harmonization import HarmonizationStatus
 from spatialrisk.project import Project
 from spatialrisk.variables.local_raster_var import LocalRasterVar
 
-SRC = Path("gui/tile/process_tile.py").read_text()
+# inspect, not a CWD-relative read(): the file path only resolves when pytest is
+# invoked from the repo root, so a `pytest tests/test_process_tile_hint.py` run
+# from anywhere else was a collection error. Matches the two sibling
+# source-inspecting modules (test_process_tile_wiring, test_process_tile_run_guard).
+SRC = inspect.getsource(process_tile.ProcessTile)
 
 Project._ensure_model_schemas()
 
@@ -235,6 +240,60 @@ def test_harmonization_hint_refires_on_raw_variable_change_not_on_project_alias(
             f"hint did not refire after raw_variables changed; calls seen="
             f"{seen_counts} — a hint_key keyed on (or aliasing) the project "
             "object would stall exactly like this"
+        )
+    finally:
+        rc.close()
+
+
+def test_harmonization_hint_refires_on_an_in_place_variable_edit(monkeypatch):
+    """An edit that keeps name+year moves neither key set — the hint must still refire.
+
+    ``variables_tile.on_save`` re-registers the rebuilt variable under the same
+    ``{name}_{year}`` key, so a ``hint_key`` built from the raw/processed key
+    SETS sees nothing change. The task then never refires and the tile keeps
+    rendering "All N layer(s) are already harmonized" about a layer the edit
+    just invalidated — the UI telling the user not to press Run, which is what
+    leaves the stale output in place.
+    """
+    seen_paths = []
+
+    def _stub(project):
+        seen_paths.append(
+            sorted(
+                str(getattr(v, "path", None)) for v in project.raw_variables.values()
+            )
+        )
+        return HarmonizationStatus(pending=[], current=list(project.raw_variables))
+
+    monkeypatch.setattr(process_tile, "harmonization_status", _stub)
+
+    project = solara.reactive(_project_with_base(2), equals=lambda a, b: a is b)
+    rc = _render_process_tile(project)
+    try:
+        assert _wait_until(lambda: bool(seen_paths)), "initial hint never computed"
+
+        # Exactly what on_save does: pop the key, rebuild the variable from the
+        # modal entry, re-register it under the SAME key. Only `path` differs.
+        p = project.value
+        old = p.raw_variables.pop("layer0")
+        p.raw_variables["layer0"] = LocalRasterVar.model_construct(
+            name=old.name,
+            year=old.year,
+            data_type="raster",
+            raster_type="continuous",
+            path=Path("/nowhere/my_dem.tif"),
+            project=p,
+        )
+        project.set(p.model_copy())
+
+        refired = _wait_until(
+            lambda: any(
+                any("my_dem.tif" in path for path in paths) for paths in seen_paths
+            )
+        )
+        assert refired, (
+            f"hint did not refire after an in-place edit; paths seen={seen_paths} "
+            "— a hint_key built from the key sets alone stalls exactly like this"
         )
     finally:
         rc.close()

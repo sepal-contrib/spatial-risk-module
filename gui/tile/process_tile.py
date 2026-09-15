@@ -222,6 +222,13 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # the hint after a run whose key sets did not change (a re-harmonization
     # after the reference raster moved).
     #
+    # Raw variables contribute their edit-sensitive scalars, not just their
+    # keys: editing a variable in place keeps name+year, so the key SET does not
+    # move and a key-only dependency would never refire — leaving the hint
+    # reading "already harmonized" about a layer the edit just made stale, which
+    # is precisely the advice not to press Run. These are attribute reads, no
+    # disk I/O, so they are safe in a render body.
+    #
     # Known gap, accepted: re-setting the SAME reference raster at the SAME CRS
     # and resolution after its source extent changed yields a new geobox this
     # key cannot see. Harmless — F3 recomputes status from disk the instant Run
@@ -236,7 +243,19 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             if p and p.base_raster
             else None
         ),
-        tuple(sorted(p.raw_variables)) if p else (),
+        (
+            tuple(
+                (
+                    k,
+                    str(getattr(v, "path", None)),
+                    getattr(v, "raster_type", None),
+                    getattr(v, "rasterization_method", None),
+                )
+                for k, v in sorted(p.raw_variables.items())
+            )
+            if p
+            else ()
+        ),
         tuple(sorted(p.processed_variables)) if p else (),
         processing.value,
     )
@@ -254,7 +273,18 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         """
         if p is None or p.base_raster is None or processing.value:
             return None
-        return await asyncio.to_thread(harmonization_status, p)
+        try:
+            return await asyncio.to_thread(harmonization_status, p)
+        except Exception:
+            # The hint is advisory, so failing it must never surface as an
+            # error — but ``raise_error=False`` swallows the exception with no
+            # trace at all. The race is real: this walks ``p.raw_variables`` on
+            # a worker thread while a Variables-tab download can be adding keys
+            # to it (a multi-image GEEVar), which raises "dictionary changed
+            # size during iteration". Logging turns an invisible blank hint
+            # into a diagnosable one.
+            logger.debug("Harmonization hint failed", exc_info=True)
+            return None
 
     @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
     async def process_task():
