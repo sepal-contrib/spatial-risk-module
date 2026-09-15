@@ -17,6 +17,20 @@ def test_worker_threads_env_override_and_floor(monkeypatch):
     assert worker_threads() == 1
 
 
+def test_worker_threads_specific_override_beats_generic_and_cores(monkeypatch):
+    """A job-specific variable wins over the generic one, which wins over cores."""
+    from spatialrisk.parallel import NUM_THREADS_ENV, worker_threads
+
+    monkeypatch.delenv(NUM_THREADS_ENV, raising=False)
+    monkeypatch.delenv("SPATIAL_RISK_TEST_THREADS", raising=False)
+    assert worker_threads("SPATIAL_RISK_TEST_THREADS", cores=16) == 8
+    assert worker_threads("SPATIAL_RISK_TEST_THREADS", cores=1) == 1
+    monkeypatch.setenv(NUM_THREADS_ENV, "5")
+    assert worker_threads("SPATIAL_RISK_TEST_THREADS", cores=16) == 5
+    monkeypatch.setenv("SPATIAL_RISK_TEST_THREADS", "2")
+    assert worker_threads("SPATIAL_RISK_TEST_THREADS", cores=16) == 2
+
+
 def test_scan_env_caps_the_block_cache():
     """Inside the env rasterio's GDAL carries the capped budget.
 

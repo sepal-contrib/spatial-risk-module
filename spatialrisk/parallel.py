@@ -43,16 +43,22 @@ def available_cores() -> int:
         return os.cpu_count() or 1
 
 
-def worker_threads() -> int:
-    """Reader threads for a raster scan: half the cores, min 1.
+def worker_threads(env_var: str = None, cores: int = None) -> int:
+    """Threads for a raster scan: half the cores, min 1.
 
     Half leaves room for the Solara server and any concurrent job on the same
-    instance. ``SPATIAL_RISK_NUM_THREADS`` overrides the default.
+    instance. Overrides, most specific first: ``env_var`` (a job-specific
+    variable such as ``SPATIAL_RISK_SAMPLING_NUM_THREADS``, if the caller has
+    one), then ``SPATIAL_RISK_NUM_THREADS``, then half of ``cores`` (defaults
+    to :func:`available_cores`).
     """
-    env_val = os.environ.get(NUM_THREADS_ENV)
-    if env_val:
-        return max(1, int(env_val))
-    return max(1, available_cores() // 2)
+    for name in (env_var, NUM_THREADS_ENV):
+        env_val = os.environ.get(name) if name else None
+        if env_val:
+            return max(1, int(env_val))
+    if cores is None:
+        cores = available_cores()
+    return max(1, cores // 2)
 
 
 def scan_env() -> rasterio.Env:
