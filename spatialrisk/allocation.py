@@ -19,6 +19,8 @@ from typing import List, Optional, Union
 import numpy as np
 import pandas as pd
 
+from spatialrisk.raster_profile import gdal_creation_options
+
 logger = logging.getLogger("spatial_risk")
 
 PathLike = Union[str, Path]
@@ -378,7 +380,7 @@ def _write_density_map(source_raster, dens_by_cat, out_dir, mask_file, blk_rows)
         nrow,
         1,
         gdal.GDT_Float64,
-        ["COMPRESS=DEFLATE", "BIGTIFF=YES"],
+        gdal_creation_options("float64"),
     )
     dst.SetGeoTransform(src.GetGeoTransform())
     dst.SetProjection(src.GetProjection())

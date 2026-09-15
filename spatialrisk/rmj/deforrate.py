@@ -39,6 +39,8 @@ from osgeo import gdal
 # period/value-agnostic (pure raster utilities), unlike the high-level routines.
 from riskmapjnr.misc import makeblock, progress_bar, rescale
 
+from spatialrisk.raster_profile import gdal_creation_options
+
 PathLike = Union[str, "os.PathLike[str]"]
 
 
@@ -287,7 +289,7 @@ def local_defor_rate(
         ysize,
         1,
         gdal.GDT_UInt16,
-        ["COMPRESS=LZW", "PREDICTOR=2", "BIGTIFF=YES"],
+        gdal_creation_options("uint16"),
     )
     out_ds.SetProjection(defor_ds.GetProjection())
     out_ds.SetGeoTransform(defor_ds.GetGeoTransform())
