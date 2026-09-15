@@ -30,6 +30,10 @@ logger = logging.getLogger("spatial_risk")
 # Module-level reactives shared across re-renders.
 sampling_jobs = solara.reactive([])
 samples_on_map = solara.reactive(set())
+# Guards every read-modify-write of samples_on_map: toggle workers run
+# concurrently (one thread per sample) and the remove handler runs on the
+# kernel thread, so an unlocked `set(value | {key})` can drop a key.
+samples_on_map_lock = threading.Lock()
 samples_pending = InflightKeys(key="samples_pending")
 
 _sampling_slot = threading.Semaphore(1)
@@ -111,10 +115,12 @@ def _toggle_sample_on_map(key, project_reactive, map_, turn_on):
                 from gui.scripts.map_helpers import add_sample_points_on_map
 
                 add_sample_points_on_map(map_, ss.points_path, key, base_key)
-            samples_on_map.set(samples_on_map.value | {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value | {key})
         else:
             _remove_sample_layers(map_, base_key)
-            samples_on_map.set(samples_on_map.value - {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value - {key})
     except Exception:
         logger.exception("sample map toggle failed for %s", key)
     finally:
@@ -223,7 +229,8 @@ def SamplingTile(project, map_=None):
     def _do_remove(key):
         if map_ is not None and key in samples_on_map.value:
             _remove_sample_layers(map_, _sample_layer_key(key))
-            samples_on_map.set(samples_on_map.value - {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value - {key})
         cur = project.value
         if cur is not None and key in cur.samples:
             cur.delete_sample(key, auto_save=True)
