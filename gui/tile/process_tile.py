@@ -221,6 +221,13 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # keyed on it would never retrigger. `processing.value` is what refreshes
     # the hint after a run whose key sets did not change (a re-harmonization
     # after the reference raster moved).
+    #
+    # Known gap, accepted: re-setting the SAME reference raster at the SAME CRS
+    # and resolution after its source extent changed yields a new geobox this
+    # key cannot see. Harmless — F3 recomputes status from disk the instant Run
+    # is pressed, so only the hint goes stale, never the run. The honest fix
+    # (stat() on the base file here) is blocking disk I/O in the render body,
+    # i.e. the websocket loop, which a cosmetic staleness does not justify.
     hint_key = (
         base_raster_key(p),
         getattr(p.base_raster, "default_crs", None) if p and p.base_raster else None,
