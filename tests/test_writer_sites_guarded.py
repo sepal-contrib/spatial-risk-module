@@ -13,7 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 TASK_TILES = [
-    ("gui/tile/variables_tile.py", "download_task"),
     ("gui/tile/process_tile.py", "process_task"),
 ]
 
@@ -40,6 +39,7 @@ def test_thread_workers_do_not_publish_the_project_directly():
     from gui.tile.postprocess_tile import _run_derived_job
     from gui.tile.sampling_tile import _run_sampling
     from gui.tile.train_tile import _run_training
+    from gui.tile.variables_tile import _run_download
 
     for fn in (
         _run_sampling,
@@ -48,6 +48,7 @@ def test_thread_workers_do_not_publish_the_project_directly():
         _run_inference,
         _run_evaluation,
         _run_derived_job,
+        _run_download,
     ):
         src = inspect.getsource(fn)
         assert (

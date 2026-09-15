@@ -9,6 +9,7 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import raw_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.notify_bridge import (
@@ -16,7 +17,7 @@ from gui.scripts.notify_bridge import (
     layer_progress_reporter,
     tracked_job,
 )
-from gui.scripts.solara_threads import publish_if_current, to_thread_in_context
+from gui.scripts.solara_threads import publish_if_current, spawn_in_context
 from gui.scripts.variable_identity import is_base_raster
 from gui.scripts.variable_map import add_raster_var_on_map
 from gui.store.project_writers import writing
@@ -41,6 +42,75 @@ LocalVectorVar.model_rebuild()
 
 # Keys of source variables currently displayed on the map (drives the toggle state).
 vars_on_map = solara.reactive(set())
+
+# Raw-variable keys whose download is running. A per-row download claims its
+# key; "download all" claims every pending key not already claimed. Keeps a
+# second click on a row from starting a second copy of the same download
+# while different rows download in parallel.
+download_inflight = InflightKeys(key="download_inflight")
+
+
+def _run_download(keys, bulk, p, project_reactive, notifier):
+    """Background worker: materialize ``keys`` and republish the project.
+
+    ``bulk`` only picks the notification title (the "all" phrasing vs. the
+    single-layer one). The republish runs on this thread, after the work,
+    so a download started for another row cannot skip it — a shared
+    ``use_task`` used to, when re-invoked (its cancel lands after the
+    ``await`` and the continuation never runs).
+    """
+    try:
+        # Inside the try: anything that raises before the job opens — a title
+        # lookup, the writing() mark — must still reach the release below, or
+        # the key stays claimed for the session (the row's download button
+        # spins forever and can never be clicked again).
+        def _var_name(k):
+            return getattr(p.raw_variables.get(k), "name", None) or k
+
+        title = (
+            t("notifications.task_download_all")
+            if bulk
+            else t("notifications.task_download_one", name=_var_name(keys[0]))
+        )
+        with writing(p.project_name):
+            try:
+                with tracked_job(
+                    notifier,
+                    title,
+                    error_format=lambda exc: t(
+                        "tiles.variables.error_download", exc=exc
+                    ),
+                ) as task:
+                    on_progress = layer_progress_reporter(
+                        task,
+                        format_title=lambda k, i, n: t(
+                            "notifications.task_download_layer",
+                            i=i + 1,
+                            n=n,
+                            name=_var_name(k),
+                        ),
+                        format_detail=lambda k, done, total: t(
+                            "notifications.task_download_tiles",
+                            name=_var_name(k),
+                            done=done,
+                            total=total,
+                        ),
+                    )
+                    process_actions.materialize_raw_layers(
+                        p, list(keys), on_progress=on_progress
+                    )
+                    p.save()
+            except Exception:
+                logger.exception("download failed")  # toast raised by tracked_job
+            # Publish even after a failure: layers materialized before the
+            # error are real and must show as local.
+            publish_if_current(project_reactive, p)
+    except Exception:
+        # tracked_job already toasted anything raised inside it; a failure
+        # outside it only reaches the log, but the keys are still freed.
+        logger.exception("download worker failed")
+    finally:
+        download_inflight.release(*keys)
 
 
 def _map_layer_key(key: str) -> str:
@@ -396,70 +466,8 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     modal_open = solara.use_reactive(False)
     editing_key, set_editing_key = solara.use_state(None)
     pending_toggle = solara.use_reactive(None)
-    # Key of the variable being downloaded, or None for a bulk download.
-    pending_download = solara.use_reactive(None)
     notifications = use_notifications()
-
-    @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
-    async def download_task():
-        """Materialize GEE-backed variables to local files (all, or one key).
-
-        Runs on a worker thread (prefer_threaded) so the UI stays responsive;
-        progress is driven by download_task.pending.
-        """
-        p = project.value
-        if p is None:
-            return
-        key = pending_download.value
-        keys = [key] if key is not None else None
-        var = p.raw_variables.get(key) if key is not None else None
-        title = (
-            t("notifications.task_download_one", name=getattr(var, "name", key))
-            if key is not None
-            else t("notifications.task_download_all")
-        )
-
-        def _var_name(k):
-            return getattr(p.raw_variables.get(k), "name", None) or k
-
-        def _tracked_download():
-            # Entered on the pool thread so the per-layer log lines feed this
-            # tracker; to_thread_in_context supplies the kernel context the
-            # tracker's bus updates need to reach the browser.
-            with tracked_job(
-                notifications,
-                title,
-                error_format=lambda exc: t("tiles.variables.error_download", exc=exc),
-            ) as task:
-                on_progress = layer_progress_reporter(
-                    task,
-                    format_title=lambda k, i, n: t(
-                        "notifications.task_download_layer",
-                        i=i + 1,
-                        n=n,
-                        name=_var_name(k),
-                    ),
-                    format_detail=lambda k, done, total: t(
-                        "notifications.task_download_tiles",
-                        name=_var_name(k),
-                        done=done,
-                        total=total,
-                    ),
-                )
-                process_actions.materialize_raw_layers(p, keys, on_progress=on_progress)
-                p.save()
-
-        with writing(p.project_name):
-            try:
-                await to_thread_in_context(_tracked_download)
-            except Exception:
-                logger.exception("download failed")  # toast raised by tracked_job
-            publish_if_current(project, p)
-
-    def on_download(key=None):
-        """Download one variable (key) or all pending GEE variables (None)."""
-        pending_download.set(key)
-        download_task()
+    downloading = download_inflight.value  # subscribes the tile
 
     @solara.lab.use_task(dependencies=None, raise_error=False)
     async def _apply_map_toggle():
@@ -655,6 +663,34 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         else []
     )
 
+    def on_download(key=None):
+        """Download one variable (key) or every pending GEE variable (None).
+
+        One worker per click. Bulk skips keys a row download already owns.
+        """
+        cur = project.value
+        if cur is None:
+            return
+        if key is not None:
+            keys = [key]
+        else:
+            keys = [k for k in pending_geevars if k not in download_inflight]
+        if not keys or not download_inflight.claim(*keys):
+            return
+        try:
+            spawn_in_context(
+                _run_download, (keys, key is None, cur, project, notifications)
+            )
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread that
+            # never starts would hold these keys for the rest of the session.
+            download_inflight.release(*keys)
+            logger.exception("could not start the download worker")
+            notifications.error(
+                t("tiles.variables.error_download", exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+
     with solara.Column(style="gap: 16px;"):
         with solara.Row(style="gap:4px;align-items:center;"):
             solara.Text(t("tiles.variables.description"))
@@ -678,22 +714,22 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             on_toggle_map=on_toggle_map if map_ is not None else None,
             vars_on_map=vars_on_map,
             on_download=on_download,
-            download_pending=download_task.pending,
-            downloading_key=pending_download.value if download_task.pending else None,
+            downloading_keys=downloading,
         )
 
         # Download-all button, below the list
+        idle_pending = [k for k in pending_geevars if k not in downloading]
         solara.Button(
-            t("tiles.variables.download_button", count=len(pending_geevars)),
+            t("tiles.variables.download_button", count=len(idle_pending)),
             icon_name="mdi-cloud-download-outline",
             color="primary",
             outlined=True,
             small=True,
             on_click=lambda: on_download(None),
-            loading=download_task.pending and pending_download.value is None,
-            disabled=download_task.pending or not pending_geevars,
+            loading=bool(downloading),
+            disabled=not idle_pending,
         )
-        if download_task.pending:
+        if downloading:
             solara.ProgressLinear(True)
 
     editing_entry = (
