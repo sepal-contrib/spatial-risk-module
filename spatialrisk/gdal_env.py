@@ -22,9 +22,23 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+import rasterio
 from osgeo import gdal
 
 logger = logging.getLogger("spatial_risk")
+
+DEFAULT_SAMPLING_CACHEMAX_BYTES = 512 * 1024 * 1024
+"""Default ``GDAL_CACHEMAX`` budget (bytes) for the sampling raster read path.
+
+GDAL's block cache defaults to ~5% of physical RAM, so it scales with the host
+machine rather than with anything we control -- bounding the numpy working set
+of one row-stripe (see ``spatialrisk/sampling``) does **not** bound process
+RSS, because GDAL's own native cache lives outside those arrays. 512 MiB is
+comfortably above one stripe's decoded size for the raster widths this module
+targets while still capping the unbounded default.
+"""
+
+_SAMPLING_CACHEMAX_ENV = "SPATIAL_RISK_SAMPLING_CACHEMAX_BYTES"
 
 
 def _is_usable(d: Path) -> bool:
@@ -122,3 +136,44 @@ def configure_gdal_tmpdir() -> Optional[Path]:
             e,
         )
         return None
+
+
+def sampling_gdal_env(cachemax_bytes: Optional[int] = None) -> rasterio.Env:
+    """A ``rasterio.Env`` that budgets GDAL's block cache for a sampling read.
+
+    Use as ``with sampling_gdal_env(): ...`` around the raster reads done for
+    sample generation.
+
+    IMPORTANT -- this budget is **process-wide, not per-thread.** A
+    ``rasterio.Env`` sets GDAL config through GDAL's global (not thread-local)
+    store, so while this context is open *every* thread sees the reduced
+    ``GDAL_CACHEMAX``, including unrelated raster work (training, processing,
+    map tiles). Measured directly: with ``rasterio.Env(GDAL_CACHEMAX=64)`` open
+    on the main thread, a second thread read back 64, not the default. Do not
+    reintroduce a per-thread claim here without re-measuring.
+
+    Two things keep that acceptable rather than harmful: the sampling jobs are
+    serialized (see ``gui/tile/sampling_tile.py``), so at most one such budget
+    is ever live, and the previous value is restored when the context exits. The
+    cost is that concurrent non-sampling raster work may re-decode more blocks
+    while a sampling job runs. If that ever shows up as a slowdown, the fix is
+    to move the read into a subprocess, which is the only way to get a genuinely
+    isolated GDAL cache.
+
+    This bounds the *cache* footprint of a single read; it does not limit how
+    many sampling jobs can run at once. That is a separate concern (see the
+    job serialization in ``gui/tile/sampling_tile.py``) -- running jobs one at
+    a time caps how many such budgets are live simultaneously, it does not by
+    itself reduce what any one job needs.
+
+    Parameters
+    ----------
+    cachemax_bytes : int, optional
+        Explicit ``GDAL_CACHEMAX`` value in bytes. Defaults to
+        ``SPATIAL_RISK_SAMPLING_CACHEMAX_BYTES`` if set, else
+        :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES`.
+    """
+    if cachemax_bytes is None:
+        env_val = os.environ.get(_SAMPLING_CACHEMAX_ENV)
+        cachemax_bytes = int(env_val) if env_val else DEFAULT_SAMPLING_CACHEMAX_BYTES
+    return rasterio.Env(GDAL_CACHEMAX=cachemax_bytes)
