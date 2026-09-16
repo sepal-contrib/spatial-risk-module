@@ -116,6 +116,8 @@ def test_import_risk_scale_keeps_values(tmp_path):
     with rasterio.open(pred.path) as ds:
         values = set(np.unique(ds.read(1)).tolist())
     assert values <= {0, 40000, 20000}
+    assert 40000 in values
+    assert 20000 in values
 
 
 def test_import_without_base_raster_raises_before_writing(tmp_path):
@@ -134,7 +136,7 @@ def test_import_rejects_range_contradicting_scale(tmp_path):
     proj = _project(tmp_path)
     src = _src_raster(tmp_path, value=100.0)  # 0..100, declared as 0..1
 
-    with pytest.raises(ImportRasterError, match="0..1"):
+    with pytest.raises(ImportRasterError, match=r"0\.\.1"):
         import_prediction(proj, str(src), name="x", value_scale="probability")
     assert not list((tmp_path / "proj").rglob("*.tif"))
     assert proj.predictions == {}
