@@ -250,6 +250,12 @@ def PredictionFormDialog(
         if p is None:
             return t("tiles.inference.error_no_project")
         if source == "import":
+            # First, because nothing the user types in this form can fix it:
+            # every import is warped onto the base raster's geobox, so without
+            # one there is no grid to import onto. Caught here rather than in
+            # the worker so no job is ever queued that can only fail.
+            if getattr(p, "base_raster", None) is None:
+                return t("widgets.prediction_import_modal.error_base_raster_required")
             if not file_path or not str(file_path).strip():
                 return t("widgets.prediction_import_modal.error_select_raster")
             if not name_value.strip():

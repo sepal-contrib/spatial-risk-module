@@ -53,24 +53,41 @@ def _texts(box):
     return " ".join(parts)
 
 
-def _project(tmp_path):
+def _alerts(box):
+    """Every message the dialog's error alerts are showing."""
+    return " ".join(
+        str(c)
+        for a in _find(box, vw.Alert)
+        for c in (a.children or [])
+        if isinstance(c, str)
+    )
+
+
+def _create(box):
+    """Press the dialog's create button."""
+    label = t("tiles.inference.run_button")
+    btn = next(b for b in _find(box, vw.Btn) if label in str(b.children))
+    btn.fire_event("click", {})
+
+
+def _project(tmp_path, with_base=True):
     return types.SimpleNamespace(
         models={},
         datasets={},
         processed_variables={},
         predictions={},
         filter_predictions=lambda **kw: [],
-        base_raster=object(),
+        base_raster=object() if with_base else None,
         folders=types.SimpleNamespace(project_folder=str(tmp_path)),
     )
 
 
-def _render(tmp_path, prefill=None):
+def _render(tmp_path, prefill=None, with_base=True):
     submitted = []
 
     @solara.component
     def Host():
-        project = solara.use_reactive(_project(tmp_path))
+        project = solara.use_reactive(_project(tmp_path, with_base))
         PredictionFormDialog(
             project=project,
             open_=solara.use_reactive(True),
@@ -128,4 +145,35 @@ def test_import_prefill_restores_value_scale(tmp_path):
     box, _, _ = _render(tmp_path, prefill=entry)
     assert (
         _select(box, t("widgets.prediction_import_modal.label_scale")).v_model == "risk"
+    )
+
+
+def test_unset_value_scale_blocks_the_import(tmp_path):
+    """Submitting without a declared scale is refused, and says which field."""
+    # A prefill carrying no scale is how a file and a name get into the form
+    # without one; the dialog must not guess and rescale the wrong way.
+    entry = {"kind": "import", "name": "ext", "path": "/data/ext.tif"}
+    box, _, submitted = _render(tmp_path, prefill=entry)
+
+    _create(box)
+
+    assert not submitted
+    assert t("widgets.prediction_import_modal.error_scale_required") in _alerts(box)
+
+
+def test_import_without_a_base_raster_is_refused_in_the_form(tmp_path):
+    """No reference raster means no grid to warp onto: no job is queued."""
+    entry = {
+        "kind": "import",
+        "name": "ext",
+        "path": "/data/ext.tif",
+        "value_scale": "risk",
+    }
+    box, _, submitted = _render(tmp_path, prefill=entry, with_base=False)
+
+    _create(box)
+
+    assert not submitted
+    assert t("widgets.prediction_import_modal.error_base_raster_required") in _alerts(
+        box
     )

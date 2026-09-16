@@ -13,6 +13,7 @@
     "prediction_import_modal": {
       "error_select_raster": "Selecione um arquivo raster para importar.",
       "error_enter_name": "Informe um nome para a predição importada.",
+      "error_base_raster_required": "Defina o raster de referência na etapa de Harmonização antes de importar uma predição: a importação é reprojetada para essa grade.",
       "error_scale_required": "Escolha a escala de valores do raster.",
       "title": "Importar raster de predição",
       "label_name": "Nome",

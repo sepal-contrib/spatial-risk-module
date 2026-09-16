@@ -13,6 +13,7 @@
     "prediction_import_modal": {
       "error_select_raster": "Seleccione un archivo ráster para importar.",
       "error_enter_name": "Escriba un nombre para la predicción importada.",
+      "error_base_raster_required": "Defina el ráster de referencia en el paso de Armonización antes de importar una predicción: la importación se reproyecta a esa malla.",
       "error_scale_required": "Elija la escala de valores del ráster.",
       "title": "Importar ráster de predicción",
       "label_name": "Nombre",

@@ -13,6 +13,7 @@
     "prediction_import_modal": {
       "error_select_raster": "Select a raster file to import.",
       "error_enter_name": "Enter a name for the imported prediction.",
+      "error_base_raster_required": "Set the reference raster in the Harmonization step before importing a prediction: the import is warped onto that grid.",
       "error_scale_required": "Choose the value scale of the raster.",
       "title": "Import prediction raster",
       "label_name": "Name",
