@@ -83,8 +83,14 @@ def resolve_defrate_table(
 ) -> DefrateSource:
     """Find (or compute) the per-category rate table for a registered prediction.
 
-    Order: explicit user override → the table persisted on the Prediction →
-    the MW sibling-path convention → computed from the prediction's dataset.
+    Order: explicit user override → for an imported map, the newest evaluation
+    run that included it → the table persisted on the Prediction → the MW
+    sibling-path convention → computed from the prediction's dataset. An MW or
+    JNR prediction whose table is missing raises rather than recomputing it.
+
+    The import branch comes before every family check on purpose: an import
+    named ``mw_...`` or ``jnr_...`` must never be routed by ``_family`` into a
+    resolver that expects an app-produced run layout.
     """
     if user_path:
         return DefrateSource(path=Path(user_path), provenance="user")
