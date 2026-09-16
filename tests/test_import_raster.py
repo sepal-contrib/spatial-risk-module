@@ -10,6 +10,7 @@ from odc.geo.geobox import GeoBox
 from rasterio.transform import from_origin
 
 from spatialrisk.predictions.import_raster import (
+    RISK_MAX,
     ImportRasterError,
     RasterInfo,
     adapt_raster,
@@ -142,6 +143,23 @@ def test_probability_scale_rejects_values_above_one():
         check_scale(0.0, 100.0, "probability")
 
 
+def test_risk_scale_rejects_a_range_at_or_below_one():
+    """A 0..1 file declared as risk is a probability raster in disguise."""
+    with pytest.raises(ImportRasterError, match="probabilit"):
+        check_scale(0.0, 1.0, "risk")
+
+
+def test_risk_scale_lower_bound_names_the_observed_range():
+    """The sub-1 risk error states the range it saw, not just the rule."""
+    with pytest.raises(ImportRasterError, match=r"0\.25 to 0\.5"):
+        check_scale(0.25, 0.5, "risk")
+
+
+def test_risk_scale_accepts_the_app_value_scale():
+    """A genuine 1..65535 risk raster passes."""
+    check_scale(1.0, 65535.0, "risk")
+
+
 def test_risk_scale_rejects_values_above_65535():
     """A range above the UInt16 max contradicts a declared risk scale."""
     with pytest.raises(ImportRasterError, match="65535"):
@@ -223,6 +241,10 @@ def test_adapt_probability_lands_on_geobox_as_uint16(tmp_path):
     # invents nothing.
     assert values <= {0, 13107, 52428}
     assert values & {13107, 52428}
+    # Positive, not merely a superset: the source covers only part of the
+    # geobox, so the rest of the project grid MUST come out as nodata. Without
+    # this line the assertion above passes even when 0 never appears at all.
+    assert 0 in values
 
 
 def test_adapt_risk_preserves_integer_values(tmp_path):
@@ -238,6 +260,7 @@ def test_adapt_risk_preserves_integer_values(tmp_path):
         values = set(np.unique(ds.read(1)).tolist())
     assert values <= {0, 30000, 65535}
     assert values & {30000, 65535}
+    assert 0 in values  # declared nodata outside the footprint, not a value
 
 
 def test_adapt_risk_accepts_float_integer_values(tmp_path):
@@ -252,6 +275,7 @@ def test_adapt_risk_accepts_float_integer_values(tmp_path):
         values = set(np.unique(ds.read(1)).tolist())
     assert values <= {0, 1234}
     assert 1234 in values
+    assert 0 in values  # NaN fill outside the footprint, not a value
 
 
 def test_adapt_removes_temp_file_on_success(tmp_path):
@@ -305,9 +329,17 @@ def test_adapt_keeps_a_pre_existing_destination_when_the_warp_fails(
     assert not list(tmp_path.glob(".*warp*"))
 
 
-def test_adapt_risk_floors_sub_half_values_at_one(tmp_path):
-    """A float risk pixel below 0.5 lands on 1, never on nodata 0."""
+def test_adapt_risk_maps_a_value_rounding_to_zero_to_nodata(tmp_path):
+    """On the risk scale 0 IS nodata, so a pixel rounding to 0 becomes a hole.
+
+    The contract (and the dialog's spec block) says an undeclared 0 in a risk
+    source is no data. Flooring such a pixel at 1 would hide the hole as valid
+    zero-risk data — the failure mode this feature exists to remove. A file
+    whose whole range sits at or below 1 never gets this far: ``check_scale``
+    rejects it as a probability raster in disguise.
+    """
     data = np.full((60, 60), 0.4, dtype=np.float32)
+    data[:, 30:] = 5000.0
     src = _write(tmp_path / "small.tif", data, nodata=None, res=0.002)
     dst = tmp_path / "small_adapted.tif"
 
@@ -315,8 +347,68 @@ def test_adapt_risk_floors_sub_half_values_at_one(tmp_path):
 
     with rasterio.open(dst) as ds:
         values = set(np.unique(ds.read(1)).tolist())
-    assert values <= {0, 1}
-    assert 1 in values
+    assert values <= {0, 5000}
+    assert 0 in values and 5000 in values
+    assert 1 not in values  # a 1-floor would have turned the hole into data
+
+
+def test_adapt_risk_treats_an_undeclared_integer_fill_as_nodata(tmp_path):
+    """An integer source with no nodata: the warp's 0 fill is a hole, not zero risk.
+
+    ``xr_reproject`` fills outside the source footprint with 0 for an integer
+    source that declares no nodata (odc's ``resolve_fill_value``). Nothing in
+    the warped file distinguishes that fill from real data, so it must not
+    survive as a valid pixel: here the source covers roughly half the geobox
+    and the rest of the project grid must come out as nodata.
+    """
+    data = np.full((60, 60), 30000, dtype=np.uint16)
+    data[:, 30:] = 65535
+    src = _write(tmp_path / "nofill.tif", data, nodata=None, res=0.002)
+    dst = tmp_path / "nofill_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "risk")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert 0 in values, "the fill outside the source footprint must be nodata"
+    assert values <= {0, 30000, 65535}
+
+
+def test_adapt_probability_treats_an_undeclared_integer_fill_as_nodata(tmp_path):
+    """The same fill rule applies to an integer probability source."""
+    data = np.zeros((60, 60), dtype=np.uint8)
+    data[:, 30:] = 1
+    src = _write(tmp_path / "p8.tif", data, nodata=None, res=0.002)
+    dst = tmp_path / "p8_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "probability")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert 0 in values, "the fill outside the source footprint must be nodata"
+    # An integer probability raster can only hold 0 and 1, so there is no way
+    # to tell its zeros from the fill; both are nodata.
+    assert values <= {0, RISK_MAX}
+
+
+def test_adapt_probability_keeps_a_genuine_float_zero_as_one(tmp_path):
+    """A float 0.0 probability is real data: it rescales to 1, never to nodata.
+
+    The fill rule is keyed on an INTEGER warped dtype, because a float warp
+    fills with NaN. A float source's genuine zeros therefore stay valid, and
+    ``far.misc.rescale`` clamps them to 1e-6 -> 1, exactly as the spec says.
+    """
+    data = np.zeros((60, 60), dtype=np.float32)
+    data[:, 30:] = 0.8
+    src = _write(tmp_path / "pz.tif", data, nodata=None, res=0.002)
+    dst = tmp_path / "pz_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "probability")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert 1 in values, "a genuine 0.0 probability must survive as 1"
+    assert values <= {0, 1, _far_rescale(0.8)}
 
 
 def test_adapt_requests_the_display_overview_pyramid(tmp_path, monkeypatch):

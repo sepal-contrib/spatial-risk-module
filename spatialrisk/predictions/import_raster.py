@@ -125,7 +125,12 @@ def raster_range(path: PathLike) -> Tuple[float, float]:
 
 
 def check_scale(vmin: float, vmax: float, scale: str) -> None:
-    """Refuse a value range that contradicts the declared *scale*."""
+    """Refuse a value range that contradicts the declared *scale*.
+
+    The risk scale is bounded on both sides: a file whose maximum sits at or
+    below 1 is a probability raster in disguise, and rounding it onto 1..65535
+    would flatten every pixel to nodata or to the lowest risk category.
+    """
     if scale not in VALUE_SCALES:
         raise ImportRasterError(
             f"Unknown value scale {scale!r}; expected one of {VALUE_SCALES}."
@@ -147,6 +152,12 @@ def check_scale(vmin: float, vmax: float, scale: str) -> None:
             "probabilities 0..1. Either pick the 1..65535 risk scale or rescale "
             "the file."
         )
+    if scale == "risk" and vmax <= 1:
+        raise ImportRasterError(
+            f"Values range from {vmin} to {vmax}, at or below 1, but the raster "
+            f"was declared on the 1..{RISK_MAX} risk scale — that is a "
+            "probability raster. Pick the probability 0..1 scale instead."
+        )
     if scale == "risk" and vmax > RISK_MAX:
         raise ImportRasterError(
             f"Values range from {vmin} to {vmax}, above the 1..{RISK_MAX} risk "
@@ -155,7 +166,7 @@ def check_scale(vmin: float, vmax: float, scale: str) -> None:
 
 
 def adapt_raster(
-    src: PathLike, dst: PathLike, geobox, scale: str, *, blk_rows: int = 128
+    src: PathLike, dst: PathLike, geobox, scale: str, *, blk_rows: int = 256
 ) -> Path:
     """Warp *src* onto *geobox* and write it as a 1..65535 UInt16 raster at *dst*.
 
@@ -168,7 +179,12 @@ def adapt_raster(
        the canonical tiled layout with nodata 0:
 
        * ``"probability"``: nodata/NaN -> 0, else ``far.misc.rescale``;
-       * ``"risk"``: nodata/NaN -> 0, else rounded and cast to uint16.
+       * ``"risk"``: nodata/NaN -> 0, else rounded and cast to uint16 (a value
+         that rounds to 0 is nodata, exactly as the contract states).
+
+    ``blk_rows`` defaults to the canonical destination block height
+    (``raster_profile.BLOCK_SIZE``), so one band covers whole tile rows instead
+    of read-modify-writing every one of them twice.
 
     The temp file is removed whatever happens. A *dst* this call created is
     removed on failure; one that was already on disk is left alone, since pass 1
@@ -242,6 +258,17 @@ def _write_uint16(warped: Path, dst: Path, scale: str, blk_rows: int) -> None:
         profile.update(dtype="uint16", count=1, nodata=0)
         profile.update(rasterio_profile("uint16"))
         src_nodata = src.nodata
+        # odc fills the pixels outside the source footprint with its
+        # `resolve_fill_value`: NaN for a float warp (caught by ~isfinite
+        # below), but 0 for an integer one — and when the source declares no
+        # nodata, that 0 is carried into the warped file as an ordinary value.
+        # Nothing on disk tells it apart from real data, so an integer warp
+        # with no declared nodata treats 0 as nodata. Keyed on the warped
+        # DTYPE, not on the scale: a float probability source is never
+        # affected, so its genuine 0.0 pixels stay valid and rescale to 1.
+        zero_is_fill = src_nodata is None and np.issubdtype(
+            np.dtype(src.dtypes[0]), np.integer
+        )
         # One normalisation for both the step and the window height: a 0 or a
         # float would otherwise yield empty or fractional windows silently.
         step = max(1, int(blk_rows))
@@ -253,6 +280,8 @@ def _write_uint16(warped: Path, dst: Path, scale: str, blk_rows: int) -> None:
                 invalid = ~np.isfinite(arr)
                 if src_nodata is not None and np.isfinite(src_nodata):
                     invalid |= arr == src_nodata
+                if zero_is_fill:
+                    invalid |= arr == 0
                 out.write(_to_contract(arr, invalid, scale), 1, window=win)
 
 
@@ -270,9 +299,12 @@ def _to_contract(arr: np.ndarray, invalid: np.ndarray, scale: str) -> np.ndarray
         values = np.clip(arr[valid], 0.0, 1.0)
         result[valid] = far.misc.rescale(values).astype(np.uint16)
     else:
-        # Floor at 1, not 0: 0 is nodata, so np.rint(0.4) == 0 would turn a
-        # valid sub-half pixel into a hole. Matches the probability branch,
-        # which far.misc.rescale already floors at 1.
-        values = np.clip(np.rint(arr[valid]), 1, RISK_MAX)
+        # 0..RISK_MAX, not 1..: on the risk scale 0 IS nodata by contract, and
+        # the dialog says so. A pixel that rounds to 0 must therefore stay a
+        # visible hole rather than be floored into valid lowest-risk data —
+        # that floor is what turns a warp fill into silently wrong numbers
+        # downstream. check_scale already refuses a file whose whole range
+        # sits at or below 1, so this only ever bites stray sub-half pixels.
+        values = np.clip(np.rint(arr[valid]), 0, RISK_MAX)
         result[valid] = values.astype(np.uint16)
     return result

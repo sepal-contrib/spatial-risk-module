@@ -142,6 +142,21 @@ def test_import_rejects_range_contradicting_scale(tmp_path):
     assert proj.predictions == {}
 
 
+def test_import_rejects_unit_interval_declared_as_risk(tmp_path):
+    """A 0..1 file declared on the risk scale is refused before writing.
+
+    Without a lower bound on the risk scale the whole file rounds to 0 and
+    passes every downstream stage as a constant map.
+    """
+    proj = _project(tmp_path)
+    src = _src_raster(tmp_path, value=0.5)  # 0.25..0.5, declared as 1..65535
+
+    with pytest.raises(ImportRasterError, match="probabilit"):
+        import_prediction(proj, str(src), name="x", value_scale="risk")
+    assert not list((tmp_path / "proj").rglob("*.tif"))
+    assert proj.predictions == {}
+
+
 def test_import_disambiguates_duplicate_names(tmp_path):
     """Importing the same name twice yields two distinct registry entries and files."""
     proj = _project(tmp_path)
