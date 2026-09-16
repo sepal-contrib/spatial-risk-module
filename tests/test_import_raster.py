@@ -1,13 +1,16 @@
 """Inspection and scale checks for user-imported prediction rasters."""
 
 import numpy as np
+import odc.geo.xr  # noqa: F401  # registers the .odc accessor
 import pytest
 import rasterio
+from odc.geo.geobox import GeoBox
 from rasterio.transform import from_origin
 
 from spatialrisk.predictions.import_raster import (
     ImportRasterError,
     RasterInfo,
+    adapt_raster,
     check_scale,
     inspect_raster,
     raster_range,
@@ -167,3 +170,112 @@ def test_unknown_scale_is_rejected():
     """An unrecognized scale token is rejected outright."""
     with pytest.raises(ImportRasterError, match="value scale"):
         check_scale(0.0, 1.0, "percent")
+
+
+# --- adapt_raster -------------------------------------------------------------
+
+# A 20x20 UTM 21S grid at 1 km covering roughly the source footprint of _write.
+_UTM = "EPSG:32721"
+
+
+def _target_geobox():
+    """The project grid the imports are warped onto: 20x20 px at 1 km, UTM 21S."""
+    return GeoBox.from_bbox(
+        (700000.0, 7330000.0, 720000.0, 7350000.0), crs=_UTM, resolution=1000.0
+    )
+
+
+def _far_rescale(p):
+    """The uint16 value ``far.misc.rescale`` maps probability ``p`` to."""
+    import forestatrisk as far
+
+    return int(far.misc.rescale(np.array([p], dtype=np.float64))[0])
+
+
+def test_adapt_probability_lands_on_geobox_as_uint16(tmp_path):
+    """A float probability raster lands on the geobox as tiled uint16, nodata 0."""
+    # Left half 0.2, right half 0.8, one nodata pixel; EPSG:4326 at ~0.002 deg.
+    data = np.full((60, 60), 0.2, dtype=np.float32)
+    data[:, 30:] = 0.8
+    data[0, 0] = -9999.0
+    src = _write(tmp_path / "prob.tif", data, nodata=-9999.0, res=0.002)
+    dst = tmp_path / "out" / "prob_adapted.tif"
+    dst.parent.mkdir()
+
+    out = adapt_raster(src, dst, _target_geobox(), "probability")
+
+    assert out == dst
+    with rasterio.open(dst) as ds:
+        assert ds.count == 1
+        assert ds.dtypes[0] == "uint16"
+        assert ds.nodata == 0
+        assert ds.crs.to_epsg() == 32721
+        assert (ds.width, ds.height) == (20, 20)
+        assert ds.transform.a == 1000.0 and ds.transform.e == -1000.0
+        assert ds.is_tiled
+        values = set(np.unique(ds.read(1)).tolist())
+    # Only rescaled source values (and nodata 0) may appear: nearest resampling
+    # invents nothing.
+    assert values <= {0, _far_rescale(0.2), _far_rescale(0.8)}
+    assert values & {_far_rescale(0.2), _far_rescale(0.8)}
+
+
+def test_adapt_risk_preserves_integer_values(tmp_path):
+    """A uint16 risk raster keeps its exact values through the warp."""
+    data = np.full((60, 60), 30000, dtype=np.uint16)
+    data[:, 30:] = 65535
+    src = _write(tmp_path / "risk.tif", data, nodata=0, res=0.002)
+    dst = tmp_path / "risk_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "risk")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert values <= {0, 30000, 65535}
+    assert values & {30000, 65535}
+
+
+def test_adapt_risk_accepts_float_integer_values(tmp_path):
+    """Whole numbers stored as floats are accepted on the risk scale."""
+    data = np.full((60, 60), 1234.0, dtype=np.float32)
+    src = _write(tmp_path / "riskf.tif", data, nodata=None, res=0.002)
+    dst = tmp_path / "riskf_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "risk")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert values <= {0, 1234}
+    assert 1234 in values
+
+
+def test_adapt_removes_temp_file_on_success(tmp_path):
+    """The intermediate warp file does not survive a successful adaptation."""
+    data = np.full((60, 60), 0.5, dtype=np.float32)
+    src = _write(tmp_path / "p.tif", data, res=0.002)
+    dst = tmp_path / "p_adapted.tif"
+    adapt_raster(src, dst, _target_geobox(), "probability")
+    assert not list(tmp_path.glob(".*warp*")), "temp warp file must be deleted"
+
+
+def test_adapt_removes_temp_file_on_failure(tmp_path, monkeypatch):
+    """A failed second pass leaves neither the temp file nor a partial output."""
+    data = np.full((60, 60), 0.5, dtype=np.float32)
+    src = _write(tmp_path / "p.tif", data, res=0.002)
+    dst = tmp_path / "p_adapted.tif"
+
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("spatialrisk.predictions.import_raster._write_uint16", boom)
+    with pytest.raises(RuntimeError, match="disk full"):
+        adapt_raster(src, dst, _target_geobox(), "probability")
+    assert not list(tmp_path.glob(".*warp*"))
+    assert not dst.exists()
+
+
+def test_adapt_rejects_unknown_scale(tmp_path):
+    """An unrecognized scale token is refused before any file is touched."""
+    src = _write(tmp_path / "p.tif", np.ones((4, 4), dtype=np.float32))
+    with pytest.raises(ImportRasterError, match="value scale"):
+        adapt_raster(src, tmp_path / "o.tif", _target_geobox(), "percent")

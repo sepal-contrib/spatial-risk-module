@@ -148,3 +148,90 @@ def check_scale(vmin: float, vmax: float, scale: str) -> None:
             f"Values range from {vmin} to {vmax}, above the 1..{RISK_MAX} risk "
             "scale. Rescale the file first."
         )
+
+
+def adapt_raster(
+    src: PathLike, dst: PathLike, geobox, scale: str, *, blk_rows: int = 128
+) -> Path:
+    """Warp *src* onto *geobox* and write it as a 1..65535 UInt16 raster at *dst*.
+
+    Two passes:
+
+    1. ``xr_reproject`` with nearest-neighbour resampling into a hidden sibling
+       temp file (``.<stem>.warp.tif``). Nearest is mandatory for both scales:
+       no new values are invented and category boundaries stay sharp.
+    2. A row-band pass that maps the warped values onto the contract and writes
+       the canonical tiled layout with nodata 0:
+
+       * ``"probability"``: nodata/NaN -> 0, else ``far.misc.rescale``;
+       * ``"risk"``: nodata/NaN -> 0, else rounded and cast to uint16.
+
+    The temp file is removed whatever happens. A partially written *dst* is
+    removed on failure.
+    """
+    if scale not in VALUE_SCALES:
+        raise ImportRasterError(
+            f"Unknown value scale {scale!r}; expected one of {VALUE_SCALES}."
+        )
+    from spatialrisk.geo_utils import xr_reproject
+
+    src, dst = Path(src), Path(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.stem}.warp.tif")
+    try:
+        xr_reproject(
+            raster_path=str(src),
+            geobox=geobox,
+            resampling_method="nearest",
+            output_path=str(tmp),
+        )
+        _write_uint16(tmp, dst, scale, blk_rows)
+    except Exception:
+        if dst.exists():
+            dst.unlink()
+        raise
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+    return dst
+
+
+def _write_uint16(warped: Path, dst: Path, scale: str, blk_rows: int) -> None:
+    """Second pass of :func:`adapt_raster`: contract mapping + canonical write."""
+    from rasterio.windows import Window
+
+    from spatialrisk.raster_profile import rasterio_profile
+
+    with rasterio.open(warped) as src:
+        profile = src.profile.copy()
+        profile.update(dtype="uint16", count=1, nodata=0)
+        profile.update(rasterio_profile("uint16"))
+        src_nodata = src.nodata
+        with rasterio.open(dst, "w", **profile) as out:
+            for row0 in range(0, src.height, max(1, int(blk_rows))):
+                rows = min(blk_rows, src.height - row0)
+                win = Window(0, row0, src.width, rows)
+                arr = src.read(1, window=win).astype(np.float64)
+                invalid = ~np.isfinite(arr)
+                if src_nodata is not None and np.isfinite(src_nodata):
+                    invalid |= arr == src_nodata
+                out.write(_to_contract(arr, invalid, scale), 1, window=win)
+
+
+def _to_contract(arr: np.ndarray, invalid: np.ndarray, scale: str) -> np.ndarray:
+    """Map a float64 block to uint16 on the 1..65535 scale; ``invalid`` -> 0."""
+    result = np.zeros(arr.shape, dtype=np.uint16)
+    valid = ~invalid
+    if not valid.any():
+        return result
+    if scale == "probability":
+        import forestatrisk as far
+
+        # rescale() mutates its input and clamps p < 1e-6 to 1e-6, so nodata
+        # never lands on 0 by accident; clip guards floating noise above 1.
+        values = np.clip(arr[valid], 0.0, 1.0)
+        result[valid] = far.misc.rescale(values).astype(np.uint16)
+    else:
+        values = np.clip(np.rint(arr[valid]), 0, RISK_MAX)
+        result[valid] = values.astype(np.uint16)
+    return result
