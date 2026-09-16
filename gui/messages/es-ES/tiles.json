@@ -218,6 +218,12 @@
       "details_output_window": "Ventana {n}",
       "details_palette_label": "Paleta de visualización",
       "details_imported_note": "Este ráster se importó; no lo produjo un modelo de este proyecto.",
+      "details_source_path": "Archivo de origen",
+      "details_source_crs": "CRS de origen",
+      "details_source_resolution": "Resolución de origen",
+      "details_source_dtype": "Tipo de dato de origen",
+      "details_source_range": "Rango de valores de origen",
+      "details_value_scale": "Escala de valores",
       "details_output_label": "Ráster de salida"
     },
     "evaluation": {

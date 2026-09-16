@@ -218,6 +218,12 @@
       "details_output_window": "Fenêtre {n}",
       "details_palette_label": "Palette d'affichage",
       "details_imported_note": "Ce raster a été importé ; il n'a pas été produit par un modèle de ce projet.",
+      "details_source_path": "Fichier source",
+      "details_source_crs": "SCR source",
+      "details_source_resolution": "Résolution source",
+      "details_source_dtype": "Type de données source",
+      "details_source_range": "Plage de valeurs source",
+      "details_value_scale": "Échelle des valeurs",
       "details_output_label": "Raster de sortie"
     },
     "evaluation": {

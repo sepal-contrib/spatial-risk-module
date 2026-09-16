@@ -218,6 +218,12 @@
       "details_output_window": "Window {n}",
       "details_palette_label": "Display palette",
       "details_imported_note": "This raster was imported, not produced by a model in this project.",
+      "details_source_path": "Source file",
+      "details_source_crs": "Source CRS",
+      "details_source_resolution": "Source resolution",
+      "details_source_dtype": "Source data type",
+      "details_source_range": "Source value range",
+      "details_value_scale": "Value scale",
       "details_output_label": "Output raster"
     },
     "evaluation": {

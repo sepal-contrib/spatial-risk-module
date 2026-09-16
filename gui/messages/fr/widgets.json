@@ -11,16 +11,21 @@
       "unknown_error": "Erreur inconnue"
     },
     "prediction_import_modal": {
-      "palette_far": "Rampe FAR (probabilité, fixée 1..65535)",
-      "palette_stretch": "Rampe auto-ajustée à la plage du fichier",
       "error_select_raster": "Sélectionnez un fichier raster à importer.",
       "error_enter_name": "Saisissez un nom pour la prédiction importée.",
+      "error_scale_required": "Choisissez l'échelle des valeurs du raster.",
       "title": "Importer un raster de prédiction",
       "label_name": "Nom",
-      "placeholder_name": "p. ex. qgis-export-2020",
-      "label_file": "Sélectionner un fichier raster",
-      "label_palette": "Palette de la carte",
-      "info_text": "Le raster doit être spatialement comparable à la référence choisie à l'étape Évaluation pour pouvoir être évalué.",
+      "placeholder_name": "p. ex. export-qgis-2020",
+      "label_file": "Sélectionner le fichier raster",
+      "label_scale": "Échelle des valeurs",
+      "scale_probability": "Probabilité 0..1 (remise à l'échelle 1..65535)",
+      "scale_risk": "Échelle de risque 1..65535 (utilisée telle quelle)",
+      "spec_intro": "Ce que l'import attend",
+      "spec_format": "Un GeoTIFF mono-bande doté d'un système de coordonnées.",
+      "spec_values": "Les valeurs sont des probabilités 0..1 ou l'échelle de risque 1..65535 ; plus la valeur est élevée, plus le risque est grand.",
+      "spec_nodata": "0 et la valeur nodata déclarée sont traités comme absence de donnée.",
+      "spec_warp": "Le raster est reprojeté sur la grille du projet (plus proche voisin) à l'import.",
       "btn_import": "Importer"
     },
     "inference_output_list": {

@@ -11,16 +11,21 @@
       "unknown_error": "Unknown error"
     },
     "prediction_import_modal": {
-      "palette_far": "FAR ramp (probability, pinned 1..65535)",
-      "palette_stretch": "Auto-stretch ramp to file range",
       "error_select_raster": "Select a raster file to import.",
       "error_enter_name": "Enter a name for the imported prediction.",
+      "error_scale_required": "Choose the value scale of the raster.",
       "title": "Import prediction raster",
       "label_name": "Name",
       "placeholder_name": "e.g. qgis-export-2020",
       "label_file": "Select raster file",
-      "label_palette": "Map palette",
-      "info_text": "The raster must be spatially comparable to the truth chosen in the Evaluation step to be evaluated.",
+      "label_scale": "Value scale",
+      "scale_probability": "Probability 0..1 (rescaled to 1..65535)",
+      "scale_risk": "Risk scale 1..65535 (used as is)",
+      "spec_intro": "What the import expects",
+      "spec_format": "A single-band GeoTIFF with a coordinate reference system.",
+      "spec_values": "Values are either probabilities 0..1 or the 1..65535 risk scale; higher means more risk.",
+      "spec_nodata": "0 and the declared nodata value are treated as no data.",
+      "spec_warp": "The raster is warped onto the project grid (nearest neighbour) on import.",
       "btn_import": "Import"
     },
     "inference_output_list": {

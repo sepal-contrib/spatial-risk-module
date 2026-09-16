@@ -250,3 +250,41 @@ def test_model_run_is_labelled_as_a_model_run():
     assert values[t("tiles.inference.source_label")] == t(
         "tiles.inference.source_model"
     )
+
+
+def _adapted_import():
+    """An import adapted by the value-scale flow: run_params carry the source."""
+    return Prediction(
+        name="ext",
+        path="/tmp/imported_predictions/ext.tif",
+        model_key="ext",
+        dataset_name="imported",
+        display_palette="far",
+        created_at="2026-09-16T09:00:00",
+        run_params={
+            "source_path": "/data/ext.tif",
+            "value_scale": "probability",
+            "source_crs": "EPSG:4326",
+            "source_resolution": [0.00027, 0.00027],
+            "source_dtype": "float32",
+            "source_range": [0.0, 0.97],
+        },
+    )
+
+
+def test_details_show_import_provenance():
+    """An adapted import explains the source raster and the scale it declared."""
+    values = _values(_render(_project_with(_adapted_import()), "ext"))
+    assert values[t("tiles.inference.details_source_crs")] == "EPSG:4326"
+    assert values[t("tiles.inference.details_source_dtype")] == "float32"
+    assert values[t("tiles.inference.details_source_path")] == "/data/ext.tif"
+    assert values[t("tiles.inference.details_value_scale")] == t(
+        "widgets.prediction_import_modal.scale_probability"
+    )
+
+
+def test_pre_adaptation_import_still_shows_its_display_palette():
+    """An import registered before the adaptation flow has only a palette to show."""
+    values = _values(_render(_project_with(_imported_prediction()), "external_map"))
+    assert values[t("tiles.inference.details_palette_label")] == "stretch"
+    assert t("tiles.inference.details_value_scale") not in values
