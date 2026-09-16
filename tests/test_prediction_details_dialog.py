@@ -281,6 +281,12 @@ def test_details_show_import_provenance():
     assert values[t("tiles.inference.details_value_scale")] == t(
         "widgets.prediction_import_modal.scale_probability"
     )
+    # The joins are the only new formatting in this change: %g drops the
+    # trailing zero of 0.0 and keeps 0.00027 out of scientific notation.
+    res = values[t("tiles.inference.details_source_resolution")]
+    assert res == "0.00027 \u00d7 0.00027"
+    rng = values[t("tiles.inference.details_source_range")]
+    assert rng == "0 \u2013 0.97"
 
 
 def test_pre_adaptation_import_still_shows_its_display_palette():

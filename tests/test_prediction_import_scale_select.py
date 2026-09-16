@@ -90,11 +90,21 @@ def test_import_mode_shows_value_scale_and_no_palette(tmp_path):
     scale = _select(box, t("widgets.prediction_import_modal.label_scale"))
     assert scale.v_model in (None, "")
     assert {i["value"] for i in scale.items} == {"probability", "risk"}
-    assert not [
-        s
-        for s in _find(box, vw.Select)
-        if s.label == t("widgets.prediction_import_modal.label_palette")
+    # Positive assertions, because t() returns the raw key for a key this task
+    # deleted: "no select labelled t('...label_palette')" would hold whether or
+    # not the palette select survived. Name every select instead, and refuse the
+    # palette's option values wherever they might reappear.
+    assert [s.label for s in _find(box, vw.Select)] == [
+        t("tiles.inference.source_label"),
+        t("widgets.prediction_import_modal.label_scale"),
     ]
+    offered = {
+        item.get("value")
+        for s in _find(box, vw.Select)
+        for item in (s.items or [])
+        if isinstance(item, dict)
+    }
+    assert not offered & {"far", "stretch"}
 
 
 def test_import_mode_shows_the_spec_block(tmp_path):
