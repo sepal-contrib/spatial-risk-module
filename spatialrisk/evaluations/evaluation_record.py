@@ -31,6 +31,8 @@ class EvaluationPlotArtifact(BaseModel):
 
 
 class EvaluationRecord(BaseModel):
+    """Persisted evaluation run record with truth, predictions, and artifacts."""
+
     name: Optional[str] = None
     truth_tag: str
     truth_defor: str
