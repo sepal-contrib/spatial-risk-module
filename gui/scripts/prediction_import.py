@@ -5,12 +5,12 @@ from QGIS or another pipeline) into Step 7 — Inference, so it renders on the m
 and can be scored in Step 8 — Evaluation alongside computed predictions.
 
 Solara-free (architecture contract #7): a pure adapter over the Project document,
-called from the Inference tile. The heavy geo deps are not needed here — only a
-file copy and registry write.
+called from the Inference tile. The raster is inspected, range-checked against
+the declared value scale, then warped onto the project's base-raster grid and
+written as a 1..65535 UInt16 file by ``spatialrisk.predictions.import_raster``.
 """
 
 import re
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -54,52 +54,80 @@ def import_prediction(
     project: Any,
     src_path: str,
     name: str,
-    palette: str = "far",
+    value_scale: str,
     auto_save: bool = True,
 ):
-    """Copy *src_path* into the project and register it as a Prediction.
+    """Adapt *src_path* onto the project grid and register it as a Prediction.
 
     Parameters
     ----------
     project : Project
-        Active project; the raster is copied under
+        Active project. Must have a ``base_raster``: its geobox is the target
+        grid. The adapted raster lands under
         ``project.folders.project_folder / "imported_predictions"``.
     src_path : str
-        Path to the local raster to import.
+        Path to the local GeoTIFF to import.
     name : str
         User-typed display name. Used (sanitized) as the prediction's
         ``model_key`` so it labels the outputs list and the Evaluation table.
-    palette : str
-        Map display palette: ``"far"`` (pinned 1..65535) or ``"stretch"``
-        (auto-stretched to the file's range). Stored on the prediction.
+    value_scale : str
+        ``"probability"`` (floats 0..1, rescaled to 1..65535) or ``"risk"``
+        (whole numbers 1..65535, used as is).
     auto_save : bool
         Persist the project JSON after registering (default True).
 
-    Returns
-    -------
-    Prediction
-        The registered prediction.
+    Raises:
+    ------
+    FileNotFoundError
+        *src_path* does not exist.
+    ImportRasterError
+        No base raster, or the file fails inspection or the scale check.
     """
+    from spatialrisk.predictions.import_raster import (
+        ImportRasterError,
+        adapt_raster,
+        check_scale,
+        inspect_raster,
+        raster_range,
+    )
     from spatialrisk.predictions.prediction import Prediction
 
     src = Path(src_path)
     if not src.exists():
         raise FileNotFoundError(f"Raster to import not found: {src}")
+    base = getattr(project, "base_raster", None)
+    if base is None:
+        raise ImportRasterError(
+            "The project has no base raster yet: process the project's variables "
+            "first, then import the prediction."
+        )
+
+    # The dialog already inspected the file, but the adapter must not trust it.
+    info = inspect_raster(src)
+    vmin, vmax = raster_range(src)
+    check_scale(vmin, vmax, value_scale)
 
     dest_dir = Path(project.folders.project_folder) / IMPORT_DIR_NAME
     dest_dir.mkdir(parents=True, exist_ok=True)
+    model_key = resolve_import_key(project, name, ".tif")
+    dest = dest_dir / f"{model_key}.tif"
 
-    model_key = resolve_import_key(project, name, src.suffix)
-
-    dest = dest_dir / f"{model_key}{src.suffix}"
-    shutil.copy2(src, dest)
+    adapt_raster(src, dest, base.get_base_geobox(), value_scale)
 
     pred = Prediction(
         name=name,
         path=dest,
         model_key=model_key,
         dataset_name=IMPORT_DATASET_NAME,
-        display_palette=palette,
+        display_palette="far",
+        run_params={
+            "source_path": str(src),
+            "value_scale": value_scale,
+            "source_crs": info.crs,
+            "source_resolution": list(info.resolution),
+            "source_dtype": info.dtype,
+            "source_range": [vmin, vmax],
+        },
     )
     pred.add_to_project(project, auto_save=auto_save)
     return pred
