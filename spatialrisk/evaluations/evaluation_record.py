@@ -28,6 +28,9 @@ class EvaluationPlotArtifact(BaseModel):
     csize_px: int
     points_csv: str
     png_path: str
+    # Run-scoped per-category rate table this map was scored with. None for
+    # records saved before the field existed; consumers derive the legacy path.
+    defrate_csv: Optional[str] = None
 
 
 class EvaluationRecord(BaseModel):

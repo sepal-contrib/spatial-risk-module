@@ -133,3 +133,18 @@ def test_typed_artifact_paths_survive_a_serialization_round_trip():
     clone = EvaluationRecord.model_validate(rec.model_dump())
     assert clone.artifacts[0].png_path == "/elsewhere/archived.png"
     assert clone.artifacts[0].prediction_key == "GLM__d1"
+
+
+def test_artifact_defrate_csv_defaults_to_none_for_legacy_records():
+    """Records saved before the field existed load with None."""
+    assert _artifact().defrate_csv is None
+
+
+def test_artifact_round_trips_defrate_csv():
+    """Defrate CSV path survives serialization round-trip."""
+    art = _artifact(
+        defrate_csv="/p/evaluation/tag/abcd1234/defrate_cat_GLM_ds_2020.csv"
+    )
+    dumped = art.model_dump()
+    assert dumped["defrate_csv"].endswith("defrate_cat_GLM_ds_2020.csv")
+    assert EvaluationPlotArtifact(**dumped) == art
