@@ -15,8 +15,8 @@ stack (``cudf``/``cuml``/``dask-cuda``) are best installed from conda channels.
 .. code-block:: bash
 
     # Clone repo
-    git clone https://github.com/SerafiniJose/deforisk-jupyter-nb-v2.git
-    cd deforisk-jupyter-nb-v2/spatial-risk-module
+    git clone https://github.com/sepal-contrib/spatial-risk-module.git
+    cd spatial-risk-module
 
     # Install micromamba (to ~/.local/bin)
     mkdir -p ~/.local/bin

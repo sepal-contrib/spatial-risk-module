@@ -124,7 +124,7 @@ If you have GeoTIFF or other raster files:
 
 .. code-block:: python
 
-   from component.script.variables import LocalRasterVar
+   from spatialrisk.variables import LocalRasterVar
 
    local_dem = LocalRasterVar(
        name="high_res_dem",
@@ -139,7 +139,7 @@ If you have shapefiles or other vector formats:
 
 .. code-block:: python
 
-   from component.script.variables import LocalVectorVar
+   from spatialrisk.variables import LocalVectorVar
 
    local_roads = LocalVectorVar(
        name="national_roads",
