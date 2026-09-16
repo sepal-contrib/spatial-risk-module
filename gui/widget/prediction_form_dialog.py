@@ -436,6 +436,7 @@ def PredictionFormDialog(
                     f"- {t('widgets.prediction_import_modal.spec_format')}\n"
                     f"- {t('widgets.prediction_import_modal.spec_values')}\n"
                     f"- {t('widgets.prediction_import_modal.spec_nodata')}\n"
+                    f"- {t('widgets.prediction_import_modal.spec_zero')}\n"
                     f"- {t('widgets.prediction_import_modal.spec_warp')}\n"
                 )
         ArtifactNameField(

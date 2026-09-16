@@ -182,6 +182,14 @@ def adapt_raster(
        * ``"risk"``: nodata/NaN -> 0, else rounded and cast to uint16 (a value
          that rounds to 0 is nodata, exactly as the contract states).
 
+    On the probability scale 0 is a real value -- the lowest probability, which
+    rescales to 1 -- so it must survive the warp. That only needs saying for an
+    integer source that declares no nodata: odc fills outside the footprint with
+    0 for an integer warp, and nothing on disk would then tell the fill from a
+    genuine 0 (see ``_write_uint16``). Warping such a source as float32 makes
+    the fill NaN instead, which keeps the two apart. The risk scale needs no
+    such care: there 0 *is* nodata by contract, so fill and 0 mean the same.
+
     ``blk_rows`` defaults to the canonical destination block height
     (``raster_profile.BLOCK_SIZE``), so one band covers whole tile rows instead
     of read-modify-writing every one of them twice.
@@ -214,6 +222,7 @@ def adapt_raster(
             geobox=geobox,
             resampling_method="nearest",
             output_path=str(tmp),
+            cast_dtype=_warp_cast_dtype(src, scale),
         )
         _write_uint16(tmp, dst, scale, blk_rows)
     except Exception:
@@ -228,6 +237,25 @@ def adapt_raster(
             tmp.unlink(missing_ok=True)
     _build_display_overviews(dst)
     return dst
+
+
+def _warp_cast_dtype(src: Path, scale: str) -> Optional[str]:
+    """Return the dtype to warp *src* in, or ``None`` to keep its own.
+
+    ``"float32"`` only for the one combination whose genuine zeros the warp
+    would otherwise eat: a probability source in an integer dtype that declares
+    no nodata. Deliberately narrow -- casting a source that *does* declare
+    nodata could round the declared value away from the one on disk and turn
+    every nodata pixel back into data, which is worse than the bug being fixed.
+    float32 holds a probability far more precisely than the 16-bit scale it is
+    headed for, so nothing is lost on the way.
+    """
+    if scale != "probability":
+        return None
+    with rasterio.open(src) as ds:
+        if ds.nodata is None and np.issubdtype(np.dtype(ds.dtypes[0]), np.integer):
+            return "float32"
+    return None
 
 
 def _build_display_overviews(path: Path) -> None:
@@ -264,8 +292,11 @@ def _write_uint16(warped: Path, dst: Path, scale: str, blk_rows: int) -> None:
         # nodata, that 0 is carried into the warped file as an ordinary value.
         # Nothing on disk tells it apart from real data, so an integer warp
         # with no declared nodata treats 0 as nodata. Keyed on the warped
-        # DTYPE, not on the scale: a float probability source is never
-        # affected, so its genuine 0.0 pixels stay valid and rescale to 1.
+        # DTYPE, not on the scale, because it is the warp that decides the
+        # fill. A probability source never reaches here as an integer —
+        # `_warp_cast_dtype` sends it through the warp as float32 precisely so
+        # that its genuine zeros stay data and rescale to 1 — so in practice
+        # this drops the fill of a risk source, where 0 is nodata regardless.
         zero_is_fill = src_nodata is None and np.issubdtype(
             np.dtype(src.dtypes[0]), np.integer
         )

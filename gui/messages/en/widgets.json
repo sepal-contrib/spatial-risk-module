@@ -25,7 +25,8 @@
       "spec_intro": "What the import expects",
       "spec_format": "A single-band GeoTIFF with a coordinate reference system.",
       "spec_values": "Values are either probabilities 0..1 or the 1..65535 risk scale; higher means more risk.",
-      "spec_nodata": "0 and the declared nodata value are treated as no data.",
+      "spec_nodata": "Nodata: pixels marked with your file's nodata value are left out of the map.",
+      "spec_zero": "The value 0: nodata on the risk scale. On the probability scale it is a real value — the lowest probability — and is kept.",
       "spec_warp": "The raster is warped onto the project grid (nearest neighbour) on import.",
       "btn_import": "Import"
     },

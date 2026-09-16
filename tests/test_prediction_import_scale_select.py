@@ -125,13 +125,19 @@ def test_import_mode_shows_value_scale_and_no_palette(tmp_path):
 
 
 def test_import_mode_shows_the_spec_block(tmp_path):
-    """The dialog states the contract an imported raster must meet."""
+    """The dialog states the contract an imported raster must meet.
+
+    ``t()`` echoes a missing key straight back, and the dialog renders whatever
+    ``t()`` returns -- so "the resolved string appears in the text" holds even
+    for a bullet nobody ever translated. Each one is therefore checked to have
+    resolved to something other than its own key first.
+    """
     box, _, _ = _render(tmp_path)
     text = _texts(box)
-    assert t("widgets.prediction_import_modal.spec_format") in text
-    assert t("widgets.prediction_import_modal.spec_values") in text
-    assert t("widgets.prediction_import_modal.spec_nodata") in text
-    assert t("widgets.prediction_import_modal.spec_warp") in text
+    for name in ("spec_format", "spec_values", "spec_nodata", "spec_zero", "spec_warp"):
+        key = f"widgets.prediction_import_modal.{name}"
+        assert t(key) != key, f"{name} is missing from the message catalogue"
+        assert t(key) in text, f"{name} is not shown in the import dialog"
 
 
 def test_import_prefill_restores_value_scale(tmp_path):

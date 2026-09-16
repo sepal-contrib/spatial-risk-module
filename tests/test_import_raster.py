@@ -13,6 +13,7 @@ from spatialrisk.predictions.import_raster import (
     RISK_MAX,
     ImportRasterError,
     RasterInfo,
+    _warp_cast_dtype,
     adapt_raster,
     check_scale,
     inspect_raster,
@@ -374,8 +375,17 @@ def test_adapt_risk_treats_an_undeclared_integer_fill_as_nodata(tmp_path):
     assert values <= {0, 30000, 65535}
 
 
-def test_adapt_probability_treats_an_undeclared_integer_fill_as_nodata(tmp_path):
-    """The same fill rule applies to an integer probability source."""
+def test_adapt_probability_keeps_an_integer_zero_and_still_drops_the_fill(tmp_path):
+    """An integer probability source: 0 is data, the warp fill is not.
+
+    The two are the same number on disk, and an integer warp would fill outside
+    the footprint with that same 0. ``_warp_cast_dtype`` therefore sends a
+    probability source with no declared nodata through the warp as float32, so
+    the fill arrives as NaN: the source's own zeros stay data and rescale to 1,
+    while the pixels the source never covered come out as nodata. Getting this
+    wrong in either direction is silent -- either a hole reads as lowest risk,
+    or the lowest-risk pixels vanish from the map.
+    """
     data = np.zeros((60, 60), dtype=np.uint8)
     data[:, 30:] = 1
     src = _write(tmp_path / "p8.tif", data, nodata=None, res=0.002)
@@ -385,10 +395,29 @@ def test_adapt_probability_treats_an_undeclared_integer_fill_as_nodata(tmp_path)
 
     with rasterio.open(dst) as ds:
         values = set(np.unique(ds.read(1)).tolist())
-    assert 0 in values, "the fill outside the source footprint must be nodata"
-    # An integer probability raster can only hold 0 and 1, so there is no way
-    # to tell its zeros from the fill; both are nodata.
-    assert values <= {0, RISK_MAX}
+    assert values == {0, 1, RISK_MAX}, (
+        "expected nodata (0) outside the footprint, the source's own zeros as "
+        f"1 and its ones as {RISK_MAX}; got {sorted(values)}"
+    )
+
+
+def test_adapt_probability_keeps_an_integer_zero_when_nodata_is_declared(tmp_path):
+    """The cast must not disturb a source that declares its own nodata.
+
+    Here 255 is the declared fill, so the zeros are unambiguous without any
+    help from the dtype. The pixels outside the footprint are warped to 255 and
+    dropped by the declared-nodata rule, not by the float one.
+    """
+    data = np.zeros((60, 60), dtype=np.uint8)
+    data[:, 30:] = 1
+    src = _write(tmp_path / "p8nd.tif", data, nodata=255, res=0.002)
+    dst = tmp_path / "p8nd_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "probability")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert values == {0, 1, RISK_MAX}, sorted(values)
 
 
 def test_adapt_probability_keeps_a_genuine_float_zero_as_one(tmp_path):
@@ -452,3 +481,30 @@ def test_adapt_survives_a_failing_overview_build(tmp_path, monkeypatch):
     assert dst.exists()
     with rasterio.open(dst) as ds:
         assert ds.dtypes[0] == "uint16"
+
+
+@pytest.mark.parametrize(
+    ("dtype", "nodata", "scale", "expected"),
+    [
+        ("uint8", None, "probability", "float32"),
+        ("uint16", None, "probability", "float32"),
+        ("uint8", 255, "probability", None),
+        ("float32", None, "probability", None),
+        ("uint8", None, "risk", None),
+        ("uint16", 0, "risk", None),
+    ],
+)
+def test_warp_cast_dtype_is_narrow(tmp_path, dtype, nodata, scale, expected):
+    """Only an integer probability source with no declared nodata is cast.
+
+    Widening this would round a declared nodata value away from the one on
+    disk and turn every nodata pixel back into data; narrowing it brings back
+    the fill that eats a genuine 0. Both failures are silent, so the gate is
+    pinned here rather than inferred from the adapted pixels.
+    """
+    src = _write(
+        tmp_path / f"{dtype}-{nodata}.tif",
+        np.ones((4, 4), dtype=np.dtype(dtype)),
+        nodata=nodata,
+    )
+    assert _warp_cast_dtype(src, scale) == expected

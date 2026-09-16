@@ -25,7 +25,8 @@
       "spec_intro": "Qué espera la importación",
       "spec_format": "Un GeoTIFF de una sola banda con sistema de referencia de coordenadas.",
       "spec_values": "Los valores son probabilidades 0..1 o la escala de riesgo 1..65535; mayor valor, mayor riesgo.",
-      "spec_nodata": "El 0 y el valor nodata declarado se tratan como sin datos.",
+      "spec_nodata": "Sin datos: los píxeles marcados con el valor nodata del archivo quedan fuera del mapa.",
+      "spec_zero": "El valor 0: sin datos en la escala de riesgo. En la escala de probabilidad es un valor real — la probabilidad más baja — y se conserva.",
       "spec_warp": "El ráster se reproyecta a la malla del proyecto (vecino más cercano) al importarlo.",
       "btn_import": "Importar"
     },

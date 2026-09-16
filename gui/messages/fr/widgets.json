@@ -25,7 +25,8 @@
       "spec_intro": "Ce que l'import attend",
       "spec_format": "Un GeoTIFF mono-bande doté d'un système de coordonnées.",
       "spec_values": "Les valeurs sont des probabilités 0..1 ou l'échelle de risque 1..65535 ; plus la valeur est élevée, plus le risque est grand.",
-      "spec_nodata": "0 et la valeur nodata déclarée sont traités comme absence de donnée.",
+      "spec_nodata": "Absence de donnée : les pixels portant la valeur nodata de votre fichier sont exclus de la carte.",
+      "spec_zero": "La valeur 0 : absence de donnée sur l'échelle de risque. Sur l'échelle de probabilité, c'est une valeur réelle — la probabilité la plus faible — et elle est conservée.",
       "spec_warp": "Le raster est reprojeté sur la grille du projet (plus proche voisin) à l'import.",
       "btn_import": "Importer"
     },

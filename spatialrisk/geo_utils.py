@@ -271,6 +271,7 @@ def xr_reproject(
     geobox=None,
     resampling_method="nearest",
     output_path: str = None,
+    cast_dtype: str = None,
     **rasterio_kwargs,
 ):
     """Reproject a raster onto a target geobox and write it as a GeoTIFF.
@@ -287,6 +288,14 @@ def xr_reproject(
         (e.g. 'nearest', 'bilinear').
     output_path : str, optional
         File path for the reprojected GeoTIFF.
+    cast_dtype : str, optional
+        Cast the source to this dtype *before* warping. Left as ``None`` the
+        source dtype is preserved, which is what every caller wants unless the
+        warp's own fill value matters to it: ``odc`` fills outside the source
+        footprint with ``resolve_fill_value``, which is 0 for an integer array
+        but NaN for a float one. Casting to a float dtype therefore makes the
+        fill distinguishable from a genuine 0. The cast rides the existing dask
+        graph, so it costs no extra pass or temporary file.
     **rasterio_kwargs :
         Unused; kept for signature compatibility.
 
@@ -302,6 +311,8 @@ def xr_reproject(
         cache=False,
         lock=False,
     )
+    if cast_dtype is not None:
+        raster_array = raster_array.astype(cast_dtype)
 
     # Convert numpy array to a full xarray.DataArray
     # and set array name if supplied
