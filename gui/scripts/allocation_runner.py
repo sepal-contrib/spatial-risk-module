@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gui.scripts.prediction_import import IMPORT_DATASET_NAME
+
 logger = logging.getLogger("spatial_risk")
 
 #: Families whose apply() writes a per-category rate table next to the raster.
@@ -22,7 +24,11 @@ _JNR_FAMILY = "jnr"
 
 
 def _family(model_key) -> str:
-    """First token of a model key — same derivation as run_inference's."""
+    """First token of a model key — same derivation as run_inference's.
+
+    Imported predictions must be handled before this is consulted: an import
+    named ``mw_x`` is not a moving-window run.
+    """
     return str(model_key or "").split("_")[0]
 
 
@@ -42,7 +48,7 @@ class DefrateSource:
     """Where an allocation run's rate table came from."""
 
     path: Optional[Path]
-    provenance: str  # "persisted" | "mw-sibling" | "computed" | "user"
+    provenance: str  # "persisted" | "mw-sibling" | "computed" | "user" | "evaluation"
     caveat: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
@@ -88,6 +94,9 @@ def resolve_defrate_table(
         raise AllocationResolveError(
             f"Prediction '{pred_key}' not found in this project."
         )
+
+    if pred.dataset_name == IMPORT_DATASET_NAME:
+        return _defrate_from_evaluation(project, pred_key, pred)
 
     persisted = getattr(pred, "defrate_path", None)
     if persisted and Path(persisted).exists():
@@ -143,6 +152,53 @@ def resolve_defrate_table(
     return DefrateSource(path=out, provenance="computed")
 
 
+def _defrate_from_evaluation(project, pred_key: str, pred) -> DefrateSource:
+    """Rate table of the newest evaluation run that scored *pred_key*.
+
+    Imports have no dataset to compute a table from, so the evaluation step is
+    the only place their per-category rates exist. Newest record first; a
+    record whose file vanished is skipped in favour of an older one. Records
+    saved before ``EvaluationPlotArtifact.defrate_csv`` existed fall back to
+    the run-scoped path the evaluation would have written.
+    """
+    from spatialrisk.evaluation import artifact_label_for, run_output_dir
+
+    records = [
+        r
+        for r in (getattr(project, "evaluations", None) or {}).values()
+        if pred_key in (getattr(r, "prediction_keys", None) or [])
+    ]
+    records.sort(key=lambda r: getattr(r, "created_at", "") or "", reverse=True)
+    for record in records:
+        path = None
+        for art in getattr(record, "artifacts", None) or []:
+            if getattr(art, "prediction_key", None) == pred_key and getattr(
+                art, "defrate_csv", None
+            ):
+                path = Path(art.defrate_csv)
+                break
+        if path is None:
+            try:
+                path = run_output_dir(project, record.truth_tag, record.run_id) / (
+                    f"defrate_cat_{artifact_label_for(pred)}_{pred.dataset_name}.csv"
+                )
+            except ValueError:
+                continue
+        if path.exists():
+            return DefrateSource(
+                path=path,
+                provenance="evaluation",
+                caveat=(
+                    f"Rates from the evaluation against '{record.truth_tag}' "
+                    f"({record.created_at})."
+                ),
+            )
+    raise AllocationResolveError(
+        "Evaluate this imported map first (it has no dataset to compute a rate "
+        "table from), or select a rate table manually."
+    )
+
+
 def preview_defrate_source(
     project, pred_key: Optional[str], *, user_path: Optional[Path] = None
 ) -> DefrateSource:
@@ -165,7 +221,10 @@ def preview_defrate_source(
     try:
         return resolve_defrate_table(project, pred_key, compute=False)
     except AllocationResolveError as exc:
-        if _family(pred.model_key) in (_MW_FAMILY, _JNR_FAMILY):
+        if pred.dataset_name == IMPORT_DATASET_NAME or _family(pred.model_key) in (
+            _MW_FAMILY,
+            _JNR_FAMILY,
+        ):
             return DefrateSource(path=None, provenance="unavailable", caveat=str(exc))
         out = (
             Path(pred.path).parent
