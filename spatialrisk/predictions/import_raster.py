@@ -13,12 +13,16 @@ imported lazily inside the functions that need them.
 
 from __future__ import annotations
 
+import logging
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import numpy as np
 import rasterio
+
+logger = logging.getLogger("spatial_risk")
 
 PathLike = Union[str, "Path"]
 
@@ -166,8 +170,16 @@ def adapt_raster(
        * ``"probability"``: nodata/NaN -> 0, else ``far.misc.rescale``;
        * ``"risk"``: nodata/NaN -> 0, else rounded and cast to uint16.
 
-    The temp file is removed whatever happens. A partially written *dst* is
-    removed on failure.
+    The temp file is removed whatever happens. A *dst* this call created is
+    removed on failure; one that was already on disk is left alone, since pass 1
+    writes only to the temp file and a warp error must not destroy an unrelated
+    artifact. Cleanup never masks the error it is cleaning up after.
+
+    The adapted raster is a display artifact like any other prediction, so the
+    viewer's external overview pyramid is built once it is written -- best
+    effort, exactly as ``mlmodels.base.BaseModel._ensure_display_overviews``
+    does it: a raster that cannot be optimised still imports, it just draws
+    slower.
     """
     if scale not in VALUE_SCALES:
         raise ImportRasterError(
@@ -177,6 +189,8 @@ def adapt_raster(
 
     src, dst = Path(src), Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
+    # Whether *we* created dst decides whether we may delete it on failure.
+    dst_existed = dst.exists()
     tmp = dst.with_name(f".{dst.stem}.warp.tif")
     try:
         xr_reproject(
@@ -187,13 +201,34 @@ def adapt_raster(
         )
         _write_uint16(tmp, dst, scale, blk_rows)
     except Exception:
-        if dst.exists():
-            dst.unlink()
+        # suppress(): a read-only folder must surface as the warp/write error
+        # the user can act on, not as a PermissionError from the cleanup.
+        if not dst_existed:
+            with suppress(OSError):
+                dst.unlink(missing_ok=True)
         raise
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        with suppress(OSError):
+            tmp.unlink(missing_ok=True)
+    _build_display_overviews(dst)
     return dst
+
+
+def _build_display_overviews(path: Path) -> None:
+    """Build the viewer's overview pyramid for the adapted raster. Best effort.
+
+    Without it a zoomed-out tile of a 256 px tiled raster decodes the whole
+    file (see :mod:`spatialrisk.overviews`). A failure to optimise must not
+    fail the import, so it is logged and swallowed.
+    """
+    import spatialrisk.overviews as overviews
+
+    if not path.exists():
+        return
+    try:
+        overviews.ensure_overviews(path, min_pixels=overviews.OVERVIEW_MIN_PIXELS)
+    except Exception:
+        logger.exception("Could not build overviews for %s", path)
 
 
 def _write_uint16(warped: Path, dst: Path, scale: str, blk_rows: int) -> None:
@@ -207,9 +242,12 @@ def _write_uint16(warped: Path, dst: Path, scale: str, blk_rows: int) -> None:
         profile.update(dtype="uint16", count=1, nodata=0)
         profile.update(rasterio_profile("uint16"))
         src_nodata = src.nodata
+        # One normalisation for both the step and the window height: a 0 or a
+        # float would otherwise yield empty or fractional windows silently.
+        step = max(1, int(blk_rows))
         with rasterio.open(dst, "w", **profile) as out:
-            for row0 in range(0, src.height, max(1, int(blk_rows))):
-                rows = min(blk_rows, src.height - row0)
+            for row0 in range(0, src.height, step):
+                rows = min(step, src.height - row0)
                 win = Window(0, row0, src.width, rows)
                 arr = src.read(1, window=win).astype(np.float64)
                 invalid = ~np.isfinite(arr)
@@ -232,6 +270,9 @@ def _to_contract(arr: np.ndarray, invalid: np.ndarray, scale: str) -> np.ndarray
         values = np.clip(arr[valid], 0.0, 1.0)
         result[valid] = far.misc.rescale(values).astype(np.uint16)
     else:
-        values = np.clip(np.rint(arr[valid]), 0, RISK_MAX)
+        # Floor at 1, not 0: 0 is nodata, so np.rint(0.4) == 0 would turn a
+        # valid sub-half pixel into a hole. Matches the probability branch,
+        # which far.misc.rescale already floors at 1.
+        values = np.clip(np.rint(arr[valid]), 1, RISK_MAX)
         result[valid] = values.astype(np.uint16)
     return result

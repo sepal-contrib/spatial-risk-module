@@ -1,5 +1,7 @@
 """Inspection and scale checks for user-imported prediction rasters."""
 
+from pathlib import Path
+
 import numpy as np
 import odc.geo.xr  # noqa: F401  # registers the .odc accessor
 import pytest
@@ -214,10 +216,13 @@ def test_adapt_probability_lands_on_geobox_as_uint16(tmp_path):
         assert ds.transform.a == 1000.0 and ds.transform.e == -1000.0
         assert ds.is_tiled
         values = set(np.unique(ds.read(1)).tolist())
+    # Pinned literals, so this is a real oracle: comparing far.misc.rescale
+    # against itself would pass even if the formula changed under us.
+    assert (_far_rescale(0.2), _far_rescale(0.8)) == (13107, 52428)
     # Only rescaled source values (and nodata 0) may appear: nearest resampling
     # invents nothing.
-    assert values <= {0, _far_rescale(0.2), _far_rescale(0.8)}
-    assert values & {_far_rescale(0.2), _far_rescale(0.8)}
+    assert values <= {0, 13107, 52428}
+    assert values & {13107, 52428}
 
 
 def test_adapt_risk_preserves_integer_values(tmp_path):
@@ -279,3 +284,79 @@ def test_adapt_rejects_unknown_scale(tmp_path):
     src = _write(tmp_path / "p.tif", np.ones((4, 4), dtype=np.float32))
     with pytest.raises(ImportRasterError, match="value scale"):
         adapt_raster(src, tmp_path / "o.tif", _target_geobox(), "percent")
+
+
+def test_adapt_keeps_a_pre_existing_destination_when_the_warp_fails(
+    tmp_path, monkeypatch
+):
+    """A pass-1 failure must not delete a destination this call did not create."""
+    data = np.full((60, 60), 0.5, dtype=np.float32)
+    src = _write(tmp_path / "p.tif", data, res=0.002)
+    dst = tmp_path / "p_adapted.tif"
+    dst.write_bytes(b"the previous adaptation")
+
+    def boom(*a, **k):
+        raise RuntimeError("warp exploded")
+
+    monkeypatch.setattr("spatialrisk.geo_utils.xr_reproject", boom)
+    with pytest.raises(RuntimeError, match="warp exploded"):
+        adapt_raster(src, dst, _target_geobox(), "probability")
+    assert dst.read_bytes() == b"the previous adaptation"
+    assert not list(tmp_path.glob(".*warp*"))
+
+
+def test_adapt_risk_floors_sub_half_values_at_one(tmp_path):
+    """A float risk pixel below 0.5 lands on 1, never on nodata 0."""
+    data = np.full((60, 60), 0.4, dtype=np.float32)
+    src = _write(tmp_path / "small.tif", data, nodata=None, res=0.002)
+    dst = tmp_path / "small_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "risk")
+
+    with rasterio.open(dst) as ds:
+        values = set(np.unique(ds.read(1)).tolist())
+    assert values <= {0, 1}
+    assert 1 in values
+
+
+def test_adapt_requests_the_display_overview_pyramid(tmp_path, monkeypatch):
+    """The adapted raster is handed to ensure_overviews with the display threshold."""
+    import spatialrisk.overviews as overviews
+
+    calls = []
+
+    def spy(path, *a, **kwargs):
+        calls.append((Path(path), kwargs))
+        return False
+
+    monkeypatch.setattr(overviews, "ensure_overviews", spy)
+    data = np.full((60, 60), 0.5, dtype=np.float32)
+    src = _write(tmp_path / "p.tif", data, res=0.002)
+    dst = tmp_path / "p_adapted.tif"
+
+    adapt_raster(src, dst, _target_geobox(), "probability")
+
+    assert len(calls) == 1
+    path, kwargs = calls[0]
+    assert path == dst
+    assert kwargs["min_pixels"] == overviews.OVERVIEW_MIN_PIXELS
+
+
+def test_adapt_survives_a_failing_overview_build(tmp_path, monkeypatch):
+    """Overviews are an optimisation: a failure must not fail the import."""
+    import spatialrisk.overviews as overviews
+
+    def boom(*a, **k):
+        raise RuntimeError("no room for a pyramid")
+
+    monkeypatch.setattr(overviews, "ensure_overviews", boom)
+    data = np.full((60, 60), 0.5, dtype=np.float32)
+    src = _write(tmp_path / "p.tif", data, res=0.002)
+    dst = tmp_path / "p_adapted.tif"
+
+    out = adapt_raster(src, dst, _target_geobox(), "probability")
+
+    assert out == dst
+    assert dst.exists()
+    with rasterio.open(dst) as ds:
+        assert ds.dtypes[0] == "uint16"
