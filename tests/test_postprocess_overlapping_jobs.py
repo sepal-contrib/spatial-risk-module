@@ -19,12 +19,13 @@ TIMEOUT = 10.0
 
 
 @pytest.fixture(autouse=True)
-def _drain_derived_inflight():
-    """Leave no claim behind in the tile's module-level in-flight set."""
+def _drain_session_state():
+    """Leave no claim or job row behind in the tile's module-level state."""
     yield
     from gui.tile import postprocess_tile
 
     postprocess_tile.derived_inflight.release(*postprocess_tile.derived_inflight.value)
+    postprocess_tile.derived_jobs.set([])
 
 
 def _project():
@@ -144,7 +145,6 @@ def test_first_job_still_publishes_when_a_second_is_submitted(monkeypatch):
     finally:
         gate_a.set()
         rc.close()
-        postprocess_tile.derived_inflight.release("forest_dist", "rivers_dist")
 
 
 def test_resubmitting_an_in_flight_layer_is_refused_with_a_toast(monkeypatch):
@@ -177,7 +177,6 @@ def test_resubmitting_an_in_flight_layer_is_refused_with_a_toast(monkeypatch):
     finally:
         gate.set()
         rc.close()
-        postprocess_tile.derived_inflight.release("forest_dist")
 
 
 def test_a_failing_job_releases_its_key(monkeypatch):
@@ -202,4 +201,3 @@ def test_a_failing_job_releases_its_key(monkeypatch):
     finally:
         rc.close()
         _wait(lambda: not postprocess_tile.derived_inflight.value)
-        postprocess_tile.derived_inflight.release("forest_dist")
