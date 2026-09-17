@@ -32,6 +32,19 @@ STRIP_CLASS = "sr-reference-strip"
 
 
 @pytest.fixture(autouse=True)
+def _reference_claim_never_outlives_its_test():
+    """``reference_inflight`` is module-level state shared by every test here.
+
+    A worker that failed to release it — or a test that failed before its own
+    wait — would refuse the *next* test's submit, turning one flake into a
+    confusing multi-test failure somewhere else. Each test still asserts the
+    release on its own terms; this only stops the damage from spreading.
+    """
+    yield
+    process_tile.reference_inflight.release("reference")
+
+
+@pytest.fixture(autouse=True)
 def _no_disk(monkeypatch):
     """Every path the tile takes on mount is disk I/O — stub the lot.
 
@@ -248,9 +261,15 @@ def test_submitting_the_dialog_warps_off_the_render_thread(monkeypatch):
     finally:
         release.set()
         # Let the worker release its in-flight key: it is module-level, so a
-        # thread still holding it would refuse the next test's submit.
-        assert _wait_until(lambda: "reference" not in process_tile.reference_inflight)
+        # thread still holding it would refuse the next test's submit. Recorded
+        # here and asserted after the block: an ``assert`` inside ``finally``
+        # replaces the real exception with its own and skips the ``rc.close()``
+        # below it, leaking a render context on top of everything else.
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
         rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
 
 
 def test_the_strip_stops_inviting_a_change_while_a_warp_runs(monkeypatch):
@@ -284,8 +303,75 @@ def test_the_strip_stops_inviting_a_change_while_a_warp_runs(monkeypatch):
         ), "the strip never re-opened after the warp landed"
     finally:
         release.set()
-        assert _wait_until(lambda: "reference" not in process_tile.reference_inflight)
+        # Asserted after the block, never inside ``finally`` — see the comment
+        # in test_submitting_the_dialog_warps_off_the_render_thread.
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
         rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
+
+
+def _row_hammers(rc):
+    """The per-row harmonize buttons (the bulk one carries a label as well)."""
+    label = t("tiles.process.harmonize_all_button")
+    return [
+        b
+        for b in rc.find(vw.Btn).widgets
+        if "mdi-hammer" in list(_leaves(b)) and label not in list(_leaves(b))
+    ]
+
+
+def test_the_row_actions_close_while_a_warp_runs(monkeypatch):
+    """P3 disables the Create button *and the row actions* for the duration.
+
+    The strip and Harmonize-all were gated; the per-row hammer was not, and it
+    is a window this branch opened — before the warp moved off the websocket
+    loop the frozen UI made the click impossible. Pressing it during a
+    country-scale warp starts a second GDAL job against a ``p.base_raster`` the
+    reference worker is about to swap, and races two ``Project.save()`` calls
+    on the same object. It must come back once the warp lands.
+    """
+    monkeypatch.setattr(
+        process_tile,
+        "harmonization_status",
+        lambda p: HarmonizationStatus(pending=list(p.raw_variables), current=[]),
+    )
+    release = threading.Event()
+    monkeypatch.setattr(
+        process_actions,
+        "set_base_raster",
+        lambda p, key, epsg, res, auto_save=True: release.wait(5.0),
+    )
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
+    # With a reference already set — the row hammer is dead without one anyway,
+    # and re-pointing the reference of a project that has layers is exactly the
+    # situation where a row click can land mid-warp.
+    rc = _render(_project())
+    try:
+        hammers = _row_hammers(rc)
+        assert hammers, "no per-row harmonize button to gate"
+        assert not any(b.disabled for b in hammers), "the row action starts live"
+
+        _submit_reference(rc)
+        assert _wait_until(lambda: "reference" in process_tile.reference_inflight)
+        _settle(rc)
+        assert all(
+            b.disabled for b in _row_hammers(rc)
+        ), "a row harmonize stayed pressable while the reference was being warped"
+
+        release.set()
+        assert _wait_until(
+            lambda: not any(b.disabled for b in _row_hammers(rc))
+        ), "the row actions never came back after the warp landed"
+    finally:
+        release.set()
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
+        rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
 
 
 def test_a_second_submit_is_refused_out_loud_not_dropped(monkeypatch):
@@ -329,8 +415,13 @@ def test_a_second_submit_is_refused_out_loud_not_dropped(monkeypatch):
         ), f"the refusal was silent; toasts were {bus.toasts.value}"
     finally:
         release.set()
-        assert _wait_until(lambda: "reference" not in process_tile.reference_inflight)
+        # Asserted after the block, never inside ``finally`` — see the comment
+        # in test_submitting_the_dialog_warps_off_the_render_thread.
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
         rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
 
 
 def test_the_dialog_refuses_an_empty_form_instead_of_silently_disabling():

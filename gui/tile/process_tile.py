@@ -594,7 +594,15 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             status=status,
             on_harmonize=harmonize_one,
             running_keys=running_keys,
-            harmonize_disabled=run_in_flight or not has_base,
+            # The reference warp gates the row hammers too, not just the strip
+            # and Harmonize-all: a per-row run started mid-warp hands GDAL a
+            # ``p.base_raster`` the reference worker is about to replace, and
+            # races its ``Project.save()`` against the worker's. Before the warp
+            # moved off the websocket loop the frozen UI made that click
+            # impossible; now it has to be refused explicitly.
+            harmonize_disabled=run_in_flight
+            or not has_base
+            or "reference" in reference_inflight,
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
             on_remove=set_pending_remove,
