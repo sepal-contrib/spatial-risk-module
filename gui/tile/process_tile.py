@@ -96,9 +96,12 @@ def ReferenceStrip(project, on_open, pending=False):
     needed.
 
     ``pending`` is True while the reference warp runs on its worker thread: the
-    strip then says so and carries a progress bar, because the old reference it
-    still holds is about to be replaced and the UI is otherwise unchanged (the
-    warp no longer freezes it, so nothing else signals that work is happening).
+    strip then says so, carries a progress bar and stops opening the form,
+    because the old reference it still holds is about to be replaced and the UI
+    is otherwise unchanged (the warp no longer freezes it, so nothing else
+    signals that work is happening). Disabling it is what keeps the user from
+    typing a correction that ``on_set_base`` would only have to refuse — and the
+    pending line it carries is the reason, so the disabled state is not mute.
     """
     p = project.value
     base = p.base_raster if p is not None else None
@@ -128,6 +131,7 @@ def ReferenceStrip(project, on_open, pending=False):
             color="primary" if base is not None else "warning",
             style=STRIP_STYLE,
             on_click=on_open,
+            disabled=pending,
             children=[
                 solara.Row(
                     style="width:100%;align-items:center;gap:8px;flex-wrap:nowrap;",
@@ -360,7 +364,19 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         All continuation work — the republish and the error toast — lives in the
         worker, per gui/scripts/solara_threads.
         """
-        if p is None or not reference_inflight.claim("reference"):
+        if p is None:
+            return
+        if not reference_inflight.claim("reference"):
+            # The strip is disabled while a warp runs, but `disabled=` is a
+            # render-time prop and reaches the browser a round-trip late, so a
+            # click can still get the form open. CreationDialog closes on any
+            # launch that returns, so refusing in silence would look exactly
+            # like a successful submit — and the corrected EPSG the user just
+            # typed would never be applied. Say so instead.
+            notifications.warning(
+                t("tiles.process.reference_already_running"),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
             return
         # Safe on this thread: validate_reference() has already parsed it.
         res = float(resolution)

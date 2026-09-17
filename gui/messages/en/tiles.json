@@ -37,6 +37,7 @@
       "reference_unset": "Not set — choose a raster and CRS",
       "reference_summary": "{name} · {crs} · {resolution} m",
       "reference_pending": "Setting the reference grid…",
+      "reference_already_running": "A reference grid is already being set — wait for it to finish, then try again.",
       "reference_dialog_title": "Reference & projection",
       "base_raster_label": "Reference raster",
       "base_raster_hint": "Defines the analysis grid (CRS, pixel size, extent) all layers are aligned to.",
