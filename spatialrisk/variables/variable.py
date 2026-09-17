@@ -30,6 +30,15 @@ class Variable(BaseModel):
     # ``{"palette": [hex, ...], "min": .., "max": ..}``; hex without ``#``).
     # Catalogue layers leave it None and take their look from the catalogue.
     vis_params: Optional[Dict[str, Any]] = None
+    grid_signature: Optional[str] = None
+    """Signature of the geobox this file sits on (see harmonization.geobox_signature).
+
+    On the base raster it records the base's own grid; on a harmonized output it
+    records the grid that output was matched to. A layer is already harmonized
+    exactly when the two strings are equal. ``None`` means "not recorded" — a
+    project written before this field existed — and sends the entry to the disk
+    check instead.
+    """
     project: Optional["Project"] = Field(
         default=None, repr=False, exclude=True, validate_default=False
     )  # Excluded from JSON serialization and __repr__

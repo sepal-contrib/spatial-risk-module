@@ -40,6 +40,24 @@ from spatialrisk.variables.models import DataType, RasterizationMethod, RasterTy
 logger = logging.getLogger("spatial_risk")
 
 
+def geobox_signature(geobox) -> str:
+    """A compact, comparable string for the grid ``geobox`` describes.
+
+    Formatted with ``repr``, which is round-trip exact for a Python float and
+    survives JSON unchanged. ``%.10g`` was tried and is wrong in the one
+    direction that matters: it collapses ``-29.999999999`` to ``-30``, so two
+    genuinely different grids would share a signature and a layer would display
+    as current while sitting on the wrong grid. Signatures are only ever
+    compared for equality, never parsed, so exactness costs nothing.
+
+    Duck-typed on ``crs`` / ``transform`` / ``shape.yx`` like the rest of this
+    module, so it takes an odc-geo GeoBox without importing one.
+    """
+    coeffs = "|".join(repr(float(c)) for c in tuple(geobox.transform)[:6])
+    rows, cols = geobox.shape.yx
+    return f"{geobox.crs}|{coeffs}|{rows}x{cols}"
+
+
 @dataclass(frozen=True)
 class HarmonizationStatus:
     """Raw-variable keys split by whether Step 3 still has work to do on them.
