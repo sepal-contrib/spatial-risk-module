@@ -19,15 +19,17 @@ def _src(fn):
 
 
 def test_process_tile_lists_harmonized_vars_with_remove():
+    """Harmonized outputs get a remove button that opens the dialog."""
     from gui.tile.process_tile import ProcessTile
 
     src = _src(ProcessTile)
     assert "on_remove=set_pending_remove" in src  # opens the dialog, never deletes
     assert "ConfirmDialog" in src
-    assert "remove_processed_variable" in src     # the layer goes with the entry
+    assert "remove_processed_variable" in src  # the layer goes with the entry
 
 
 def test_postprocess_tile_lists_derived_vars_with_remove():
+    """Derived layers get a remove button that opens the dialog."""
     from gui.tile.postprocess_tile import PostProcessTile
 
     src = _src(PostProcessTile)
@@ -46,6 +48,7 @@ def test_postprocess_tile_lists_derived_vars_with_remove():
     ],
 )
 def test_confirm_copy_resolves(key):
+    """Every confirm string resolves to real copy."""
     from gui import i18n
 
     assert i18n.t(key, name="v1") != key
@@ -79,6 +82,7 @@ def test_remove_processed_variable_drops_entry_and_layer(monkeypatch):
 
 
 def test_remove_processed_variable_is_a_noop_for_unknown_key():
+    """An unknown key changes nothing."""
     from gui.scripts import process_actions
 
     class _Project:
