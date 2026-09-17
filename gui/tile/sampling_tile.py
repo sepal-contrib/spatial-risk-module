@@ -14,6 +14,7 @@ import solara
 from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
@@ -29,7 +30,11 @@ logger = logging.getLogger("spatial_risk")
 # Module-level reactives shared across re-renders.
 sampling_jobs = solara.reactive([])
 samples_on_map = solara.reactive(set())
-samples_pending = solara.reactive(frozenset())
+# Guards every read-modify-write of samples_on_map: toggle workers run
+# concurrently (one thread per sample) and the remove handler runs on the
+# kernel thread, so an unlocked `set(value | {key})` can drop a key.
+samples_on_map_lock = threading.Lock()
+samples_pending = InflightKeys(key="samples_pending")
 
 _sampling_slot = threading.Semaphore(1)
 """Single-slot queue: at most one sampling job reads its raster at a time.
@@ -110,14 +115,16 @@ def _toggle_sample_on_map(key, project_reactive, map_, turn_on):
                 from gui.scripts.map_helpers import add_sample_points_on_map
 
                 add_sample_points_on_map(map_, ss.points_path, key, base_key)
-            samples_on_map.set(samples_on_map.value | {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value | {key})
         else:
             _remove_sample_layers(map_, base_key)
-            samples_on_map.set(samples_on_map.value - {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value - {key})
     except Exception:
         logger.exception("sample map toggle failed for %s", key)
     finally:
-        samples_pending.set(samples_pending.value - {key})
+        samples_pending.release(key)
 
 
 def _update_job(job_id, *, skip_if_cancelled=True, **changes):
@@ -222,7 +229,8 @@ def SamplingTile(project, map_=None):
     def _do_remove(key):
         if map_ is not None and key in samples_on_map.value:
             _remove_sample_layers(map_, _sample_layer_key(key))
-            samples_on_map.set(samples_on_map.value - {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value - {key})
         cur = project.value
         if cur is not None and key in cur.samples:
             cur.delete_sample(key, auto_save=True)
@@ -276,8 +284,6 @@ def SamplingTile(project, map_=None):
     def on_toggle_map(key):
         if map_ is None:
             return
-        if key in samples_pending.value:  # idempotent: ignore re-clicks
-            return
         cur = project.value
         if cur is None:
             return
@@ -291,8 +297,13 @@ def SamplingTile(project, map_=None):
             and getattr(ss, "pmtiles_path", None) is None
         ):
             return
-        samples_pending.set(samples_pending.value | {key})
-        spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+        if not samples_pending.claim(key):  # idempotent: ignore re-clicks
+            return
+        try:
+            spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+        except Exception:
+            samples_pending.release(key)
+            logger.exception("could not start the map-toggle worker")
 
     def on_dismiss(job_id):
         # Failed job rows only — never touches the sample registry.

@@ -67,6 +67,7 @@
       "info_header": "About the derived-layer operations",
       "info_md": "This step derives new model inputs from the harmonized layers:\n\n- **Change detection (loss / gain)** — compares two presence masks of the same phenomenon at two years and outputs a change mask (1 = event, 0 = stable, 255 = nodata). *loss* marks pixels present at the start but absent at the end (e.g. deforestation between two forest-cover years — the usual model target); *gain* marks the reverse (e.g. regrowth).\n- **edge** — for each pixel *inside* a binary mask (value 1), the distance in metres to the mask's edge. Applied to a forest mask it gives distance-to-forest-edge, a key deforestation predictor.\n- **dist** — for each pixel *outside* the mask, the distance in metres to the nearest mask pixel. Applied to roads, rivers or towns it gives distance-to-road / river / town.\n\nBoth transforms expect a binary (0/1) mask and produce a continuous raster. Results appear in the derived-variables list below and can be used as dataset features (the Dataset step).",
       "error_no_processed": "Run the Harmonization step first.",
+      "already_running": "'{name}' is already being generated.",
       "change_help_text": "Pick two presence masks (1 = present, 0 = absent) of the same phenomenon at two different years — same or different sources. Output: 1 = event, 0 = stable, 255 = nodata.",
       "operation_label": "Operation",
       "op_label_loss": "Loss — change detection",
@@ -84,6 +85,7 @@
       "processed_variable_hint": "Input — a binary (0/1) mask, e.g. forest cover or roads.",
       "generate_button": "Create layer",
       "error_post_processing": "Creating the derived layer failed: {exc}",
+      "already_running": "'{name}' is already being created.",
       "confirm_remove_title": "Remove derived layer?",
       "confirm_remove_message": "'{name}' will be removed from the project. The raster file stays on disk and re-running the operation will register it again — but any dataset, sample or model that uses it will need to be rebuilt."
     },

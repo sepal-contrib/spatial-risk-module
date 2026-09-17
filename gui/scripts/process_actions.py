@@ -6,6 +6,7 @@ edge/dist post-processing.
 """
 
 import logging
+from collections import namedtuple
 from pathlib import Path
 from typing import List
 
@@ -323,6 +324,36 @@ def postprocess_output_name(project, pp_key: str, step: str):
     if var is None:
         return None
     return f"{var.name}_{step}"
+
+
+#: What a submitted derived-layer entry will produce: the ``name`` the list
+#: displays and the ``key`` it will be registered under.
+DerivedOutput = namedtuple("DerivedOutput", "name key")
+
+
+def derived_output(project, entry) -> "DerivedOutput | None":
+    """Name and registry key the dialog entry will produce, or None if invalid.
+
+    The two differ for edge/dist: ``add_as_processed`` stores a year-bearing
+    variable under ``{name}_{year}`` and ``_create_post_var`` inherits the
+    source layer's year, so ``forest`` (2010) -> dist displays as
+    ``forest_dist`` but registers as ``forest_dist_2010``. Keying a job on the
+    name alone would therefore treat that layer as never registered, and would
+    wrongly conflate two same-named sources from different years.
+
+    Change layers carry no year, so their name *is* their key.
+    """
+    op = entry["op"]
+    if op in ("loss", "gain"):
+        name = change_output_name(project, op, entry["start_key"], entry["end_key"])
+        return None if name is None else DerivedOutput(name, name)
+
+    pp_key = entry["pp_key"]
+    name = postprocess_output_name(project, pp_key, op)
+    if name is None:
+        return None
+    year = getattr(project.processed_variables[pp_key], "year", None)
+    return DerivedOutput(name, f"{name}_{year}" if year else name)
 
 
 def generate_change_var(project, op: str, start_key: str, end_key: str):

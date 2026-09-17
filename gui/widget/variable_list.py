@@ -6,6 +6,7 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.map_helpers import is_mappable
+from gui.scripts.product_rows import derived_rows
 from gui.scripts.variable_identity import is_base_raster
 from gui.widget.product_table import ProductTable
 
@@ -44,15 +45,14 @@ def SourceVariableList(
     on_toggle_map: Optional[Callable[[str], None]] = None,
     vars_on_map=None,
     on_download: Optional[Callable[[str], None]] = None,
-    download_pending: bool = False,
-    downloading_key: Optional[str] = None,
+    downloading_keys: frozenset = frozenset(),
 ):
     """Table of source (raw) variables with download/map/edit/remove actions.
 
     Cloud-backed variables (GEEVar) show a "cloud" chip and, when
-    ``on_download`` is given, a per-row download button. ``downloading_key`` is
-    the key currently downloading (None while a bulk download runs); every
-    download button is disabled while ``download_pending``.
+    ``on_download`` is given, a per-row download button. ``downloading_keys``
+    are the keys whose download is running: their button spins and is
+    disabled; every other row stays clickable (downloads run in parallel).
     """
     p = project.value
     raw_variables = (p.raw_variables if p is not None else {}) or {}
@@ -82,8 +82,8 @@ def SourceVariableList(
                 {
                     "kind": "download",
                     "on_click": lambda *_, k=key: on_download(k),
-                    "loading": download_pending and downloading_key == key,
-                    "disabled": download_pending,
+                    "loading": key in downloading_keys,
+                    "disabled": key in downloading_keys,
                 }
             )
         if on_toggle_map is not None and is_mappable(var):
@@ -154,53 +154,76 @@ def DerivedVariableList(
     on_toggle_map: Optional[Callable[[str], None]] = None,
     derived_on_map=None,
     title: Optional[str] = None,
+    jobs=None,
+    on_dismiss: Optional[Callable[[str], None]] = None,
 ):
-    """Table of derived (processed) variables with map/remove actions.
+    """Derived (processed) variables, plus the layers still being generated.
 
-    ``keys`` restricts the rows to those registry keys (None = all).
+    ``keys`` restricts the product rows to those registry keys (None = all).
     ``derived_on_map`` is the reactive set of keys currently drawn on the map
     (see ``gui/tile/derived_map.py``), which drives the toggle state.
+
+    ``jobs`` is the reactive list of session job dicts for submissions still
+    running — the same overlay the Train/Sampling/Inference tabs use, so a
+    derived layer is a row from the moment its form is submitted instead of
+    appearing out of nowhere minutes later. A job row has no product to act on
+    (and the GDAL pass behind it is not cancellable), so it carries no actions
+    until it fails, when ``on_dismiss`` lets the user clear it.
     """
     p = project.value
     if p is None:
         return
-    variables = {
-        k: v for k, v in p.processed_variables.items() if keys is None or k in keys
-    }
-    if not variables:
+    data = derived_rows(p, jobs.value if jobs is not None else None, keys)
+    if not data:
         return
     on_map = derived_on_map.value if derived_on_map is not None else set()
+    unknown_source = t("widgets.variable_list.derived_source_unknown")
 
     rows = []
-    for key, var in variables.items():
-        source_name = derived_source_key(
-            p,
-            var.name,
-            t("widgets.variable_list.derived_source_unknown"),
-            year=getattr(var, "year", None),
-        )
+    for r in data:
         actions = []
-        if on_toggle_map is not None and is_mappable(var):
-            actions.append(
-                {
-                    "kind": "map_toggle",
-                    "on_click": lambda *_, k=key: on_toggle_map(k),
-                    "is_on": key in on_map,
-                }
+        if r["kind"] == "variable":
+            var = p.processed_variables[r["key"]]
+            source_name = derived_source_key(
+                p, var.name, unknown_source, year=getattr(var, "year", None)
             )
-        if on_remove is not None:
-            actions.append(
-                {"kind": "delete", "on_click": lambda *_, k=key: on_remove(k)}
-            )
+            if on_toggle_map is not None and is_mappable(var):
+                actions.append(
+                    {
+                        "kind": "map_toggle",
+                        "on_click": lambda *_, k=r["key"]: on_toggle_map(k),
+                        "is_on": r["key"] in on_map,
+                    }
+                )
+            if on_remove is not None:
+                actions.append(
+                    {"kind": "delete", "on_click": lambda *_, k=r["key"]: on_remove(k)}
+                )
+        else:
+            # The output has no registry entry yet, so the source is resolved
+            # from the name the job will register under.
+            source_name = derived_source_key(p, r["name"], unknown_source)
+            if r["status"] != "running" and on_dismiss is not None:
+                actions.append(
+                    {
+                        "kind": "dismiss",
+                        "on_click": lambda *_, i=r["job_id"]: on_dismiss(i),
+                    }
+                )
+
+        error = r.get("error")
+        if r["status"] == "failed" and not error:
+            error = t("widgets.variable_list.derived_unknown_error")
         rows.append(
             {
-                "key": key,
+                "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": var.name, "size": "0.9rem"},
+                    {"type": "text", "value": r["name"], "size": "0.9rem"},
                     {"type": "chip", "value": source_name},
-                    {"type": "status", "status": "ready"},
+                    {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
+                "error": error,
             }
         )
 
