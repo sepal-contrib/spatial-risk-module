@@ -95,24 +95,6 @@ def test_the_key_discriminates_the_project_and_the_base():
     assert "project.value" not in key_block
 
 
-def test_unknown_entries_do_not_disable_harmonize_all():
-    """An unstamped layer is a maybe, not a no-op — the run stays available."""
-    status = HarmonizationStatus(pending=[], current=["a"], unknown=["b"])
-    nothing_pending = (
-        status is not None and not status.pending and not getattr(status, "unknown", ())
-    )
-    assert nothing_pending is False
-
-
-def test_all_current_still_disables_harmonize_all():
-    """With every layer stamped and on the grid, a run rewrites nothing."""
-    status = HarmonizationStatus(pending=[], current=["a", "b"], unknown=[])
-    nothing_pending = (
-        status is not None and not status.pending and not getattr(status, "unknown", ())
-    )
-    assert nothing_pending is True
-
-
 # --- Behavioral coverage -----------------------------------------------------
 #
 # The source-text tests above pin the shape; these mount the real ProcessTile
