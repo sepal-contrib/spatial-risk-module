@@ -168,7 +168,11 @@ def CreationDialog(
                 solara.Style(_ADVANCED_PANEL_CSS)
                 solara.Column(style="gap:4px;", children=children)
                 if error:
-                    rv.Alert(type_="error", dense=True, children=[error])
+                    # ``type=``, not ``type_=``: reacton's Alert has no ``type_``
+                    # parameter, so it is swallowed and the alert renders grey
+                    # and iconless — under the warning-coloured advisory a few
+                    # pixels above it, with the severity hierarchy inverted.
+                    rv.Alert(type="error", dense=True, children=[error])
             with rv.CardActions(style_="justify-content: flex-end; gap: 8px;"):
                 solara.Button(t("common.cancel"), on_click=close, text=True, small=True)
                 solara.Button(
