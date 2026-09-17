@@ -91,7 +91,7 @@ _ACTION_ICONS = {
     "edit": "mdi-pencil-outline",
     "delete": "mdi-delete-outline",
     "download": "mdi-cloud-download-outline",
-    "harmonize": "mdi-sync",
+    "harmonize": "mdi-hammer",
     "cancel": "mdi-stop-circle",
     "open": "mdi-information-outline",
     "dismiss": "mdi-close",

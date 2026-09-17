@@ -143,5 +143,5 @@ def test_harmonization_statuses_and_action_are_in_the_vocabulary():
     assert STATUS_COLORS["harmonized"] == "success"
     assert STATUS_COLORS["pending"] == "warning"
     assert STATUS_COLORS["not_downloaded"] == "warning"
-    assert action_icon("harmonize") == "mdi-sync"
+    assert action_icon("harmonize") == "mdi-hammer"
     assert action_color("harmonize") == "primary"

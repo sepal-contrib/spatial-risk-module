@@ -161,9 +161,9 @@ def test_harmonize_button_is_live_only_where_there_is_work():
     project = solara.reactive(_project())
     rc, calls = _render(project, HarmonizationStatus(pending=["roads"], current=["fc"]))
     try:
-        sync = [b for b in _buttons(rc) if b.children[0].children == ["mdi-sync"]]
-        assert [b.disabled for b in sync] == [True, False, False]
-        sync[1].click()
+        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-hammer"]]
+        assert [b.disabled for b in hammer] == [True, False, False]
+        hammer[1].click()
         assert calls == ["roads"]
         # Only the harmonized row has an output to remove.
         trash = [
@@ -186,9 +186,9 @@ def test_running_row_spins_and_every_button_is_disabled():
         harmonize_disabled=True,
     )
     try:
-        sync = [b for b in _buttons(rc) if b.children[0].children == ["mdi-sync"]]
-        assert all(b.disabled for b in sync)
-        assert [b.loading for b in sync] == [False, True, False]
+        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-hammer"]]
+        assert all(b.disabled for b in hammer)
+        assert [b.loading for b in hammer] == [False, True, False]
         assert t("widgets.product_table.status_running") in _status_labels(rc)
     finally:
         rc.close()
@@ -200,8 +200,8 @@ def test_status_none_reads_as_checking():
     rc, _ = _render(project, None)
     try:
         assert t("widgets.product_table.status_checking") in _status_labels(rc)
-        sync = [b for b in _buttons(rc) if b.children[0].children == ["mdi-sync"]]
+        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-hammer"]]
         # Nothing is known yet for local layers, so nothing local is runnable.
-        assert [b.disabled for b in sync] == [True, True, False]
+        assert [b.disabled for b in hammer] == [True, True, False]
     finally:
         rc.close()

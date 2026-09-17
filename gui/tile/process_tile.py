@@ -15,6 +15,7 @@ from gui.scripts.variable_identity import base_raster_key, is_base_raster
 from gui.store.project_writers import writing
 from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
 from gui.widget.confirm_dialog import ConfirmDialog
+from gui.widget.creation_dialog import CreationDialog
 from gui.widget.help import InfoButton
 from gui.widget.text_style import MUTED
 from gui.widget.variable_list import HarmonizationVariableList
@@ -36,15 +37,95 @@ def _raw_raster_keys(p):
     ]
 
 
+# A button, not a clickable div: focus, keyboard activation and the disabled
+# state come for free. Vuetify's fixed height and uppercasing are the only
+# things a two-line label needs undone.
+STRIP_STYLE = (
+    "height:auto;min-height:46px;padding:6px 12px;"
+    "text-transform:none;letter-spacing:normal;"
+)
+STRIP_CAPTION = (
+    "font-size:0.62rem;font-weight:700;text-transform:uppercase;"
+    "letter-spacing:0.08em;opacity:0.7;line-height:1.35;"
+)
+# Opacity, not a `text--*` class: theme-scoped classes go black inside dark
+# dialogs under voila (see gui/widget/text_style).
+# `display:block` is what makes the ellipsis apply at all — solara.Text renders
+# an inline span, and a long raster name otherwise runs to the panel edge.
+STRIP_SUMMARY = (
+    "font-size:0.8rem;line-height:1.35;display:block;max-width:100%;"
+    "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+)
+# Vuetify's button content is `flex:1 0 auto` and centred, so it refuses to
+# shrink: without this a long raster name ignores the ellipsis and spills out
+# BOTH sides of the button. Same defect and same fix as ProductTable's
+# `.v-chip__content` rule.
+STRIP_CSS = """
+.sr-reference-strip .v-btn__content {
+  width: 100%; min-width: 0; max-width: 100%; flex: 1 1 auto;
+}
+"""
+
+
 @solara.component
-def _StatusChip(label: str, icon: str, color: str):
-    """One count chip of the harmonization summary strip."""
-    rv.Chip(
-        children=[rv.Icon(children=[icon], x_small=True, left=True), label],
-        x_small=True,
-        outlined=True,
-        color=color,
-    )
+def ReferenceStrip(project, on_open):
+    """Clickable statement of the current reference grid; opens the form.
+
+    It carries the whole choice — raster, CRS and pixel size — because it
+    replaces a form that used to state all three permanently above the list.
+    Unset, it prompts instead, in warning colours: that is also what tells the
+    user why Run is disabled, so no separate "set a reference first" line is
+    needed.
+    """
+    p = project.value
+    base = p.base_raster if p is not None else None
+    if base is not None:
+        summary = t(
+            "tiles.process.reference_summary",
+            name=base.name,
+            crs=base.default_crs,
+            resolution=round(base.default_resolution or 0),
+        )
+    else:
+        summary = t("tiles.process.reference_unset")
+
+    # solara.Style needs a container to render into — at a component's top
+    # level it is silently dropped, and the strip then overflows its button.
+    with solara.Column(style="width:100%;gap:0;"):
+        solara.Style(STRIP_CSS)
+        # The label is built as `children=`, not a nested `with`: reacton
+        # reparents elements passed this way, and it keeps the two text lines
+        # inside the button's own content box where the CSS above can reach.
+        solara.Button(
+            classes=["sr-reference-strip"],
+            block=True,
+            outlined=True,
+            color="primary" if base is not None else "warning",
+            style=STRIP_STYLE,
+            on_click=on_open,
+            children=[
+                solara.Row(
+                    style="width:100%;align-items:center;gap:8px;flex-wrap:nowrap;",
+                    children=[
+                        rv.Icon(children=["mdi-crosshairs-gps"], small=True),
+                        solara.Column(
+                            style=(
+                                "gap:0;align-items:flex-start;"
+                                "min-width:0;flex:1 1 auto;"
+                            ),
+                            children=[
+                                solara.Text(
+                                    t("tiles.process.reference_label"),
+                                    style=STRIP_CAPTION,
+                                ),
+                                solara.Text(summary, style=STRIP_SUMMARY),
+                            ],
+                        ),
+                        rv.Icon(children=["mdi-chevron-right"], small=True),
+                    ],
+                )
+            ],
+        )
 
 
 @solara.component
@@ -57,10 +138,12 @@ def BaseProjectionForm(
     resolution,
     set_resolution,
     on_auto_utm,
-    on_set_base,
     autofill_pending,
 ):
-    """Base & projection form (Select, EPSG ⌖ + resolution, full-width Set base).
+    """Reference & projection form (Select, EPSG ⌖ + resolution).
+
+    Rendered as the body of ``CreationDialog``, which owns the submit and
+    cancel actions — the form itself is fields only.
 
     A separate component because ``rv.use_event`` is a hook and must run
     unconditionally every render — ProcessTile early-returns before the form
@@ -103,15 +186,11 @@ def BaseProjectionForm(
                 hint=t("tiles.process.resolution_hint"),
             )
         rv.use_event(epsg_field, "click:append", lambda *_: on_auto_utm())
-        solara.Button(
-            t("tiles.process.set_base_button"),
-            icon_name="mdi-target",
-            color="primary",
-            small=True,
-            block=True,
-            on_click=on_set_base,
-            disabled=autofill_pending or not (base_key and epsg.strip()),
-        )
+        if autofill_pending:
+            solara.Text(
+                t("tiles.process.detecting_projection"),
+                style=MUTED + "font-size:0.8rem;font-style:italic;",
+            )
 
 
 @solara.component
@@ -134,6 +213,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         project, map_, notifications, legend_port=legend_port
     )
     pending_remove, set_pending_remove = solara.use_state(None)
+    reference_open = solara.use_reactive(False)
     # Raw key the next run is restricted to (per-row harmonize button), or
     # None for a full run — the same shape as pending_download in Step 2.
     pending_harmonize = solara.use_reactive(None)
@@ -153,12 +233,6 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     p = project.value
     has_vars = p is not None and bool(p.raw_variables)
     has_base = p is not None and p.base_raster is not None
-
-    pending_geevars = (
-        [k for k, v in p.raw_variables.items() if type(v).__name__ == "GEEVar"]
-        if p
-        else []
-    )
 
     # Restore the form from a loaded project. The base raster is stored in the
     # model, but base_key / epsg / resolution are transient use_state that
@@ -223,6 +297,14 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             notifications.error(
                 t("tiles.process.error_auto_utm", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
+
+    def validate_reference():
+        """Name the missing field — the form's submit used to just sit disabled."""
+        if not base_key:
+            return t("tiles.process.error_pick_reference")
+        if not epsg.strip():
+            return t("tiles.process.error_need_epsg")
+        return None
 
     def on_set_base():
         if p is None:
@@ -374,52 +456,12 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             solara.Info(t("tiles.process.error_no_variables"))
             return
 
-        # Downloading now lives in Step 2 — Variables; point back if layers are
-        # still cloud-backed (auto-UTM needs the GeoTIFF on disk).
-        if pending_geevars:
-            solara.Info(
-                t("tiles.process.pending_geevars_hint", count=len(pending_geevars))
-            )
+        # The reference grid is chosen once and then read; the form lives in a
+        # dialog and this states the choice. Everything below is the list you
+        # actually work in — the shape of Step 2, whose variable form is
+        # likewise a dialog.
+        ReferenceStrip(project=project, on_open=lambda: reference_open.set(True))
 
-        # A — Base & projection
-        solara.Markdown(t("tiles.process.base_projection_header"))
-        BaseProjectionForm(
-            project=project,
-            base_key=base_key,
-            set_base_key=set_base_key,
-            epsg=epsg,
-            set_epsg=set_epsg,
-            resolution=resolution,
-            set_resolution=set_resolution,
-            on_auto_utm=on_auto_utm,
-            on_set_base=on_set_base,
-            autofill_pending=autofill_base.pending,
-        )
-        if autofill_base.pending:
-            solara.Text(
-                t("tiles.process.detecting_projection"),
-                style=MUTED + "font-size:0.8rem;font-style:italic;",
-            )
-        if has_base:
-            solara.Text(
-                t(
-                    "tiles.process.base_info",
-                    name=p.base_raster.name,
-                    crs=p.base_raster.default_crs,
-                    resolution=p.base_raster.default_resolution,
-                ),
-                style=MUTED + "font-size:0.8rem;",
-            )
-
-        # B — Run harmonization: status chips + hint, the per-variable list,
-        # then Run at the bottom acting on the rows above it (the shape of
-        # Step 2's source list with Download-all underneath).
-        solara.Markdown(t("tiles.process.run_processing_header"))
-        if not has_base:
-            solara.Text(
-                t("tiles.process.error_no_base"),
-                style=MUTED + "font-size:0.8rem;font-style:italic;",
-            )
         # Everything in hint_key except processing.value: a run in flight must
         # keep the status it started from, not invalidate it.
         status_key = hint_key[:-1]
@@ -437,45 +479,6 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         else:
             running_keys = set()
 
-        if status is None and harmonization_hint.pending:
-            solara.Text(
-                t("tiles.process.checking_status"),
-                style=MUTED + "font-size:0.8rem;font-style:italic;",
-            )
-        elif status is not None:
-            n_cloud = sum(1 for k in status.pending if k in pending_geevars)
-            n_pending = len(status.pending) - n_cloud
-            with solara.Row(style="gap:6px;flex-wrap:wrap;align-items:center;"):
-                _StatusChip(
-                    t("tiles.process.chip_harmonized", n=len(status.current)),
-                    "mdi-check-circle",
-                    "success",
-                )
-                if n_pending:
-                    _StatusChip(
-                        t("tiles.process.chip_pending", n=n_pending),
-                        "mdi-clock-outline",
-                        "warning",
-                    )
-                if n_cloud:
-                    _StatusChip(
-                        t("tiles.process.chip_not_downloaded", n=n_cloud),
-                        "mdi-cloud-outline",
-                        "warning",
-                    )
-            solara.Text(
-                (
-                    t("tiles.process.hint_all_current", total=status.total)
-                    if not status.pending
-                    else t(
-                        "tiles.process.hint_pending",
-                        pending=len(status.pending),
-                        total=status.total,
-                    )
-                ),
-                style=MUTED + "font-size:0.8rem;",
-            )
-
         HarmonizationVariableList(
             project=project,
             status=status,
@@ -487,9 +490,20 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             on_remove=set_pending_remove,
         )
 
+        # Only the still-resolving case needs a line of its own: until the
+        # status lands no row can state one. Once it does, every row says its
+        # own, so a summary above them would only repeat the column beside.
+        if status is None and harmonization_hint.pending:
+            solara.Text(
+                t("tiles.process.checking_status"),
+                style=MUTED + "font-size:0.8rem;font-style:italic;",
+            )
+
+        # Same icon as the per-row action, same shape as Step 2's Download-all
+        # under its source list.
         solara.Button(
-            t("tiles.process.run_processing_button"),
-            icon_name="mdi-play-circle-outline",
+            t("tiles.process.harmonize_all_button"),
+            icon_name="mdi-hammer",
             color="primary",
             small=True,
             block=True,
@@ -506,6 +520,32 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         )
         if processing.value:
             solara.ProgressLinear(True)
+
+    # `will_replace` is the creation flow's overwrite guard; setting a reference
+    # is idempotent, so there is nothing to confirm.
+    CreationDialog(
+        open_=reference_open,
+        title=t("tiles.process.reference_dialog_title"),
+        create_label=t("tiles.process.set_base_button"),
+        create_icon="mdi-target",
+        validate=validate_reference,
+        will_replace=lambda: None,
+        launch=on_set_base,
+        max_width="520px",
+        children=[
+            BaseProjectionForm(
+                project=project,
+                base_key=base_key,
+                set_base_key=set_base_key,
+                epsg=epsg,
+                set_epsg=set_epsg,
+                resolution=resolution,
+                set_resolution=set_resolution,
+                on_auto_utm=on_auto_utm,
+                autofill_pending=autofill_base.pending,
+            )
+        ],
+    )
 
     ConfirmDialog(
         open=pending_remove is not None,

@@ -49,12 +49,26 @@ def _hint_block() -> str:
     return rest[: min(ends)] if ends else rest
 
 
-def test_hint_keys_resolve_in_english():
-    """The three new i18n keys resolve and interpolate in English."""
-    assert "3" in t("tiles.process.hint_pending", pending=3, total=10)
-    assert "10" in t("tiles.process.hint_pending", pending=3, total=10)
-    assert "10" in t("tiles.process.hint_all_current", total=10)
+def test_status_keys_resolve_in_english():
+    """Only the still-computing line survives; the rows carry the rest.
+
+    The hint sentences and then the summary chips both restated what the
+    list's own Status column already says, per variable and in place.
+    """
     assert t("tiles.process.checking_status") != "tiles.process.checking_status"
+    assert t("tiles.process.harmonize_all_button") == "Harmonize all"
+    # Orphaned by the reference strip and the chip removal — missing-key
+    # behavior is the assertion.
+    for gone in (
+        "hint_pending",
+        "hint_all_current",
+        "error_no_base",
+        "chip_harmonized",
+        "chip_pending",
+        "chip_not_downloaded",
+        "run_processing_button",
+    ):
+        assert t(f"tiles.process.{gone}") == f"tiles.process.{gone}"
 
 
 def test_status_is_computed_off_the_render_thread():
@@ -87,28 +101,35 @@ def test_hint_bails_out_while_a_run_is_in_flight():
     assert "return None" in guard
 
 
-def test_hint_is_rendered_with_the_status_chips():
-    """The hint reads as the explanation for a Run that will do nothing."""
+def test_the_status_summary_is_the_rows_themselves():
+    """No summary chips: every row already states its own status, in place.
+
+    The counts they carried were derivable by reading the column beside them,
+    so they cost a row of the panel to say nothing new.
+    """
+    from gui.tile import process_tile as mod
+
+    assert not hasattr(mod, "_StatusChip")
+    assert "chip_harmonized" not in SRC
+    # The still-resolving line survives: no row can state a status yet.
     assert "harmonization_hint.pending" in SRC
-    assert "tiles.process.hint_all_current" in SRC
-    assert "tiles.process.hint_pending" in SRC
-    for key in ("chip_harmonized", "chip_pending", "chip_not_downloaded"):
-        assert f"tiles.process.{key}" in SRC
-        assert t(f"tiles.process.{key}", n=2) != f"tiles.process.{key}"
 
 
-def test_section_order_is_status_then_list_then_run_button():
-    """Chips + hint on top, the per-variable list, and Run at the bottom.
+def test_section_order_is_strip_then_list_then_harmonize_all():
+    """Reference strip, the per-variable list, then Harmonize all underneath.
 
-    The Run button acts on the rows above it, like Download-all under the
-    source list in Step 2. The old Harmonized-variables table is gone: every
-    row of the new list carries its own map toggle and remove.
+    The bulk button acts on the rows above it — the shape of Step 2's source
+    list with Download-all beneath. The reference form is not in this order at
+    all: it lives in a dialog, so the tile body is the title, the strip, the
+    list and one button.
     """
     assert "DerivedVariableList" not in SRC
-    chips = SRC.index("tiles.process.chip_harmonized")
+    strip = SRC.index("ReferenceStrip(")
     listing = SRC.index("HarmonizationVariableList(")
-    run = SRC.index("tiles.process.run_processing_button")
-    assert chips < listing < run
+    run = SRC.index("tiles.process.harmonize_all_button")
+    assert strip < listing < run
+    # The form moved into CreationDialog, which renders after the body.
+    assert SRC.index("BaseProjectionForm(") > run
 
 
 def test_per_row_harmonize_runs_only_that_key():
@@ -180,6 +201,34 @@ def _hint_texts(rc):
     return [str(w.children[0]) for w in rc.find(vw.Html).widgets if w.children]
 
 
+def _row_status_labels(rc):
+    """Per-row Status labels — the resolved status's only rendered trace.
+
+    With the summary chips gone this is where a resolved status becomes
+    visible at all, which makes it the honest thing to assert on. Walked by
+    hand rather than via ``_hint_texts``: ``rc.find`` does not descend into
+    the nested ``rv.Html`` cells ProductTable builds its rows from (same
+    reason as ``_texts`` in test_harmonization_variable_list).
+    """
+    labels = {
+        t(f"widgets.product_table.status_{s}")
+        for s in ("harmonized", "pending", "not_downloaded", "checking")
+    }
+    found = []
+
+    def walk(w):
+        for c in getattr(w, "children", None) or []:
+            if isinstance(c, str):
+                if c in labels:
+                    found.append(c)
+            else:
+                walk(c)
+
+    for root in rc.find(vw.Html).widgets:
+        walk(root)
+    return found
+
+
 def _wait_until(predicate, timeout: float = BLOCK_TIMEOUT) -> bool:
     """Poll ``predicate`` until it is truthy or ``timeout`` elapses."""
     deadline = time.time() + timeout
@@ -217,9 +266,10 @@ def test_harmonization_hint_value_is_the_awaited_status_not_a_coroutine(monkeypa
             "asyncio.to_thread(...) always hands the call to a worker thread"
         )
 
-        expected = t("tiles.process.hint_pending", pending=1, total=2)
-        ok = _wait_until(lambda: expected in _hint_texts(rc))
-        assert ok, f"expected {expected!r} among rendered text, got {_hint_texts(rc)}"
+        # layer0 pending, layer1 current — the rows must say so once resolved.
+        expected = t("widgets.product_table.status_pending")
+        ok = _wait_until(lambda: expected in _row_status_labels(rc))
+        assert ok, f"no row reads {expected!r}; rows say {_row_status_labels(rc)}"
     finally:
         rc.close()
 
