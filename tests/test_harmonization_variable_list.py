@@ -205,3 +205,15 @@ def test_status_none_reads_as_checking():
         assert [b.disabled for b in hammer] == [True, True, False]
     finally:
         rc.close()
+
+
+def test_unknown_key_renders_as_checking():
+    """An unstamped layer must not claim to be harmonized before the disk check."""
+    status = HarmonizationStatus(pending=[], current=[], unknown=["a"])
+    assert harmonization_row_status("a", None, status, (), False) == "checking"
+
+
+def test_stamped_current_key_still_renders_as_harmonized():
+    """The steady-state path must not regress into permanent checking."""
+    status = HarmonizationStatus(pending=[], current=["a"])
+    assert harmonization_row_status("a", None, status, (), False) == "harmonized"

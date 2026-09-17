@@ -19,9 +19,19 @@ from gui.widget.creation_dialog import CreationDialog
 from gui.widget.help import InfoButton
 from gui.widget.text_style import MUTED
 from gui.widget.variable_list import HarmonizationVariableList
-from spatialrisk.harmonization import harmonization_status
+from spatialrisk.harmonization import (
+    HarmonizationStatus,
+    harmonization_status,
+    harmonization_status_from_disk,
+)
 
 logger = logging.getLogger("spatial_risk")
+
+
+def base_sig_of(p):
+    """The open project's base grid signature, or None."""
+    base = getattr(p, "base_raster", None) if p is not None else None
+    return getattr(base, "grid_signature", None) if base is not None else None
 
 
 def _raw_raster_keys(p):
@@ -228,11 +238,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # Raw key the next run is restricted to (per-row harmonize button), or
     # None for a full run — the same shape as pending_download in Step 2.
     pending_harmonize = solara.use_reactive(None)
-    # Last resolved status, tagged with the inputs it was computed from: the
-    # hint task yields None while a run is in flight (it would be reading files
-    # the run is rewriting), and the list must not blank out its rows meanwhile
-    # — but a status computed for other inputs (another project, a different
-    # base) must never be shown against the current rows.
+    # Last resolved *disk* verdict, tagged with the inputs it was computed
+    # from: the hint task yields None while a run is in flight (it would be
+    # reading files the run is rewriting), and the unstamped rows must not
+    # blank out meanwhile — but a verdict computed for other inputs (another
+    # project, a different base) must never be shown against the current rows.
     last_status = solara.use_ref((None, None))
 
     def _do_remove(key: str):
@@ -336,47 +346,28 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 t("tiles.process.error_set_base", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
 
-    # Rebuilt from scalars on every render: the project reactive is republished
-    # via model_copy(), which compares equal to its predecessor, so a use_task
-    # keyed on it would never retrigger. `processing.value` is what refreshes
-    # the hint after a run whose key sets did not change (a re-harmonization
-    # after the reference raster moved).
+    # Pure and in-memory (see harmonization.harmonization_status): no file
+    # opens, so unlike the old disk scan this belongs in the render body. Every
+    # output stamped by this version carries the grid it was written onto, and
+    # comparing those strings against the base's is what the rows are drawn
+    # from — a re-render costs attribute reads, not `1 + N` file opens on the
+    # session's websocket loop.
+    pure = harmonization_status(p) if p is not None else None
+    unknown_keys = tuple(sorted(pure.unknown)) if pure is not None else ()
+    # Only the entries the signatures cannot answer reach disk. In a project
+    # harmonized by this version the tuple is empty, the task returns
+    # immediately, and the status path performs no I/O at all.
     #
-    # Raw variables contribute their edit-sensitive scalars, not just their
-    # keys: editing a variable in place keeps name+year, so the key SET does not
-    # move and a key-only dependency would never refire — leaving the hint
-    # reading "already harmonized" about a layer the edit just made stale, which
-    # is precisely the advice not to press Run. These are attribute reads, no
-    # disk I/O, so they are safe in a render body.
-    #
-    # Known gap, accepted: re-setting the SAME reference raster at the SAME CRS
-    # and resolution after its source extent changed yields a new geobox this
-    # key cannot see. Harmless — F3 recomputes status from disk the instant Run
-    # is pressed, so only the hint goes stale, never the run. The honest fix
-    # (stat() on the base file here) is blocking disk I/O in the render body,
-    # i.e. the websocket loop, which a cosmetic staleness does not justify.
+    # The project name and base signature are in the key for staleness, not for
+    # retriggering: `unknown_keys` alone aliases badly — two different projects,
+    # or the same project against a different base, can produce an identical
+    # tuple, and `last_status` would then serve one state's disk verdict against
+    # another's rows. That is exactly the invariant the existing `status_key`
+    # tagging exists to hold (see the `last_status` comment above).
     hint_key = (
-        base_raster_key(p),
-        getattr(p.base_raster, "default_crs", None) if p and p.base_raster else None,
-        (
-            getattr(p.base_raster, "default_resolution", None)
-            if p and p.base_raster
-            else None
-        ),
-        (
-            tuple(
-                (
-                    k,
-                    str(getattr(v, "path", None)),
-                    getattr(v, "raster_type", None),
-                    getattr(v, "rasterization_method", None),
-                )
-                for k, v in sorted(p.raw_variables.items())
-            )
-            if p
-            else ()
-        ),
-        tuple(sorted(p.processed_variables)) if p else (),
+        getattr(p, "project_name", None),
+        base_sig_of(p),
+        unknown_keys,
         processing.value,
     )
 
@@ -384,25 +375,23 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         dependencies=[hint_key], raise_error=False, prefer_threaded=True
     )
     async def harmonization_hint():
-        """How many layers Run would actually process, checked off-thread.
+        """Disk verdicts for the layers with no recorded grid signature.
 
-        Reading each output's header and mtime is disk I/O; done in the render
-        body it would block the session's websocket loop. Returns None when
-        there is nothing to say — no project, no reference raster, or a run in
-        flight rewriting the very files we would be inspecting.
+        Kept threaded: this is the only remaining disk I/O on the status path,
+        and in the render body it would block the session's websocket loop.
+        Returns None when there is nothing to check or a run is rewriting the
+        very files we would inspect.
         """
-        if p is None or p.base_raster is None or processing.value:
+        if p is None or p.base_raster is None or processing.value or not unknown_keys:
             return None
         try:
-            return await asyncio.to_thread(harmonization_status, p)
+            return await asyncio.to_thread(
+                harmonization_status_from_disk, p, list(unknown_keys)
+            )
         except Exception:
-            # The hint is advisory, so failing it must never surface as an
-            # error — but ``raise_error=False`` swallows the exception with no
-            # trace at all. The race is real: this walks ``p.raw_variables`` on
-            # a worker thread while a Variables-tab download can be adding keys
-            # to it (a multi-image GEEVar), which raises "dictionary changed
-            # size during iteration". Logging turns an invisible blank hint
-            # into a diagnosable one.
+            # Advisory only, and raise_error=False swallows it silently
+            # otherwise. The race is real: this walks raw_variables on a worker
+            # thread while a Variables-tab download can be adding keys.
             logger.debug("Harmonization hint failed", exc_info=True)
             return None
 
@@ -485,21 +474,49 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         status_key = hint_key[:-1]
         if harmonization_hint.value is not None:
             last_status.current = (status_key, harmonization_hint.value)
-        status = (
-            last_status.current[1] if last_status.current[0] == status_key else None
-        )
+        disk = last_status.current[1] if last_status.current[0] == status_key else None
+        # The pure verdict stands; the disk one overrides for unknown keys only.
+        if pure is None:
+            status = None
+        elif not pure.unknown:
+            status = pure  # steady state: no disk involved
+        elif disk is None:
+            # `pure` still carries its `unknown` list, which is what makes the
+            # rows render "checking" rather than "harmonized".
+            status = pure
+        else:
+            status = HarmonizationStatus(
+                pending=pure.pending + disk.pending,
+                current=pure.current + disk.current,
+            )
         run_in_flight = processing.value or process_task.pending
         # Only once the status has actually landed: while it is still being
-        # checked (status None) we do not know there is nothing to do, and
-        # disabling on a maybe would block a run the user is entitled to.
-        nothing_pending = status is not None and not status.pending
-        if run_in_flight:
-            only = pending_harmonize.value
-            running_keys = (
-                {only} if only is not None else set(status.pending if status else ())
-            )
-        else:
+        # checked we do not know there is nothing to do, and disabling on a
+        # maybe would block a run the user is entitled to. An `unknown` entry
+        # is such a maybe — it sits in neither list, so keying off an empty
+        # `pending` alone would kill the button on exactly the legacy projects
+        # that most need a run.
+        nothing_pending = (
+            status is not None
+            and not status.pending
+            and not getattr(status, "unknown", ())
+        )
+        if not run_in_flight:
             running_keys = set()
+        elif pending_harmonize.value is not None:
+            running_keys = {pending_harmonize.value}
+        elif status is None:
+            running_keys = set()
+        else:
+            # A bulk run recomputes its own status from disk over the whole
+            # project, so an unstamped layer is genuinely under consideration
+            # and must not read as idle while the run works on it. Normally
+            # moot — the merge above resolves `unknown` away before a run
+            # starts — but not on a legacy project where Run is pressed before
+            # the disk verdict lands, which is the case this exists for.
+            running_keys = set(status.pending) | set(
+                getattr(status, "unknown", None) or ()
+            )
 
         HarmonizationVariableList(
             project=project,
@@ -515,7 +532,14 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         # Only the still-resolving case needs a line of its own: until the
         # status lands no row can state one. Once it does, every row says its
         # own, so a summary above them would only repeat the column beside.
-        if status is None and harmonization_hint.pending:
+        # "Still resolving" now means unresolved *unknowns*: the pure verdict
+        # lands on the first render, so a missing status is no longer the test.
+        if (
+            pure is not None
+            and pure.unknown
+            and disk is None
+            and harmonization_hint.pending
+        ):
             solara.Text(
                 t("tiles.process.checking_status"),
                 style=MUTED + "font-size:0.8rem;font-style:italic;",

@@ -1,12 +1,14 @@
 """The Process tile tells the user how much work Run will actually do.
 
-The status check is disk I/O, so it must live in a threaded use_task, never in
+The *disk* half of the status check must live in a threaded use_task, never in
 the render body (a blocking call there runs inside the websocket receive loop
-and freezes the session).
+and freezes the session). Since the grid signatures landed, the render body
+decides the status in memory and the task is left with the entries that predate
+the stamp — ``tests/test_process_tile_pure_status.py`` owns that split, the
+merge, and what reaches disk. This module keeps the surrounding tile contract.
 """
 
 import inspect
-import threading
 import time
 from pathlib import Path
 
@@ -71,11 +73,6 @@ def test_status_keys_resolve_in_english():
         assert t(f"tiles.process.{gone}") == f"tiles.process.{gone}"
 
 
-def test_status_is_computed_off_the_render_thread():
-    """The status check is disk I/O — it must not run on the websocket loop."""
-    assert "asyncio.to_thread(harmonization_status" in _hint_block()
-
-
 def test_hint_task_is_threaded_and_keyed_on_scalars():
     """model_copy() compares equal, so the deps must be scalar, not the project."""
     idx = SRC.index("async def harmonization_hint")
@@ -85,10 +82,9 @@ def test_hint_task_is_threaded_and_keyed_on_scalars():
 
     key_start = SRC.index("hint_key = (")
     key_block = SRC[key_start : SRC.index("@solara.lab.use_task", key_start)]
-    assert "base_raster_key(p)" in key_block
-    assert "processing.value" in key_block
-    assert "raw_variables" in key_block
-    assert "processed_variables" in key_block
+    # What the key holds is test_process_tile_pure_status's contract; what it
+    # must never hold is this one.
+    assert "unknown_keys" in key_block
     # A use_task keyed on the project itself would never retrigger.
     assert "project.value" not in key_block
 
@@ -239,52 +235,24 @@ def _wait_until(predicate, timeout: float = BLOCK_TIMEOUT) -> bool:
     return bool(predicate())
 
 
-def test_harmonization_hint_value_is_the_awaited_status_not_a_coroutine(monkeypatch):
-    """A dropped `await` would leave harmonization_status uncalled, forever pending.
-
-    ``result = asyncio.to_thread(harmonization_status, p); return result`` keeps
-    the checked substring intact, but the inner coroutine is never scheduled —
-    ``harmonization_status`` never runs, and ``.value`` would hold a bare
-    coroutine object rather than a HarmonizationStatus. This mounts the real
-    tile and checks the actually-resolved outcome instead of the source text.
-    """
-    calls = []
-
-    def _stub(project):
-        calls.append(threading.get_ident())
-        return HarmonizationStatus(pending=["layer0"], current=["layer1"])
-
-    monkeypatch.setattr(process_tile, "harmonization_status", _stub)
-
-    main_ident = threading.get_ident()
-    project = solara.reactive(_project_with_base(2), equals=lambda a, b: a is b)
-    rc = _render_process_tile(project)
-    try:
-        assert _wait_until(lambda: bool(calls)), "harmonization_status was never called"
-        assert calls[0] != main_ident, (
-            "harmonization_status ran on the render thread; a genuinely awaited "
-            "asyncio.to_thread(...) always hands the call to a worker thread"
-        )
-
-        # layer0 pending, layer1 current — the rows must say so once resolved.
-        expected = t("widgets.product_table.status_pending")
-        ok = _wait_until(lambda: expected in _row_status_labels(rc))
-        assert ok, f"no row reads {expected!r}; rows say {_row_status_labels(rc)}"
-    finally:
-        rc.close()
+# The dropped-`await` guard moved with the call it guards: the render body now
+# resolves the pure status inline, and `asyncio.to_thread` survives only around
+# `harmonization_status_from_disk`. Its successor is
+# test_process_tile_pure_status.test_an_unstamped_layer_takes_the_disk_verdict_off_thread,
+# which also pins the keys the disk check is restricted to.
 
 
 def test_harmonization_hint_refires_on_raw_variable_change_not_on_project_alias(
     monkeypatch,
 ):
-    """hint_key must be scalars — keying it on the project would never retrigger.
+    """A republished project must re-resolve the status, not reuse the old one.
 
     ``project.set(p.model_copy())`` republishes a copy taken *after* ``p`` was
     already mutated in place, so the old and new Project both hold the mutated
-    dict and compare `==`. A ``hint_key`` built from (or aliasing) that object
-    would see no change and never refire; this reproduces the app's own
-    mutate-then-copy idiom (``on_set_base``, ``_do_remove``) and checks that the
-    hint actually catches up.
+    dict and compare `==`. Anything that memoised the status on that object —
+    a ``use_memo``, or the ``hint_key`` this used to be keyed on — would see no
+    change and never refire; this reproduces the app's own mutate-then-copy
+    idiom (``on_set_base``, ``_do_remove``) and checks that the tile catches up.
     """
     seen_counts = []
 
@@ -312,8 +280,8 @@ def test_harmonization_hint_refires_on_raw_variable_change_not_on_project_alias(
 
         refired = _wait_until(lambda: len(seen_counts) >= 2 and seen_counts[-1] == 3)
         assert refired, (
-            f"hint did not refire after raw_variables changed; calls seen="
-            f"{seen_counts} — a hint_key keyed on (or aliasing) the project "
+            f"the status did not catch up after raw_variables changed; calls "
+            f"seen={seen_counts} — anything keyed on (or aliasing) the project "
             "object would stall exactly like this"
         )
     finally:
@@ -321,14 +289,13 @@ def test_harmonization_hint_refires_on_raw_variable_change_not_on_project_alias(
 
 
 def test_harmonization_hint_refires_on_an_in_place_variable_edit(monkeypatch):
-    """An edit that keeps name+year moves neither key set — the hint must still refire.
+    """An edit that keeps name+year moves neither key set — the status must still move.
 
     ``variables_tile.on_save`` re-registers the rebuilt variable under the same
-    ``{name}_{year}`` key, so a ``hint_key`` built from the raw/processed key
-    SETS sees nothing change. The task then never refires and the tile keeps
-    rendering "All N layer(s) are already harmonized" about a layer the edit
-    just invalidated — the UI telling the user not to press Run, which is what
-    leaves the stale output in place.
+    ``{name}_{year}`` key, so anything keyed on the raw/processed key SETS sees
+    nothing change. It then never re-resolves and the tile keeps calling a layer
+    the edit just invalidated harmonized — the UI telling the user not to press
+    Run, which is what leaves the stale output in place.
     """
     seen_paths = []
 
@@ -367,8 +334,9 @@ def test_harmonization_hint_refires_on_an_in_place_variable_edit(monkeypatch):
             )
         )
         assert refired, (
-            f"hint did not refire after an in-place edit; paths seen={seen_paths} "
-            "— a hint_key built from the key sets alone stalls exactly like this"
+            f"the status did not catch up after an in-place edit; paths seen="
+            f"{seen_paths} — a dependency built from the key sets alone stalls "
+            "exactly like this"
         )
     finally:
         rc.close()
