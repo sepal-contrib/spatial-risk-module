@@ -50,12 +50,44 @@ def geobox_signature(geobox) -> str:
     as current while sitting on the wrong grid. Signatures are only ever
     compared for equality, never parsed, so exactness costs nothing.
 
+    The CRS half is canonicalized for the same reason. An odc-geo ``CRS``
+    built from ``"EPSG:<code>"`` and one rebuilt from that code's WKT compare
+    equal and resolve the same ``to_epsg()``, but ``str()`` them and you get
+    two different strings — one short, one the full WKT blob. That gap is not
+    hypothetical here: the base geobox is built in code from the user's EPSG
+    string, while a harmonized output's geobox is re-read from the file odc-geo
+    just wrote, which comes back in WKT form. Interpolating the CRS object
+    directly would stamp the two sides of the "is this current" comparison
+    with different signatures for the identical grid, and every layer would
+    read pending forever — quietly, since the failure never calls a stale file
+    current. Preferring the EPSG code when one exists collapses both paths
+    onto the same token; only a CRS with no EPSG code (custom or unregistered
+    projections) falls through to WKT.
+
     Duck-typed on ``crs`` / ``transform`` / ``shape.yx`` like the rest of this
-    module, so it takes an odc-geo GeoBox without importing one.
+    module, so it takes an odc-geo GeoBox without importing one. ``crs``
+    itself need not be an odc-geo ``CRS`` — a plain string or ``None`` both
+    work — so its ``to_epsg``/``to_wkt`` accessors are checked with
+    ``hasattr`` rather than assumed.
     """
-    coeffs = "|".join(repr(float(c)) for c in tuple(geobox.transform)[:6])
+    crs = geobox.crs
+    epsg = crs.to_epsg() if crs is not None and hasattr(crs, "to_epsg") else None
+    if epsg:
+        crs_token = f"EPSG:{epsg}"
+    elif crs is not None and hasattr(crs, "to_wkt"):
+        crs_token = crs.to_wkt()
+    else:
+        crs_token = str(crs) if crs is not None else ""
+
+    coeffs_tuple = tuple(geobox.transform)[:6]
+    if len(coeffs_tuple) < 6:
+        raise ValueError(
+            "geobox_signature: transform has only "
+            f"{len(coeffs_tuple)} coefficients, need 6"
+        )
+    coeffs = "|".join(repr(float(c)) for c in coeffs_tuple)
     rows, cols = geobox.shape.yx
-    return f"{geobox.crs}|{coeffs}|{rows}x{cols}"
+    return f"{crs_token}|{coeffs}|{rows}x{cols}"
 
 
 @dataclass(frozen=True)
