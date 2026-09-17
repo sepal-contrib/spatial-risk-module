@@ -372,3 +372,60 @@ def test_harmonization_hint_refires_on_an_in_place_variable_edit(monkeypatch):
         )
     finally:
         rc.close()
+
+
+def _harmonize_all(rc):
+    """The bulk button, found by its label."""
+
+    def leaves(w):
+        for c in getattr(w, "children", None) or []:
+            if isinstance(c, str):
+                yield c
+            else:
+                yield from leaves(c)
+
+    label = t("tiles.process.harmonize_all_button")
+    hits = [b for b in rc.find(vw.Btn).widgets if label in list(leaves(b))]
+    assert len(hits) == 1, f"expected one {label!r} button, got {len(hits)}"
+    return hits[0]
+
+
+def test_harmonize_all_goes_dead_once_every_layer_is_current(monkeypatch):
+    """Nothing pending means pressing it would rewrite nothing.
+
+    The sentence that used to say so ("Running again will do nothing") is
+    gone, so the button itself has to carry it — the same contract as
+    Download-all, which is dead when no layer is still cloud-backed.
+    """
+    monkeypatch.setattr(
+        process_tile,
+        "harmonization_status",
+        lambda p: HarmonizationStatus(pending=[], current=list(p.raw_variables)),
+    )
+    project = solara.reactive(_project_with_base(2), equals=lambda a, b: a is b)
+    rc = _render_process_tile(project)
+    try:
+        assert _wait_until(
+            lambda: _harmonize_all(rc).disabled is True
+        ), "Harmonize all stayed live with nothing left to harmonize"
+    finally:
+        rc.close()
+
+
+def test_harmonize_all_stays_live_while_a_layer_is_pending(monkeypatch):
+    """The disable must key off real pending work, not merely a resolved status."""
+    monkeypatch.setattr(
+        process_tile,
+        "harmonization_status",
+        lambda p: HarmonizationStatus(pending=["layer0"], current=["layer1"]),
+    )
+    project = solara.reactive(_project_with_base(2), equals=lambda a, b: a is b)
+    rc = _render_process_tile(project)
+    try:
+        # Wait for the status to land, then assert it did NOT disable.
+        assert _wait_until(
+            lambda: t("widgets.product_table.status_pending") in _row_status_labels(rc)
+        ), "status never resolved"
+        assert _harmonize_all(rc).disabled is False
+    finally:
+        rc.close()

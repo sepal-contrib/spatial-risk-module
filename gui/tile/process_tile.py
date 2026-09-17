@@ -471,6 +471,10 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             last_status.current[1] if last_status.current[0] == status_key else None
         )
         run_in_flight = processing.value or process_task.pending
+        # Only once the status has actually landed: while it is still being
+        # checked (status None) we do not know there is nothing to do, and
+        # disabling on a maybe would block a run the user is entitled to.
+        nothing_pending = status is not None and not status.pending
         if run_in_flight:
             only = pending_harmonize.value
             running_keys = (
@@ -516,7 +520,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # process_task.pending check above, same gate as ProjectPanel's
             # confirm_delete. variables_tile/postprocess_tile still wire
             # on_click straight to their task (same gap, filed as a follow-up).
-            disabled=run_in_flight or not has_base,
+            # ``nothing_pending`` is not a double-click guard but a no-op guard:
+            # with every layer already on the reference grid a run rewrites
+            # nothing, and the sentence that used to say so is gone, so the
+            # button carries it — as Download-all does with no cloud layers left.
+            disabled=run_in_flight or not has_base or nothing_pending,
         )
         if processing.value:
             solara.ProgressLinear(True)
