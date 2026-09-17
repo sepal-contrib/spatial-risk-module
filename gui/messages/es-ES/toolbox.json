@@ -51,6 +51,7 @@
       "provenance_mw_sibling": "tabla junto al ráster",
       "provenance_computed": "calculada a partir del conjunto de datos",
       "provenance_user": "tabla elegida por ti",
+      "provenance_evaluation": "tabla de la evaluación",
       "details_title": "Ejecución de asignación — {name}",
       "section_inputs": "Entradas",
       "section_results": "Resultados",

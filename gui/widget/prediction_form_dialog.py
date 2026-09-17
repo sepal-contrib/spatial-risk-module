@@ -37,8 +37,10 @@ from gui.widget.details_fields import ro_field
 from gui.widget.model_form_dialog import model_label
 from spatialrisk.far_helpers import strip_categorical_levels
 
-# Raster file types accepted for a local prediction import.
-_IMPORT_RASTER_EXTENSIONS = [".tif", ".tiff", ".vrt", ".nc"]
+# Raster file types accepted for a local prediction import. GeoTIFF only:
+# the import is warped and rewritten band-wise, which needs a real raster
+# file rather than a VRT stack or a NetCDF subdataset.
+_IMPORT_RASTER_EXTENSIONS = [".tif", ".tiff"]
 
 # Select value for the explicit "no mask" choice. A sentinel rather than ""
 # because "" is the field's *unset* state, which validation refuses: predicting
@@ -53,13 +55,13 @@ def _source_items():
     ]
 
 
-def _import_palette_items():
+def _value_scale_items():
     return [
-        {"text": t("widgets.prediction_import_modal.palette_far"), "value": "far"},
         {
-            "text": t("widgets.prediction_import_modal.palette_stretch"),
-            "value": "stretch",
+            "text": t("widgets.prediction_import_modal.scale_probability"),
+            "value": "probability",
         },
+        {"text": t("widgets.prediction_import_modal.scale_risk"), "value": "risk"},
     ]
 
 
@@ -70,7 +72,7 @@ def PredictionFormDialog(
     """Prediction form in the shared CreationDialog frame.
 
     on_submit(entry) receives {"kind": "model", "model_key", "dataset_key",
-    "name"} or {"kind": "import", "name", "path", "palette"}; the tile owns
+    "name"} or {"kind": "import", "name", "path", "value_scale"}; the tile owns
     the job row and the worker. A model entry for an ML family (GLM/RF/ICAR)
     also carries "mask_layer" — the storage key of the project raster to mask
     with (any processed raster, dataset membership not required), or None for
@@ -150,7 +152,10 @@ def PredictionFormDialog(
 
     # --- import mode state
     file_path, set_file_path = solara.use_state("")
-    palette, set_palette = solara.use_state("far")
+    # The scale the file is on, not a display choice: every import is rescaled
+    # onto the app's 1..65535 contract. "" is the unset state validate()
+    # refuses — guessing it would silently rescale the wrong way.
+    value_scale, set_value_scale = solara.use_state("")
 
     # Name tracks the mode's suggestion until the user edits it: model mode
     # suggests "model__dataset", import mode the sanitized file stem.
@@ -185,7 +190,7 @@ def PredictionFormDialog(
         if entry.get("kind") == "import":
             set_source("import")
             set_file_path(entry.get("path", ""))
-            set_palette(entry.get("palette", "far"))
+            set_value_scale(entry.get("value_scale", ""))
         else:
             set_source("model")
             set_selected_model(entry.get("model_key", ""))
@@ -215,9 +220,11 @@ def PredictionFormDialog(
         exists = prediction_name_exists(p, clean)
         preview_key = clean
     # Import never replaces: preview the key the import would actually get.
-    src_suffix = Path(str(file_path)).suffix if file_path else ""
+    # ".tif" regardless of the source suffix, because the adapter always writes
+    # a GeoTIFF and disambiguates against that name — previewing a ".tiff"
+    # source's own suffix would show a key the import never assigns.
     resolved_import_key = (
-        resolve_import_key(p, name_value.strip(), src_suffix)
+        resolve_import_key(p, name_value.strip(), ".tif")
         if p is not None and name_value.strip()
         else ""
     )
@@ -231,7 +238,7 @@ def PredictionFormDialog(
         set_selected_dataset("")
         set_mask_layer("")
         set_file_path("")
-        set_palette("far")
+        set_value_scale("")
         reset_name()
 
     def on_source(v):
@@ -243,10 +250,27 @@ def PredictionFormDialog(
         if p is None:
             return t("tiles.inference.error_no_project")
         if source == "import":
+            # First, because nothing the user types in this form can fix it:
+            # every import is warped onto the base raster's geobox, so without
+            # one there is no grid to import onto. Caught here rather than in
+            # the worker so no job is ever queued that can only fail.
+            if getattr(p, "base_raster", None) is None:
+                return t("widgets.prediction_import_modal.error_base_raster_required")
             if not file_path or not str(file_path).strip():
                 return t("widgets.prediction_import_modal.error_select_raster")
             if not name_value.strip():
                 return t("widgets.prediction_import_modal.error_enter_name")
+            if value_scale not in ("probability", "risk"):
+                return t("widgets.prediction_import_modal.error_scale_required")
+            try:
+                from spatialrisk.predictions.import_raster import (
+                    ImportRasterError,
+                    inspect_raster,
+                )
+
+                inspect_raster(file_path)  # metadata only: safe in a handler
+            except ImportRasterError as exc:
+                return str(exc)
             return None
         if not selected_model or selected_model not in p.models:
             return t("tiles.inference.error_invalid_model")
@@ -281,7 +305,7 @@ def PredictionFormDialog(
                     "kind": "import",
                     "name": name_value.strip(),
                     "path": str(file_path),
-                    "palette": palette,
+                    "value_scale": value_scale,
                 }
             )
         else:
@@ -397,16 +421,24 @@ def PredictionFormDialog(
                 clearable=True,
             )
             rv.Select(
-                label=t("widgets.prediction_import_modal.label_palette"),
-                items=_import_palette_items(),
+                label=t("widgets.prediction_import_modal.label_scale"),
+                items=_value_scale_items(),
                 item_text="text",
                 item_value="value",
-                v_model=palette,
-                on_v_model=set_palette,
+                v_model=value_scale or None,
+                on_v_model=lambda v: set_value_scale(v or ""),
                 dense=True,
                 outlined=True,
             )
-            solara.Text(t("widgets.prediction_import_modal.info_text"))
+            with solara.Div(style="font-size:0.85em;opacity:0.85;margin-top:4px;"):
+                solara.Markdown(
+                    f"**{t('widgets.prediction_import_modal.spec_intro')}**\n\n"
+                    f"- {t('widgets.prediction_import_modal.spec_format')}\n"
+                    f"- {t('widgets.prediction_import_modal.spec_values')}\n"
+                    f"- {t('widgets.prediction_import_modal.spec_nodata')}\n"
+                    f"- {t('widgets.prediction_import_modal.spec_zero')}\n"
+                    f"- {t('widgets.prediction_import_modal.spec_warp')}\n"
+                )
         ArtifactNameField(
             value=name_value,
             on_input=on_name_input,
@@ -494,15 +526,42 @@ def _details_body(pred, group):
 
         if imported:
             solara.Text(t("tiles.inference.details_imported_note"))
-            ro_field(
-                t("tiles.inference.details_palette_label"),
-                pred.display_palette,
-            )
+            _import_section(pred)
         else:
             _model_section(pred)
             _dataset_section(pred)
 
         _output_section(group)
+
+
+def _import_section(pred):
+    """Where an imported raster came from, as frozen at import time.
+
+    Only an import adapted by the value-scale flow has source provenance; one
+    registered before it can report nothing but the palette it was given.
+    """
+    params = pred.run_params or {}
+    if not params.get("value_scale"):
+        # Pre-adaptation import: only its display palette is known.
+        ro_field(t("tiles.inference.details_palette_label"), pred.display_palette)
+        return
+    ro_field(
+        t("tiles.inference.details_value_scale"),
+        t(f"widgets.prediction_import_modal.scale_{params['value_scale']}"),
+    )
+    ro_field(t("tiles.inference.details_source_path"), params.get("source_path"))
+    ro_field(t("tiles.inference.details_source_crs"), params.get("source_crs"))
+    res = params.get("source_resolution") or []
+    ro_field(
+        t("tiles.inference.details_source_resolution"),
+        " × ".join(f"{v:g}" for v in res) if res else None,  # noqa: RUF001
+    )
+    ro_field(t("tiles.inference.details_source_dtype"), params.get("source_dtype"))
+    rng = params.get("source_range") or []
+    ro_field(
+        t("tiles.inference.details_source_range"),
+        " – ".join(f"{v:g}" for v in rng) if rng else None,  # noqa: RUF001
+    )
 
 
 def _model_section(pred):

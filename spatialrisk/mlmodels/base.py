@@ -277,7 +277,7 @@ class BaseRiskModel(BaseModel):
             self.feature_names.
         mask : str or Path, optional
             Path to a mask raster. Pixels matching ``mask_value`` (or the
-            raster's nodata) are set to nodata (65535) in the output.
+            raster's nodata) are set to nodata (0) in the output.
             If omitted, prediction runs over the full raster stack.
         mask_value : int, float, or list of int/float, optional
             Value(s) in the mask raster that identify pixels to suppress.

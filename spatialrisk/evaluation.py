@@ -885,6 +885,7 @@ def _evaluate_one_against_truth(
                 csize_px=int(csize),
                 points_csv=str(points_csv),
                 png_path=str(fig_path),
+                defrate_csv=str(defrate_csv),
             )
         pred.metrics[f"{truth_tag}__{period}_{csize}"] = {
             k: idx[k] for k in ("RMSE", "wRMSE", "MedAE", "R2", "ncell")

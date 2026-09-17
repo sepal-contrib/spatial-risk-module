@@ -142,18 +142,20 @@ def _run_import(
     job_id,
     src_path,
     name,
-    palette,
+    value_scale,
     project,
     project_reactive,
     notifier=None,
     task_title=None,
 ):
-    """Copy a local raster into the project as a Prediction (background thread).
+    """Adapt a local raster onto the project grid as a Prediction (background thread).
 
-    The copy can be large, so it runs off the render thread like inference does.
-    On success the placeholder job is updated to the real (model_key, dataset_name)
-    so the per-job map toggle resolves the registered raster, and the project is
-    republished so the outputs list and Step 8 — Evaluation pick it up.
+    The dialog only inspected the file's metadata. The range check and the warp
+    both read every pixel, so they run here, off the render thread, like
+    inference does. On success the placeholder job is updated to the real
+    (model_key, dataset_name) so the per-job map toggle resolves the registered
+    raster, and the project is republished so the outputs list and Step 8 —
+    Evaluation pick it up.
     """
     try:
         with tracked_job(notifier, task_title or f"Importing '{name}'"), writing(
@@ -162,7 +164,7 @@ def _run_import(
             from gui.scripts.prediction_import import import_prediction
 
             pred = import_prediction(
-                project, src_path, name, palette=palette, auto_save=True
+                project, src_path, name, value_scale, auto_save=True
             )
 
             update_job(
@@ -203,8 +205,8 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
     # Form messages
     form_error, set_form_error = solara.use_state(None)
 
-    def _launch_import(name, path, palette, entry=None):
-        """Spawn a background copy for a raster the dialog validated.
+    def _launch_import(name, path, value_scale, entry=None):
+        """Spawn a background adaptation for a raster the dialog validated.
 
         The dialog enforced the required fields and the no-project guard; the
         guard is kept here as a race safety net (surfaced via the tile's form
@@ -236,7 +238,7 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
                 job_id,
                 path,
                 name,
-                palette,
+                value_scale,
                 p,
                 project,
                 notifications,
@@ -303,7 +305,9 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
 
     def on_submit(entry):
         if entry["kind"] == "import":
-            _launch_import(entry["name"], entry["path"], entry["palette"], entry=entry)
+            _launch_import(
+                entry["name"], entry["path"], entry["value_scale"], entry=entry
+            )
         else:
             # mask_layer is absent for the JNR/MW families, which resolve
             # their own layers rather than masking with a project raster;

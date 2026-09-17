@@ -187,9 +187,9 @@ def test_inference_tile_uses_palette_helper_and_overview_option():
 def test_inference_tile_supports_local_prediction_import():
     """Step 7 lets the user import a local raster as a prediction.
 
-    The New prediction dialog has an import mode (file picker + palette
+    The New prediction dialog has an import mode (file picker + value-scale
     choice), and the import script is wired to the registry + reactive. The
-    picker/palette form lives in PredictionFormDialog (unified creation
+    picker/scale form lives in PredictionFormDialog (unified creation
     dialog).
     """
     import inspect
@@ -205,7 +205,7 @@ def test_inference_tile_supports_local_prediction_import():
 
     dialog_src = inspect.getsource(prediction_form_dialog)
     assert "FileInputComponent" in dialog_src  # local raster file picker
-    assert "_import_palette_items" in dialog_src  # palette choice
+    assert "_value_scale_items" in dialog_src  # value-scale choice
 
 
 def _fake_legend_port():

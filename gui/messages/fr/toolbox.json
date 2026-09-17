@@ -51,6 +51,7 @@
       "provenance_mw_sibling": "table à côté du raster",
       "provenance_computed": "calculée à partir du jeu de données",
       "provenance_user": "table que vous avez choisie",
+      "provenance_evaluation": "table issue de l'évaluation",
       "details_title": "Exécution d'allocation — {name}",
       "section_inputs": "Entrées",
       "section_results": "Résultats",

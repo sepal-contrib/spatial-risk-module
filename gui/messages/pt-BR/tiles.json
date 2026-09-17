@@ -218,6 +218,12 @@
       "details_output_window": "Janela {n}",
       "details_palette_label": "Paleta de exibição",
       "details_imported_note": "Este raster foi importado; não foi produzido por um modelo deste projeto.",
+      "details_source_path": "Arquivo de origem",
+      "details_source_crs": "CRS de origem",
+      "details_source_resolution": "Resolução de origem",
+      "details_source_dtype": "Tipo de dado de origem",
+      "details_source_range": "Faixa de valores de origem",
+      "details_value_scale": "Escala de valores",
       "details_output_label": "Raster de saída"
     },
     "evaluation": {
