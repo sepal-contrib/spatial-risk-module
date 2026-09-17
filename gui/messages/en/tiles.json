@@ -31,7 +31,7 @@
       "header": "### Harmonization",
       "description": "Set the reference raster + projection, then harmonize all variables onto its grid.",
       "info_header": "About harmonization",
-      "info_md": "This step brings every source variable onto one common analysis grid:\n\n1. **Reference & projection** — pick one raster as the **reference raster**: it defines the grid (CRS, pixel size and extent) every other layer is aligned to. Choose the layer whose spatial detail matters most — typically the forest-cover layer the deforestation target is derived from. Use a projected CRS in metres; the ⌖ icon in the EPSG field suggests the UTM zone of the layer.\n2. **Run harmonization** — missing GEE layers are downloaded, every raster is reprojected and resampled onto the reference grid, and vector layers are rasterized onto it. Afterwards all harmonized layers overlap pixel-by-pixel (same CRS, resolution and extent), which model training and prediction require — these are the harmonized variables used by the next steps.\n\nGEE-backed layers are downloaded in the Variables step; any still pending are downloaded automatically when harmonization runs. Re-run harmonization whenever you add or change source variables. It is incremental: layers already on the reference grid are skipped, so only new or edited ones are processed — to force a layer through again, remove it from the **Harmonized variables** list below and run harmonization again.",
+      "info_md": "This step brings every source variable onto one common analysis grid:\n\n1. **Reference & projection** — pick one raster as the **reference raster**: it defines the grid (CRS, pixel size and extent) every other layer is aligned to. Choose the layer whose spatial detail matters most — typically the forest-cover layer the deforestation target is derived from. Use a projected CRS in metres; the ⌖ icon in the EPSG field suggests the UTM zone of the layer.\n2. **Run harmonization** — missing GEE layers are downloaded, every raster is reprojected and resampled onto the reference grid, and vector layers are rasterized onto it. Afterwards all harmonized layers overlap pixel-by-pixel (same CRS, resolution and extent), which model training and prediction require — these are the harmonized variables used by the next steps.\n\nGEE-backed layers are downloaded in the Variables step; any still pending are downloaded automatically when harmonization runs. Re-run harmonization whenever you add or change source variables. It is incremental: layers already on the reference grid are skipped, so only new or edited ones are processed — to force a layer through again, use its harmonize button in the **Variables** list below, or remove its harmonized output (trash icon) and run harmonization again.",
       "error_no_variables": "Add variables in the Variables step first.",
       "pending_geevars_hint": "{count} GEE layer(s) not downloaded yet — download them in the Variables step (they will also be downloaded automatically when harmonization runs).",
       "base_projection_header": "**1 · REFERENCE & PROJECTION**",
@@ -56,7 +56,10 @@
       "error_set_base": "Could not set reference raster: {exc}",
       "error_processing": "Harmonization failed: {exc}",
       "confirm_remove_title": "Remove harmonized variable?",
-      "confirm_remove_message": "'{name}' will be removed from the project. The raster file stays on disk and re-running harmonization will register it again — but any dataset, sample or model that uses it will need to be rebuilt."
+      "confirm_remove_message": "'{name}' will be removed from the project. The raster file stays on disk and re-running harmonization will register it again — but any dataset, sample or model that uses it will need to be rebuilt.",
+      "chip_harmonized": "{n} harmonized",
+      "chip_pending": "{n} pending",
+      "chip_not_downloaded": "{n} not downloaded"
     },
     "postprocess": {
       "header": "### Derived layers",

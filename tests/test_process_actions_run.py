@@ -1,3 +1,5 @@
+"""Process-step actions: base raster, harmonization run, post-processing."""
+
 import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -27,6 +29,7 @@ class _Proj:
 
 
 def test_set_base_raster_reprojects_and_sets():
+    """Reprojects the chosen raw raster and registers it as the base."""
     p = _Proj()
     raw = MagicMock(name="rawbase")
     reprojected = MagicMock(name="reprojected")
@@ -57,6 +60,7 @@ def test_run_processing_sequences_steps():
 
 
 def test_apply_post_processing_adds_processed():
+    """The edge/dist output is registered as a processed variable."""
     p = _Proj()
     var = MagicMock(name="processed")
     derived = MagicMock(name="derived")
@@ -71,7 +75,9 @@ def test_apply_post_processing_adds_processed():
 
 
 def test_run_processing_raises_without_base_raster():
+    """No base raster means no grid to harmonize onto."""
     import pytest
+
     p = _Proj()  # base_raster is None by default
     with pytest.raises(ValueError, match="base raster"):
         process_actions.run_processing(p)
@@ -94,6 +100,7 @@ def test_run_processing_logs_reproject_and_rasterize(caplog):
 
 
 def test_apply_post_processing_logs_step(caplog):
+    """The step name and variable key land in the log for the task tracker."""
     p = _Proj()
     var = MagicMock(name="processed")
     derived = MagicMock(name="derived")
@@ -208,3 +215,37 @@ def test_run_processing_logs_both_counts(caplog):
     # embeds module paths and line numbers, so a loose substring check drifts
     # towards vacuous as the file grows.
     assert "Harmonizing 1 layer(s); 2 already aligned." in caplog.text
+
+
+def test_run_processing_keys_restricts_download_and_harmonization():
+    """``keys=`` narrows the run to those raw keys (per-row harmonize button)."""
+    p = _Proj()
+    p.base_raster = MagicMock(name="base")
+    status = SimpleNamespace(pending=["a", "b"], current=["c"])
+    with patch("gui.scripts.process_actions.materialize_raw_layers") as mat, patch(
+        "gui.scripts.process_actions.harmonization_status", return_value=status
+    ):
+        out = process_actions.run_processing(p, keys=["b", "c"])
+
+    mat.assert_called_once_with(p, ["b", "c"])
+    assert p.reproject_keys == ["b"]
+    assert p.rasterize_keys == ["b"]
+    assert out["processed"] == ["b"]
+    assert sorted(out["skipped"]) == ["a", "c"]
+    assert p.saved is True
+
+
+def test_run_processing_keys_with_nothing_pending_saves_and_skips():
+    """A key that is already current is a no-op run, but still saves."""
+    p = _Proj()
+    p.base_raster = MagicMock(name="base")
+    status = SimpleNamespace(pending=["a"], current=["c"])
+    with patch("gui.scripts.process_actions.materialize_raw_layers"), patch(
+        "gui.scripts.process_actions.harmonization_status", return_value=status
+    ):
+        out = process_actions.run_processing(p, keys=["c"])
+
+    assert p.reproject_keys is None  # never called
+    assert out["processed"] == []
+    assert sorted(out["skipped"]) == ["a", "c"]
+    assert p.saved is True

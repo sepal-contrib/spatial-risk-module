@@ -118,8 +118,12 @@ def set_base_raster(project, base_key: str, epsg: str, resolution: float):
     return reprojected
 
 
-def run_processing(project) -> dict:
+def run_processing(project, keys=None) -> dict:
     """Harmonize the raw variables that are not already on the base grid.
+
+    ``keys`` restricts the run to those raw-variable keys (the per-row
+    harmonize button in Step 3); None means every pending layer. Layers outside
+    ``keys`` are reported as skipped whatever their status.
 
     Incremental by design: with N layers already aligned, adding one variable
     used to cost N+1 reprojections. ``harmonization_status`` decides what is
@@ -143,10 +147,19 @@ def run_processing(project) -> dict:
     """
     if project.base_raster is None:
         raise ValueError("Set a base raster before running processing.")
-    materialize_raw_layers(project)
+    if keys is None:
+        materialize_raw_layers(project)
+    else:
+        materialize_raw_layers(project, list(keys))
 
     status = harmonization_status(project)
-    if not status.pending:
+    pending = list(status.pending)
+    skipped = list(status.current)
+    if keys is not None:
+        wanted = set(keys)
+        skipped += [k for k in pending if k not in wanted]
+        pending = [k for k in pending if k in wanted]
+    if not pending:
         # Unconditional: two kinds of in-memory-only change reach this branch,
         # and before Step 3 became incremental the save at the end of every run
         # persisted both.
@@ -162,22 +175,22 @@ def run_processing(project) -> dict:
         project.save()
         logger.info(
             "All %d layer(s) are already harmonized — nothing to do.",
-            len(status.current),
+            len(skipped),
         )
-        return {"processed": [], "skipped": list(status.current)}
+        return {"processed": [], "skipped": skipped}
 
     logger.info(
         "Harmonizing %d layer(s); %d already aligned.",
-        len(status.pending),
-        len(status.current),
+        len(pending),
+        len(skipped),
     )
     logger.info("Reprojecting & matching pending raw variables…")
-    project.reproject_and_match_all(source="raw", keys=status.pending)
+    project.reproject_and_match_all(source="raw", keys=pending)
     logger.info("Rasterizing pending raw variables…")
-    project.rasterize_all(source="raw", keys=status.pending)
+    project.rasterize_all(source="raw", keys=pending)
     project.save()
     logger.info("Processing complete.")
-    return {"processed": list(status.pending), "skipped": list(status.current)}
+    return {"processed": pending, "skipped": skipped}
 
 
 def apply_post_processing(project, processed_key: str, step: str):

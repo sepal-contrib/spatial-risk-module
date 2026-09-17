@@ -93,7 +93,9 @@
       "derived_col_name": "Nom",
       "derived_col_source": "Source",
       "derived_col_status": "Statut",
-      "derived_source_unknown": "inconnue"
+      "derived_source_unknown": "inconnue",
+      "harmonization_title": "Variables",
+      "harmonization_col_status": "Statut"
     },
     "summary_lists": {
       "raw_vars_title": "Variables sources",
@@ -146,7 +148,11 @@
       "status_ready": "prêt",
       "status_completed": "terminé",
       "status_failed": "échec",
-      "status_cancelled": "annulé"
+      "status_cancelled": "annulé",
+      "status_harmonized": "harmonisée",
+      "status_pending": "en attente",
+      "status_not_downloaded": "non téléchargée",
+      "status_checking": "vérification…"
     },
     "artifact_name": {
       "label": "Nom",

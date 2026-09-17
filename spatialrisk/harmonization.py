@@ -58,6 +58,19 @@ class HarmonizationStatus:
         return len(self.pending) + len(self.current)
 
 
+def is_harmonizable(var: Any) -> bool:
+    """True when Step 3 would process ``var``: any raster, or an active vector.
+
+    ``reproject_and_match_all`` does not filter on ``active`` but
+    ``rasterize_all`` does, so an inactive vector is never touched — and must
+    not be counted or listed as pending.
+    """
+    data_type = getattr(var, "data_type", None)
+    if data_type == DataType.raster:
+        return True
+    return data_type == DataType.vector and bool(getattr(var, "active", True))
+
+
 def output_key(var: Any) -> Optional[str]:
     """The ``processed_variables`` key ``add_as_processed`` gives ``var``'s output.
 
@@ -179,15 +192,7 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     processed = getattr(project, "processed_variables", None) or {}
     base = getattr(project, "base_raster", None)
 
-    candidates = [
-        (key, var)
-        for key, var in raw.items()
-        if getattr(var, "data_type", None) == DataType.raster
-        or (
-            getattr(var, "data_type", None) == DataType.vector
-            and getattr(var, "active", True)
-        )
-    ]
+    candidates = [(key, var) for key, var in raw.items() if is_harmonizable(var)]
     if base is None:
         return HarmonizationStatus(pending=[k for k, _ in candidates], current=[])
 

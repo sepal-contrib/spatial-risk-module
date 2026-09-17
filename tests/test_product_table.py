@@ -122,3 +122,26 @@ def test_name_cell_carries_a_full_text_tooltip():
         "title": "a_very_long_name"
     }
     assert name_tooltip({"type": "status", "status": "ready"}) == {}
+
+
+def test_harmonization_statuses_and_action_are_in_the_vocabulary():
+    """Step 3's per-variable list reuses the status cell and action column."""
+    from gui.i18n import t
+    from gui.widget.product_table import (
+        STATUS_COLORS,
+        STATUS_ICONS,
+        action_color,
+        action_icon,
+    )
+
+    for status in ("harmonized", "pending", "not_downloaded", "checking"):
+        assert status in STATUS_ICONS
+        assert status in STATUS_COLORS
+        assert t(f"widgets.product_table.status_{status}") != (
+            f"widgets.product_table.status_{status}"
+        )
+    assert STATUS_COLORS["harmonized"] == "success"
+    assert STATUS_COLORS["pending"] == "warning"
+    assert STATUS_COLORS["not_downloaded"] == "warning"
+    assert action_icon("harmonize") == "mdi-sync"
+    assert action_color("harmonize") == "primary"

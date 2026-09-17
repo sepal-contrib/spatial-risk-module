@@ -12,7 +12,8 @@
     "task_download_layer": "Downloading layer {i}/{n}: '{name}'",
     "task_download_tiles": "'{name}' — tile {done}/{total}",
     "task_change": "Generating {op} change layer",
-    "task_postprocess": "Applying {step} to '{name}'"
+    "task_postprocess": "Applying {step} to '{name}'",
+    "task_processing_one": "Harmonizing {name}"
   },
   "dialog": {
     "confirm_default_title": "Delete?",

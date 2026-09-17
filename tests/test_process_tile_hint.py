@@ -87,11 +87,36 @@ def test_hint_bails_out_while_a_run_is_in_flight():
     assert "return None" in guard
 
 
-def test_hint_is_rendered_under_the_run_button():
+def test_hint_is_rendered_with_the_status_chips():
     """The hint reads as the explanation for a Run that will do nothing."""
     assert "harmonization_hint.pending" in SRC
     assert "tiles.process.hint_all_current" in SRC
     assert "tiles.process.hint_pending" in SRC
+    for key in ("chip_harmonized", "chip_pending", "chip_not_downloaded"):
+        assert f"tiles.process.{key}" in SRC
+        assert t(f"tiles.process.{key}", n=2) != f"tiles.process.{key}"
+
+
+def test_section_order_is_status_then_list_then_run_button():
+    """Chips + hint on top, the per-variable list, and Run at the bottom.
+
+    The Run button acts on the rows above it, like Download-all under the
+    source list in Step 2. The old Harmonized-variables table is gone: every
+    row of the new list carries its own map toggle and remove.
+    """
+    assert "DerivedVariableList" not in SRC
+    chips = SRC.index("tiles.process.chip_harmonized")
+    listing = SRC.index("HarmonizationVariableList(")
+    run = SRC.index("tiles.process.run_processing_button")
+    assert chips < listing < run
+
+
+def test_per_row_harmonize_runs_only_that_key():
+    """The row button narrows the run to one raw key via ``keys=``."""
+    assert "pending_harmonize" in SRC
+    body = SRC[SRC.index("async def process_task") :]
+    body = body[: body.index("\n    def ")]
+    assert "process_actions.run_processing(p, keys=" in body
 
 
 # --- Behavioral coverage -----------------------------------------------------

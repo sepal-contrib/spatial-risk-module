@@ -17,7 +17,7 @@ from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.help import InfoButton
 from gui.widget.text_style import MUTED
-from gui.widget.variable_list import DerivedVariableList
+from gui.widget.variable_list import HarmonizationVariableList
 from spatialrisk.harmonization import harmonization_status
 
 logger = logging.getLogger("spatial_risk")
@@ -34,6 +34,17 @@ def _raw_raster_keys(p):
         for k, v in p.raw_variables.items()
         if getattr(v, "data_type", None) != DataType.vector
     ]
+
+
+@solara.component
+def _StatusChip(label: str, icon: str, color: str):
+    """One count chip of the harmonization summary strip."""
+    rv.Chip(
+        children=[rv.Icon(children=[icon], x_small=True, left=True), label],
+        x_small=True,
+        outlined=True,
+        color=color,
+    )
 
 
 @solara.component
@@ -123,6 +134,15 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         project, map_, notifications, legend_port=legend_port
     )
     pending_remove, set_pending_remove = solara.use_state(None)
+    # Raw key the next run is restricted to (per-row harmonize button), or
+    # None for a full run — the same shape as pending_download in Step 2.
+    pending_harmonize = solara.use_reactive(None)
+    # Last resolved status, tagged with the inputs it was computed from: the
+    # hint task yields None while a run is in flight (it would be reading files
+    # the run is rewriting), and the list must not blank out its rows meanwhile
+    # — but a status computed for other inputs (another project, a different
+    # base) must never be shown against the current rows.
+    last_status = solara.use_ref((None, None))
 
     def _do_remove(key: str):
         """Unregister a harmonized output (the raster stays on disk)."""
@@ -291,7 +311,16 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         if p is None:
             return
         processing.set(True)
-        title = t("notifications.task_processing")
+        only = pending_harmonize.value
+        keys = [only] if only is not None else None
+        title = (
+            t(
+                "notifications.task_processing_one",
+                name=getattr(p.raw_variables.get(only), "name", only),
+            )
+            if only is not None
+            else t("notifications.task_processing")
+        )
 
         def _tracked_run():
             # tracked_job is entered on the pool thread itself so the library's
@@ -303,7 +332,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 title,
                 error_format=lambda exc: t("tiles.process.error_processing", exc=exc),
             ):
-                process_actions.run_processing(p)
+                process_actions.run_processing(p, keys=keys)
 
         with writing(p.project_name):
             try:
@@ -327,6 +356,14 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         """
         if process_task.pending:
             return
+        pending_harmonize.set(None)
+        process_task()
+
+    def harmonize_one(key: str):
+        """Row button: harmonize just this raw variable (same guard as Run)."""
+        if process_task.pending:
+            return
+        pending_harmonize.set(key)
         process_task()
 
     with solara.Column(style="gap:16px;"):
@@ -374,13 +411,82 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 style=MUTED + "font-size:0.8rem;",
             )
 
-        # B — Run processing
+        # B — Run harmonization: status chips + hint, the per-variable list,
+        # then Run at the bottom acting on the rows above it (the shape of
+        # Step 2's source list with Download-all underneath).
         solara.Markdown(t("tiles.process.run_processing_header"))
         if not has_base:
             solara.Text(
                 t("tiles.process.error_no_base"),
                 style=MUTED + "font-size:0.8rem;font-style:italic;",
             )
+        # Everything in hint_key except processing.value: a run in flight must
+        # keep the status it started from, not invalidate it.
+        status_key = hint_key[:-1]
+        if harmonization_hint.value is not None:
+            last_status.current = (status_key, harmonization_hint.value)
+        status = (
+            last_status.current[1] if last_status.current[0] == status_key else None
+        )
+        run_in_flight = processing.value or process_task.pending
+        if run_in_flight:
+            only = pending_harmonize.value
+            running_keys = (
+                {only} if only is not None else set(status.pending if status else ())
+            )
+        else:
+            running_keys = set()
+
+        if status is None and harmonization_hint.pending:
+            solara.Text(
+                t("tiles.process.checking_status"),
+                style=MUTED + "font-size:0.8rem;font-style:italic;",
+            )
+        elif status is not None:
+            n_cloud = sum(1 for k in status.pending if k in pending_geevars)
+            n_pending = len(status.pending) - n_cloud
+            with solara.Row(style="gap:6px;flex-wrap:wrap;align-items:center;"):
+                _StatusChip(
+                    t("tiles.process.chip_harmonized", n=len(status.current)),
+                    "mdi-check-circle",
+                    "success",
+                )
+                if n_pending:
+                    _StatusChip(
+                        t("tiles.process.chip_pending", n=n_pending),
+                        "mdi-clock-outline",
+                        "warning",
+                    )
+                if n_cloud:
+                    _StatusChip(
+                        t("tiles.process.chip_not_downloaded", n=n_cloud),
+                        "mdi-cloud-outline",
+                        "warning",
+                    )
+            solara.Text(
+                (
+                    t("tiles.process.hint_all_current", total=status.total)
+                    if not status.pending
+                    else t(
+                        "tiles.process.hint_pending",
+                        pending=len(status.pending),
+                        total=status.total,
+                    )
+                ),
+                style=MUTED + "font-size:0.8rem;",
+            )
+
+        HarmonizationVariableList(
+            project=project,
+            status=status,
+            on_harmonize=harmonize_one,
+            running_keys=running_keys,
+            harmonize_disabled=run_in_flight or not has_base,
+            on_toggle_map=on_toggle_map,
+            derived_on_map=derived_on_map,
+            on_remove=set_pending_remove,
+        )
+
         solara.Button(
             t("tiles.process.run_processing_button"),
             icon_name="mdi-play-circle-outline",
@@ -396,40 +502,10 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # process_task.pending check above, same gate as ProjectPanel's
             # confirm_delete. variables_tile/postprocess_tile still wire
             # on_click straight to their task (same gap, filed as a follow-up).
-            disabled=processing.value or process_task.pending or not has_base,
+            disabled=run_in_flight or not has_base,
         )
-        if harmonization_hint.pending:
-            solara.Text(
-                t("tiles.process.checking_status"),
-                style=MUTED + "font-size:0.8rem;font-style:italic;",
-            )
-        elif harmonization_hint.value is not None:
-            status = harmonization_hint.value
-            solara.Text(
-                (
-                    t("tiles.process.hint_all_current", total=status.total)
-                    if not status.pending
-                    else t(
-                        "tiles.process.hint_pending",
-                        pending=len(status.pending),
-                        total=status.total,
-                    )
-                ),
-                style=MUTED + "font-size:0.8rem;",
-            )
         if processing.value:
             solara.ProgressLinear(True)
-
-        # Processing outputs — the aligned rasters this step wrote, each
-        # toggleable on the map (post-process outputs are listed in Step 4).
-        DerivedVariableList(
-            project=project,
-            keys=process_actions.processing_output_keys(p),
-            on_toggle_map=on_toggle_map,
-            derived_on_map=derived_on_map,
-            on_remove=set_pending_remove,
-            title=t("widgets.variable_list.processed_title"),
-        )
 
     ConfirmDialog(
         open=pending_remove is not None,
