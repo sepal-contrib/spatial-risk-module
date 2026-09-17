@@ -572,6 +572,13 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                     )
                 _drop_from_map(key, map_, legend_port)
             p.raw_variables[key] = var
+            # Same freshness gap on_save closes for edits: harmonization's
+            # mtime check only catches a source *newer* than its output, so
+            # re-adding this key pointed at an OLDER file (after a remove, or
+            # over a confirmed duplicate) would still read as harmonized.
+            # Dropping the entry here trips condition one instead, so the
+            # layer is pending on the next run regardless of the mtimes.
+            process_actions.remove_processed_variable(p, key, map_, legend_port)
             logger.debug(
                 "Added var '%s', raw_variables now: %s",
                 key,
@@ -623,6 +630,20 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             var = _build_variable(new_entry, p)
             new_key = f"{var.name}_{var.year}" if var.year else var.name
             p.raw_variables[new_key] = var
+            # An edit is an explicit statement that the layer changed, so its
+            # harmonized output must be re-derived. Step 3's freshness check
+            # (spatialrisk/harmonization.py) cannot see every edit on its own:
+            # keeping name+year keeps the `{name}_{year}` registry key, and
+            # re-pointing at an OLDER file leaves the output newer than its
+            # source, so the layer would read as already harmonized and the
+            # stale raster would survive. Dropping the entry here is condition
+            # one of that check, so the layer is pending on the next run.
+            # Both keys: an edit that renames or re-years the variable leaves
+            # the old output registered under the old key.
+            for stale_key in {old_key, new_key}:
+                process_actions.remove_processed_variable(
+                    p, stale_key, map_, legend_port
+                )
             set_editing_key(None)
             project.set(p.model_copy())
         except Exception as exc:
@@ -687,8 +708,8 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             t("tiles.variables.download_button", count=len(pending_geevars)),
             icon_name="mdi-cloud-download-outline",
             color="primary",
-            outlined=True,
             small=True,
+            block=True,
             on_click=lambda: on_download(None),
             loading=download_task.pending and pending_download.value is None,
             disabled=download_task.pending or not pending_geevars,
