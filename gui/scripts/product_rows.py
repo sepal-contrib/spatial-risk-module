@@ -279,3 +279,59 @@ def evaluation_tab_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
             }
         )
     return rows
+
+
+# --- Derived layers -----------------------------------------------------------
+
+
+def derived_rows(
+    project: Any,
+    jobs: Optional[List[dict]],
+    keys: Optional[List[str]] = None,
+) -> List[dict]:
+    """Job rows (newest first) then one row per registered derived variable.
+
+    ``keys`` restricts the *product* rows to those registry keys (None = all);
+    the Post-process tab passes ``postprocess_output_keys`` so the harmonization
+    outputs stay out of the derived list. Job rows are never filtered — their
+    output is not in the registry yet, so it cannot appear in ``keys``.
+
+    A completed job is suppressed by its ``output_key``, never by its display
+    name: ``add_as_processed`` stores a year-bearing variable under
+    ``{name}_{year}``, and an edge/dist output inherits its source's year, so
+    ``forest`` (2010) -> dist registers ``forest_dist_2010`` under the name
+    ``forest_dist``.
+    """
+    processed = (
+        (getattr(project, "processed_variables", None) or {})
+        if project is not None
+        else {}
+    )
+
+    rows: List[dict] = []
+    for job in _active_jobs_first(jobs):
+        if job.get("status") == "completed" and job.get("output_key") in processed:
+            continue  # superseded by its product row below
+        rows.append(
+            {
+                "kind": "job",
+                "key": f"job_{job['id']}",
+                "job_id": job["id"],
+                "name": job.get("name", "—"),
+                "status": job.get("status", "running"),
+                "error": job.get("error"),
+            }
+        )
+    for key, var in processed.items():
+        if keys is not None and key not in keys:
+            continue
+        rows.append(
+            {
+                "kind": "variable",
+                "key": key,
+                "name": getattr(var, "name", key),
+                "status": "ready",
+                "error": None,
+            }
+        )
+    return rows

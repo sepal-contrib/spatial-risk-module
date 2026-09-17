@@ -4,7 +4,19 @@ Predictions are drawn with the QGIS-faithful palette (pinned vmin/vmax), and
 overviews are built only when the opt-in flag is set.
 """
 
+import pytest
+
 import gui.scripts.prediction_map as pm
+
+
+@pytest.fixture(autouse=True)
+def _drain_preds_inflight_and_on_map():
+    """Leave no claim or on-map key behind in inference_tile's module state."""
+    yield
+    from gui.tile import inference_tile
+
+    inference_tile.preds_inflight.release(*inference_tile.preds_inflight.value)
+    inference_tile.preds_on_map.set(set())
 
 
 class FakeClient:
@@ -174,9 +186,9 @@ def test_inference_tile_uses_palette_helper_and_overview_option():
     # zoomed-out tile decode the whole raster, so a country-scale map never draws.
     assert "gen_overviews" not in src
     assert "build_overviews" not in src
-    assert "to_thread" in src  # add offloaded to a thread
-    assert "use_task" in src  # threaded via solara.lab.use_task
-    assert "pending_toggle" in src  # toggle routed through the reactive
+    assert "spawn_in_context" in src  # one worker per toggle, never a shared task
+    assert "use_task" not in src  # a re-invoked use_task drops the continuation
+    assert "preds_inflight" in src  # re-click on a loading row is a no-op
     # Adding a prediction must NOT recenter/rezoom the map — keep the user's view.
     assert "fit_bounds=False" in src
     assert "fit_bounds=True" not in src
@@ -514,3 +526,71 @@ def test_add_exception_still_reaches_the_error_path(monkeypatch, caplog):
     finally:
         rc.close()
         inference_tile.preds_on_map.set(set())
+
+
+def test_toggling_a_second_row_keeps_the_first_rows_bookkeeping(monkeypatch):
+    """Row B toggled while row A loads: A still lands in preds_on_map + legend."""
+    import threading
+    import time
+
+    from gui.tile import inference_tile
+
+    class FakeMap:
+        """Minimal map stand-in; only remove_layer is exercised here."""
+
+        def remove_layer(self, key, none_ok=False):
+            """No-op remove; this scenario never removes a layer."""
+
+    started_a = threading.Event()
+    gate_a = threading.Event()
+
+    def fake_add(map_, path, **kwargs):
+        """Block row A's add until the test releases the gate."""
+        if kwargs.get("key") == inference_tile._pred_layer_key("pred_a"):
+            started_a.set()
+            gate_a.wait(5.0)
+        return "FAKE_LAYER"
+
+    monkeypatch.setattr("gui.scripts.prediction_map.add_prediction_on_map", fake_add)
+
+    import types
+
+    project = _stale_guard_project("pred_a")
+    project.predictions["pred_b"] = types.SimpleNamespace(
+        path="/tmp/pred_b.tif", display_palette=None
+    )
+    port, registered, _unregistered, _bump = _fake_legend_port()
+    on_toggle_map, rc = _render_capturing_on_toggle_map(
+        monkeypatch, project, FakeMap(), legend_port=port
+    )
+    try:
+        on_toggle_map(
+            {"key": "rowA", "storage_keys": ["pred_a"], "model_key": "m", "name": "A"}
+        )
+        assert started_a.wait(5.0)
+        on_toggle_map(
+            {"key": "rowB", "storage_keys": ["pred_b"], "model_key": "m", "name": "B"}
+        )
+        deadline = time.time() + 5.0
+        while (
+            time.time() < deadline and "rowB" not in inference_tile.preds_on_map.value
+        ):
+            time.sleep(0.01)
+        gate_a.set()
+        deadline = time.time() + 5.0
+        while (
+            time.time() < deadline and "rowA" not in inference_tile.preds_on_map.value
+        ):
+            time.sleep(0.01)
+        assert "rowA" in inference_tile.preds_on_map.value
+        assert "rowB" in inference_tile.preds_on_map.value
+        assert len(registered) == 2
+        deadline = time.time() + 5.0
+        while time.time() < deadline and inference_tile.preds_inflight.value:
+            time.sleep(0.01)
+        assert not inference_tile.preds_inflight.value
+    finally:
+        gate_a.set()
+        rc.close()
+        inference_tile.preds_on_map.set(set())
+        inference_tile.preds_inflight.release("rowA", "rowB")

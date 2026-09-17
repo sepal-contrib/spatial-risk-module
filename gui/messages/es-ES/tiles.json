@@ -72,6 +72,7 @@
       "info_header": "Sobre las operaciones de capas derivadas",
       "info_md": "Este paso deriva nuevas entradas del modelo a partir de las capas armonizadas:\n\n- **Detección de cambios (pérdida / ganancia)** — compara dos máscaras de presencia del mismo fenómeno en dos años y produce una máscara de cambio (1 = evento, 0 = estable, 255 = sin datos). *pérdida* marca los píxeles presentes al inicio pero ausentes al final (p. ej. deforestación entre dos años de cobertura forestal — el objetivo habitual del modelo); *ganancia* marca lo inverso (p. ej. regeneración).\n- **borde (edge)** — para cada píxel *dentro* de una máscara binaria (valor 1), la distancia en metros al borde de la máscara. Aplicada a una máscara de bosque da la distancia al borde del bosque, un predictor clave de deforestación.\n- **distancia (dist)** — para cada píxel *fuera* de la máscara, la distancia en metros al píxel de máscara más cercano. Aplicada a caminos, ríos o pueblos da la distancia a caminos / ríos / pueblos.\n\nAmbas transformaciones esperan una máscara binaria (0/1) y producen un ráster continuo. Los resultados aparecen en la lista de variables derivadas de abajo y pueden usarse como características del conjunto de datos (el paso Conjunto de datos).",
       "error_no_processed": "Ejecutá primero el paso Armonización.",
+      "already_running": "'{name}' ya se está generando.",
       "change_help_text": "Elegí dos máscaras de presencia (1 = presente, 0 = ausente) del mismo fenómeno en dos años distintos — de la misma fuente o de fuentes diferentes. Salida: 1 = evento, 0 = estable, 255 = sin datos.",
       "operation_label": "Operación",
       "op_label_loss": "Pérdida — detección de cambios",
@@ -89,6 +90,7 @@
       "processed_variable_hint": "Entrada — una máscara binaria (0/1), p. ej. cobertura forestal o caminos.",
       "generate_button": "Crear capa",
       "error_post_processing": "La creación de la capa derivada falló: {exc}",
+      "already_running": "'{name}' ya se está creando.",
       "confirm_remove_title": "¿Eliminar la capa derivada?",
       "confirm_remove_message": "«{name}» se eliminará del proyecto. El archivo ráster permanece en el disco y volver a ejecutar la operación lo registrará de nuevo, pero cualquier conjunto de datos, muestra o modelo que lo utilice deberá reconstruirse."
     },
