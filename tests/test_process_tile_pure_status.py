@@ -259,7 +259,13 @@ def test_an_unstamped_layer_takes_the_disk_verdict_off_thread(monkeypatch):
             f"the disk verdict never reached the rows; they say "
             f"{_row_status_labels(rc)}"
         )
-        assert t("widgets.product_table.status_harmonized") in _row_status_labels(rc)
+        # Waited, like its sibling above: "pending" can show up one render
+        # pass before "harmonized" does, and a bare assertion here fails on a
+        # loaded machine for no reason of its own.
+        assert _wait_until(
+            lambda: t("widgets.product_table.status_harmonized")
+            in _row_status_labels(rc)
+        ), f"the current layer never reached the rows: {_row_status_labels(rc)}"
     finally:
         rc.close()
 

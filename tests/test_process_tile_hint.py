@@ -416,6 +416,18 @@ def test_a_legacy_project_drops_harmonized_after_an_in_place_edit(monkeypatch):
         assert (
             _harmonize_all(rc).disabled is False
         ), "Harmonize all stayed dead over a layer the edit just invalidated"
+
+        # Waited on, not merely allowed: the disk task has to refire at all
+        # (that is the regression), restricted to the entry that is still
+        # unstamped — and waiting here also drains it, so no queued call of
+        # ours can land in another module's stub.
+        assert _wait_until(
+            lambda: len(disk_calls) >= 2
+        ), f"the disk task never refired after the edit; calls={disk_calls}"
+        assert disk_calls[-1] == ["layer1"], (
+            f"the refire must be restricted to the still-unstamped entry, got "
+            f"{disk_calls[-1]}"
+        )
     finally:
         rc.close()
 
