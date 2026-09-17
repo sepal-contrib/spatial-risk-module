@@ -24,14 +24,22 @@ path, with its mtime preserved (``cp -p``, ``rsync --times``) and no edit made
 in the GUI — an accepted residual risk. Removing the layer from the harmonized
 list (``remove_processed_variable``) forces it through.
 
+The check comes in two halves. ``harmonization_status_from_disk`` is the one
+described above and the one that runs before anything is written.
+``harmonization_status`` answers the same question from the ``grid_signature``
+each output was stamped with when it was written, without touching the
+filesystem at all, because the display path is a Solara render body where a
+file open blocks the whole session. It has a third answer, ``unknown``, for a
+project saved before the stamp existed, and it cannot see the mtime rule.
+
 Solara-free and Project-free on purpose (duck-typed on ``name``/``year``/
-``path``/``data_type``), so the whole predicate is unit-testable without a
-render harness or a real project on disk.
+``path``/``data_type``/``grid_signature``), so the whole predicate is
+unit-testable without a render harness or a real project on disk.
 """
 
 import logging
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -94,6 +102,10 @@ def geobox_signature(geobox) -> str:
 class HarmonizationStatus:
     """Raw-variable keys split by whether Step 3 still has work to do on them.
 
+    ``unknown`` is the in-memory check's third answer: a layer whose grid
+    signature is missing on either side, so only ``harmonization_status_from_disk``
+    can decide it. That function never produces one — it always knows.
+
     Keys are the *raw* collection's keys (what ``reproject_and_match_all`` and
     ``rasterize_all`` take as ``keys=``), not the processed output keys — the
     two coincide today but the caller filters the raw collection.
@@ -101,11 +113,12 @@ class HarmonizationStatus:
 
     pending: List[str]
     current: List[str]
+    unknown: List[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
         """Harmonizable layers in the project (inactive vectors excluded)."""
-        return len(self.pending) + len(self.current)
+        return len(self.pending) + len(self.current) + len(self.unknown)
 
 
 def is_harmonizable(var: Any) -> bool:
@@ -225,8 +238,13 @@ def is_current(var: Any, output: Any, geobox) -> bool:
     return _matches_geobox(out_path, geobox)
 
 
-def harmonization_status(project: Any) -> HarmonizationStatus:
-    """Split the project's harmonizable raw variables into pending / current.
+def harmonization_status_from_disk(project: Any, keys=None) -> HarmonizationStatus:
+    """Split harmonizable raw variables into pending / current by reading disk.
+
+    The authoritative check, and the one ``run_processing`` uses before it
+    writes anything. ``keys``, when given, restricts the scan to those raw keys
+    — the tile passes the entries whose ``grid_signature`` is unset, so the
+    per-layer file reads decay to nothing as projects are re-harmonized.
 
     Mirrors exactly what Step 3 processes: every raw *raster*
     (``reproject_and_match_all`` does not filter on ``active``) plus every
@@ -243,6 +261,9 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     base = getattr(project, "base_raster", None)
 
     candidates = [(key, var) for key, var in raw.items() if is_harmonizable(var)]
+    if keys is not None:
+        wanted = set(keys)
+        candidates = [(k, v) for k, v in candidates if k in wanted]
     if base is None:
         return HarmonizationStatus(pending=[k for k, _ in candidates], current=[])
 
@@ -274,3 +295,66 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
         fresh = not shared and is_current(var, output, geobox)
         (current if fresh else pending).append(key)
     return HarmonizationStatus(pending=pending, current=current)
+
+
+def harmonization_status(project: Any) -> HarmonizationStatus:
+    """Split harmonizable raw variables using the recorded grid signatures.
+
+    Pure and in-memory: no ``exists``, no ``stat``, no ``open``. Safe to call
+    from a Solara render body, which is the point — the disk version cost one
+    file open per layer on every reference change, and the app already knew the
+    answer because it wrote those files.
+
+    An entry lands in ``unknown`` when either side carries no signature: a
+    project saved before the field existed. Those go to
+    ``harmonization_status_from_disk``, and stop being unknown once re-harmonized.
+
+    The one rule that cannot come along is the disk check's "source newer than
+    output" test, which needs two ``stat`` calls: a source rewritten in place
+    still reads as current here. That is an accepted residual, not an oversight.
+
+    This decides *display* only. ``run_processing`` still verifies against the
+    filesystem before it writes, so a stale signature can make a row optimistic
+    but can never cause a wrong write or a skipped one.
+    """
+    raw = getattr(project, "raw_variables", None) or {}
+    processed = getattr(project, "processed_variables", None) or {}
+    base = getattr(project, "base_raster", None)
+
+    candidates = [(key, var) for key, var in raw.items() if is_harmonizable(var)]
+    if base is None:
+        return HarmonizationStatus(pending=[k for k, _ in candidates], current=[])
+
+    # The base's *persisted* stamp, not ``geobox_signature(base.get_base_geobox())``
+    # — recomputing would open the base raster, which is exactly the blocking
+    # call this function exists to avoid. The residual (a base file swapped
+    # behind the app's back) is display-only, and the pre-write check catches it.
+    base_sig = getattr(base, "grid_signature", None)
+    if not base_sig:
+        return HarmonizationStatus(
+            pending=[], current=[], unknown=[k for k, _ in candidates]
+        )
+
+    pending: List[str] = []
+    current: List[str] = []
+    unknown: List[str] = []
+    for key, var in candidates:
+        output = processed.get(output_key(var))
+        if output is None:
+            pending.append(key)  # never harmonized
+            continue
+        out_sig = getattr(output, "grid_signature", None)
+        if not out_sig:
+            unknown.append(key)  # predates the field; ask the disk
+        elif getattr(output, "raster_type", None) != expected_raster_type(var):
+            # Neither the key, the grid, nor either mtime moves when only a
+            # raster's raster_type or a vector's rasterization_method changes,
+            # so the signature alone would call this current. is_current
+            # checks it on disk; the pure path must too. Both sides are
+            # attribute reads, so it stays free.
+            pending.append(key)
+        elif out_sig == base_sig:
+            current.append(key)
+        else:
+            pending.append(key)  # the reference moved
+    return HarmonizationStatus(pending=pending, current=current, unknown=unknown)

@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import List
 
-from spatialrisk.harmonization import harmonization_status
+from spatialrisk.harmonization import harmonization_status_from_disk
 
 logger = logging.getLogger("spatial_risk")
 
@@ -165,10 +165,12 @@ def run_processing(project, keys=None) -> dict:
     ``keys`` are reported as skipped whatever their status.
 
     Incremental by design: with N layers already aligned, adding one variable
-    used to cost N+1 reprojections. ``harmonization_status`` decides what is
-    still pending — see ``spatialrisk/harmonization.py`` for the three
-    conditions. Re-deriving an aligned layer is a no-op in output terms, so
-    skipping it is safe; a changed reference raster invalidates every layer's
+    used to cost N+1 reprojections. ``harmonization_status_from_disk`` decides
+    what is still pending — see ``spatialrisk/harmonization.py`` for the three
+    conditions. The disk check, not the in-memory one the tile displays: this
+    is about to write files, so it verifies rather than trusting a stamp.
+    Re-deriving an aligned layer is a no-op in output terms, so skipping it
+    is safe; a changed reference raster invalidates every layer's
     grid and they all re-run automatically.
 
     To force one layer through again, remove its harmonized output from the
@@ -191,7 +193,7 @@ def run_processing(project, keys=None) -> dict:
     else:
         materialize_raw_layers(project, list(keys))
 
-    status = harmonization_status(project)
+    status = harmonization_status_from_disk(project)
     pending = list(status.pending)
     skipped = list(status.current)
     if keys is not None:
