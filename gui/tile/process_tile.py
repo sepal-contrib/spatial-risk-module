@@ -298,19 +298,26 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 t("tiles.process.error_auto_utm", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
 
+    _VALIDATION_MESSAGES = {
+        "need_epsg": "tiles.process.error_need_epsg",
+        "bad_epsg": "tiles.process.error_bad_epsg",
+        "bad_resolution": "tiles.process.error_bad_resolution",
+    }
+
     def validate_reference():
-        """Name the missing field — the form's submit used to just sit disabled."""
+        """Name the missing or bad field — the submit used to just sit disabled."""
         if not base_key:
             return t("tiles.process.error_pick_reference")
-        if not epsg.strip():
-            return t("tiles.process.error_need_epsg")
-        return None
+        error, _ = process_actions.validate_projection(epsg, resolution)
+        if error is None:
+            return None
+        return t(_VALIDATION_MESSAGES[error], epsg=epsg.strip())
 
     def on_set_base():
         if p is None:
             return
         try:
-            res = float(resolution) if str(resolution).strip() else 30.0
+            res = float(resolution)
             process_actions.set_base_raster(p, base_key, epsg.strip(), res)
             project.set(p.model_copy())
         except Exception as exc:
