@@ -1102,6 +1102,7 @@ class Project(BaseModel):
         target_epsg: Optional[str] = None,
         resolution: Optional[float] = None,
         source: str = "raw",
+        keys: Optional[Iterable[str]] = None,
         add_to_processed: bool = True,
         auto_save: bool = True,
         **reproject_kwargs,
@@ -1118,6 +1119,12 @@ class Project(BaseModel):
             (base_raster must be set).
         source : str, optional
             Which variables to reproject: 'raw' or 'processed' (default: 'raw').
+        keys : iterable of str, optional
+            Restrict the run to these source-collection keys. ``None`` (default)
+            reprojects every raster, which is what the notebooks expect;
+            ``process_actions.run_processing`` passes the keys that
+            ``harmonization_status`` reports as pending, so an already-aligned
+            layer is not re-derived. An empty iterable means "nothing to do".
         add_to_processed : bool, optional
             Whether to add reprojected variables to the processed collection
             (default: True).
@@ -1166,9 +1173,13 @@ class Project(BaseModel):
         reprojected_vars = {}
         skipped_count = 0
 
+        # `keys is None` means "everything"; an empty iterable means "nothing".
+        selected = None if keys is None else set(keys)
         # Filter on data_type (not isinstance) so module reloads don't break it.
         raster_pairs = [
-            (k, v) for k, v in source_vars.items() if v.data_type == DataType.raster
+            (k, v)
+            for k, v in source_vars.items()
+            if v.data_type == DataType.raster and (selected is None or k in selected)
         ]
         for var_key, var in log_progress(
             raster_pairs, "Reprojecting", label=lambda kv: kv[0]
@@ -1195,6 +1206,7 @@ class Project(BaseModel):
     def rasterize_all(
         self,
         source: str = "raw",
+        keys: Optional[Iterable[str]] = None,
         add_to_processed: bool = True,
         auto_save: bool = True,
         **rasterize_kwargs,
@@ -1206,6 +1218,10 @@ class Project(BaseModel):
         ----------
         source : str, optional
             Which variables to rasterize: 'raw' or 'processed' (default: 'raw').
+        keys : iterable of str, optional
+            Restrict the run to these source-collection keys. ``None`` (default)
+            rasterizes every active vector. An empty iterable means "nothing
+            to do". See ``reproject_and_match_all``.
         add_to_processed : bool, optional
             Whether to add rasterized variables to processed collection (default: True).
         auto_save : bool, optional
@@ -1251,7 +1267,12 @@ class Project(BaseModel):
         rasterized_vars = {}
         skipped_count = 0
 
+        # `keys is None` means "everything"; an empty iterable means "nothing".
+        selected = None if keys is None else set(keys)
+
         for var_key, var in source_vars.items():
+            if selected is not None and var_key not in selected:
+                continue
             if not var.active:
                 print(f"⏭️  Skipping '{var_key}' (inactive)")
                 skipped_count += 1
@@ -1260,7 +1281,9 @@ class Project(BaseModel):
         vector_pairs = [
             (k, v)
             for k, v in source_vars.items()
-            if v.active and v.data_type == DataType.vector
+            if v.active
+            and v.data_type == DataType.vector
+            and (selected is None or k in selected)
         ]
         for var_key, var in log_progress(
             vector_pairs, "Rasterizing", label=lambda kv: kv[0]

@@ -87,6 +87,7 @@ def CreationDialog(
     validate: Callable[[], Optional[str]],
     will_replace: Callable[[], Optional[str]],
     launch: Callable[[], None],
+    create_icon: str = "mdi-plus",
     on_close: Optional[Callable[[], None]] = None,
     replace_title: Optional[str] = None,
     replace_message: Optional[Callable[[str], str]] = None,
@@ -99,6 +100,8 @@ def CreationDialog(
         open_: solara.Reactive[bool] — dialog visibility (owned by the tile).
         title: dialog heading.
         create_label: label for the submit button (e.g. "Register", "Save").
+        create_icon: icon on the submit button; the default "+" suits a
+            creation form, a form that *sets* something names its own.
         validate: () -> error message | None; runs on Create click.
         will_replace: () -> existing storage key | None; runs after validate.
             A returned key opens the confirm-replace dialog instead of
@@ -170,7 +173,7 @@ def CreationDialog(
                 solara.Button(t("common.cancel"), on_click=close, text=True, small=True)
                 solara.Button(
                     create_label,
-                    icon_name="mdi-plus",
+                    icon_name=create_icon,
                     color="primary",
                     small=True,
                     on_click=on_create,

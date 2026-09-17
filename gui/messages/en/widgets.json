@@ -11,16 +11,23 @@
       "unknown_error": "Unknown error"
     },
     "prediction_import_modal": {
-      "palette_far": "FAR ramp (probability, pinned 1..65535)",
-      "palette_stretch": "Auto-stretch ramp to file range",
       "error_select_raster": "Select a raster file to import.",
       "error_enter_name": "Enter a name for the imported prediction.",
+      "error_base_raster_required": "Set the reference raster in the Harmonization step before importing a prediction: the import is warped onto that grid.",
+      "error_scale_required": "Choose the value scale of the raster.",
       "title": "Import prediction raster",
       "label_name": "Name",
       "placeholder_name": "e.g. qgis-export-2020",
       "label_file": "Select raster file",
-      "label_palette": "Map palette",
-      "info_text": "The raster must be spatially comparable to the truth chosen in the Evaluation step to be evaluated.",
+      "label_scale": "Value scale",
+      "scale_probability": "Probability 0..1 (rescaled to 1..65535)",
+      "scale_risk": "Risk scale 1..65535 (used as is)",
+      "spec_intro": "What the import expects",
+      "spec_format": "A single-band GeoTIFF with a coordinate reference system.",
+      "spec_values": "Values are either probabilities 0..1 or the 1..65535 risk scale; higher means more risk.",
+      "spec_nodata": "Nodata: pixels marked with your file's nodata value are left out of the map.",
+      "spec_zero": "The value 0: nodata on the risk scale. On the probability scale it is a real value — the lowest probability — and is kept.",
+      "spec_warp": "The raster is warped onto the project grid (nearest neighbour) on import.",
       "btn_import": "Import"
     },
     "inference_output_list": {
@@ -93,7 +100,9 @@
       "derived_col_name": "Name",
       "derived_col_source": "Source",
       "derived_col_status": "Status",
-      "derived_source_unknown": "unknown"
+      "derived_source_unknown": "unknown",
+      "harmonization_title": "Variables",
+      "harmonization_col_status": "Status"
     },
     "summary_lists": {
       "raw_vars_title": "Source variables",
@@ -146,7 +155,11 @@
       "status_ready": "ready",
       "status_completed": "completed",
       "status_failed": "failed",
-      "status_cancelled": "cancelled"
+      "status_cancelled": "cancelled",
+      "status_harmonized": "harmonized",
+      "status_pending": "pending",
+      "status_not_downloaded": "not downloaded",
+      "status_checking": "checking…"
     },
     "artifact_name": {
       "label": "Name",

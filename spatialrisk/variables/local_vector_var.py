@@ -158,7 +158,12 @@ class LocalVectorVar(Variable):
 
         # Determine output path using project folders
         output_folder = self.project.folders.data_raw_folder
-        output_path = output_folder / f"{self.name}.tif"
+        # Year in the filename, mirroring LocalRasterVar.reproject_and_match:
+        # add_as_processed registers under `{name}_{year}`, so without it two
+        # years of one vector share a file and the later run overwrites the
+        # earlier. Static vectors keep the unsuffixed path they already have.
+        year_suffix = f"_{self.year}" if self.year else ""
+        output_path = output_folder / f"{self.name}{year_suffix}.tif"
 
         # Map RasterizationMethod to mode parameter
         mode_mapping = {

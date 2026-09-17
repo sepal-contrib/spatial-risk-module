@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 from typing import List
 
+from spatialrisk.harmonization import harmonization_status
+
 logger = logging.getLogger("spatial_risk")
 
 
@@ -116,17 +118,79 @@ def set_base_raster(project, base_key: str, epsg: str, resolution: float):
     return reprojected
 
 
-def run_processing(project) -> None:
-    """Full Process run, in notebook order. Requires base_raster to be set."""
+def run_processing(project, keys=None) -> dict:
+    """Harmonize the raw variables that are not already on the base grid.
+
+    ``keys`` restricts the run to those raw-variable keys (the per-row
+    harmonize button in Step 3); None means every pending layer. Layers outside
+    ``keys`` are reported as skipped whatever their status.
+
+    Incremental by design: with N layers already aligned, adding one variable
+    used to cost N+1 reprojections. ``harmonization_status`` decides what is
+    still pending — see ``spatialrisk/harmonization.py`` for the three
+    conditions. Re-deriving an aligned layer is a no-op in output terms, so
+    skipping it is safe; a changed reference raster invalidates every layer's
+    grid and they all re-run automatically.
+
+    To force one layer through again, remove its harmonized output from the
+    list (``remove_processed_variable``): that drops the registry entry, which
+    is condition one, so the layer is pending on the next run.
+
+    Status is read *after* downloading: a GEEVar has no local file to compare
+    until it is materialized, and a freshly downloaded file is newer than any
+    prior output, so it lands in ``pending`` on its own. A *skipped* download
+    (the file was already there) is the exception, which is one of the reasons
+    the nothing-pending branch saves too — see the comment there.
+
+    Returns ``{"processed": [...], "skipped": [...]}`` — raw-variable keys.
+    Requires base_raster to be set.
+    """
     if project.base_raster is None:
         raise ValueError("Set a base raster before running processing.")
-    materialize_raw_layers(project)
-    logger.info("Reprojecting & matching all raw variables…")
-    project.reproject_and_match_all(source="raw")
-    logger.info("Rasterizing all raw variables…")
-    project.rasterize_all(source="raw")
+    if keys is None:
+        materialize_raw_layers(project)
+    else:
+        materialize_raw_layers(project, list(keys))
+
+    status = harmonization_status(project)
+    pending = list(status.pending)
+    skipped = list(status.current)
+    if keys is not None:
+        wanted = set(keys)
+        skipped += [k for k in pending if k not in wanted]
+        pending = [k for k in pending if k in wanted]
+    if not pending:
+        # Unconditional: two kinds of in-memory-only change reach this branch,
+        # and before Step 3 became incremental the save at the end of every run
+        # persisted both.
+        #  - materialize_raw_layers replaced GEEVars with local vars using
+        #    add_as_raw(auto_save=False). Not hypothetical: GEEVar
+        #    .to_local_raster skips the download when the file already exists
+        #    (gee_var.py:164), so the "new" local file can carry an old mtime
+        #    and read as current.
+        #  - the Variables tile mutates raw_variables in memory only (add, edit
+        #    and remove all just write the dict). A user who removes a source
+        #    variable and then presses Run with nothing pending would get the
+        #    removal back on the next load.
+        project.save()
+        logger.info(
+            "All %d layer(s) are already harmonized — nothing to do.",
+            len(skipped),
+        )
+        return {"processed": [], "skipped": skipped}
+
+    logger.info(
+        "Harmonizing %d layer(s); %d already aligned.",
+        len(pending),
+        len(skipped),
+    )
+    logger.info("Reprojecting & matching pending raw variables…")
+    project.reproject_and_match_all(source="raw", keys=pending)
+    logger.info("Rasterizing pending raw variables…")
+    project.rasterize_all(source="raw", keys=pending)
     project.save()
     logger.info("Processing complete.")
+    return {"processed": pending, "skipped": skipped}
 
 
 def apply_post_processing(project, processed_key: str, step: str):

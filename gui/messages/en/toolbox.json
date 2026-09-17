@@ -51,6 +51,7 @@
       "provenance_mw_sibling": "table beside the raster",
       "provenance_computed": "computed from the dataset",
       "provenance_user": "table chosen by you",
+      "provenance_evaluation": "table from the evaluation run",
       "details_title": "Allocation run — {name}",
       "section_inputs": "Inputs",
       "section_results": "Results",

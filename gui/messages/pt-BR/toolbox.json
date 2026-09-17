@@ -51,6 +51,7 @@
       "provenance_mw_sibling": "tabela ao lado do raster",
       "provenance_computed": "calculada a partir do conjunto de dados",
       "provenance_user": "tabela escolhida por você",
+      "provenance_evaluation": "tabela da avaliação",
       "details_title": "Execução de alocação — {name}",
       "section_inputs": "Entradas",
       "section_results": "Resultados",

@@ -199,18 +199,18 @@ def test_dialog_without_prefill_behaves_as_before(tmp_path):
 
 
 def test_dialog_prefills_an_import_entry(tmp_path):
-    """An import entry reopens in import mode with palette and name restored."""
+    """An import entry reopens in import mode with value scale and name restored."""
     entry = {
         "kind": "import",
         "name": "external_pred",
         "path": "/data/external_pred.tif",
-        "palette": "stretch",
+        "value_scale": "probability",
     }
     box, _ = _render_dialog(tmp_path, entry)
     assert _select(box, t("tiles.inference.source_label")).v_model == "import"
     assert (
-        _select(box, t("widgets.prediction_import_modal.label_palette")).v_model
-        == "stretch"
+        _select(box, t("widgets.prediction_import_modal.label_scale")).v_model
+        == "probability"
     )
     name = _text_field(box, t("tiles.inference.pred_name_label"))
     assert name.v_model == "external_pred"

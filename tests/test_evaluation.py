@@ -2911,3 +2911,54 @@ def test_evaluation_table_dialog_shows_the_scatter_on_the_figures_tab(tmp_path):
     assert len(scatters()) == 1
     assert _scatter_data(scatters()[0]) == [[1.0, 1.5], [2.0, 2.5]]
     rc.close()
+
+
+def test_run_scoped_artifact_records_defrate_csv(tmp_path, monkeypatch):
+    """The artifact points at the run's own defrate table."""
+    from types import SimpleNamespace
+
+    from spatialrisk.predictions.prediction import Prediction
+
+    project = SimpleNamespace(
+        folders=SimpleNamespace(project_folder=tmp_path), predictions={}
+    )
+    pred = Prediction(
+        path=tmp_path / "prob.tif", model_key="glm_m", dataset_name="ds_2020"
+    )
+    written = {}
+
+    def fake_defrate(**kw):
+        """Mock defrate function."""
+        _Path(kw["tab_file_defrate"]).write_text("cat,defor_dens\n1,0\n")
+        written["path"] = _Path(kw["tab_file_defrate"])
+
+    monkeypatch.setattr(ev, "_defrate_per_cat", fake_defrate)
+    monkeypatch.setattr(
+        ev,
+        "validate_two_layer",
+        lambda **kw: {
+            "RMSE": 0,
+            "wRMSE": 0,
+            "MedAE": 0,
+            "R2": 0,
+            "ncell": 1,
+            "csize_coarse_grid": 300,
+            "csize_coarse_grid_ha": 9.0,
+        },
+    )
+
+    rows = ev._evaluate_one_against_truth(
+        project,
+        pred,
+        defor_file=tmp_path / "d.tif",
+        forest_file=tmp_path / "f.tif",
+        time_interval=5,
+        truth_tag="truth",
+        run_id="abcd1234",
+    )
+
+    art = rows[0]["artifact"]
+    assert art.defrate_csv == str(written["path"])
+    assert (
+        _Path(art.defrate_csv).parent == tmp_path / "evaluation" / "truth" / "abcd1234"
+    )
