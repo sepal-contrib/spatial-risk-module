@@ -61,9 +61,10 @@ def SourceVariableList(
     rows = []
     for key, var in raw_variables.items():
         is_base = is_base_raster(p, var)
-        data_type_label = (
-            var.data_type if isinstance(var.data_type, str) else var.data_type.value
-        )
+        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
+        # test is true for its members too and would render the member itself —
+        # which str() spells "DataType.raster".
+        data_type_label = getattr(var.data_type, "value", var.data_type)
         is_cloud = type(var).__name__ == "GEEVar"
 
         status_chip = (
@@ -278,9 +279,10 @@ def HarmonizationVariableList(
         row_status = harmonization_row_status(key, var, status, running, is_cloud)
         out_key = output_key(var)
         output = processed.get(out_key)
-        data_type_label = (
-            var.data_type if isinstance(var.data_type, str) else var.data_type.value
-        )
+        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
+        # test is true for its members too and would render the member itself —
+        # which str() spells "DataType.raster".
+        data_type_label = getattr(var.data_type, "value", var.data_type)
 
         actions = [
             {
