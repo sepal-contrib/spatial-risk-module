@@ -7,6 +7,7 @@ from typing import Optional
 import ee
 from pydantic import Field, field_validator
 
+from spatialrisk.harmonization import geobox_signature
 from spatialrisk.processing import xr_rasterize
 from spatialrisk.utilities.file_helpers import copy_and_rename_file
 from spatialrisk.variables.local_raster_var import LocalRasterVar
@@ -210,6 +211,9 @@ class LocalVectorVar(Variable):
                 "rasterized"
             ],  # Track that this came from vector rasterization
             tags=self.tags.copy() if self.tags else [],
+            # xr_rasterize burns onto this exact geobox, so the base's grid is
+            # the output's grid — stamp it here rather than reopening the file.
+            grid_signature=geobox_signature(geobox),
         )
 
     def to_gee_var(self) -> ee.FeatureCollection:

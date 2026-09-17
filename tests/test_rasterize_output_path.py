@@ -23,12 +23,22 @@ from spatialrisk.variables.models import DataType, RasterizationMethod
 Project._ensure_model_schemas()
 
 
+class _Geobox:
+    """Duck-typed geobox: a MagicMock has no transform to stamp a signature from."""
+
+    crs = "EPSG:32618"
+    transform = (30.0, 0.0, 500000.0, 0.0, -30.0, 4000000.0)
+
+    class shape:
+        yx = (100, 200)
+
+
 @pytest.fixture
 def base():
-    """A stubbed base raster with a mocked geobox."""
+    """A stubbed base raster with a stand-in geobox."""
     b = MagicMock()
     b.data_type = DataType.raster
-    b.get_base_geobox.return_value = MagicMock()
+    b.get_base_geobox.return_value = _Geobox()
     return b
 
 

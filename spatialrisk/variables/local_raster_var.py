@@ -10,6 +10,7 @@ import rioxarray
 from pydantic import Field, field_validator
 
 from spatialrisk.geo_utils import RASTER_CHUNKS, raster_is_all_nodata, xr_reproject
+from spatialrisk.harmonization import geobox_signature
 from spatialrisk.processing import (
     display_raster,
     distance_to_edge_gdal_no_mask,
@@ -387,6 +388,11 @@ class LocalRasterVar(Variable):
             active=self.active,
             year=self.year,
             tags=self.tags.copy() if self.tags else [],
+            # Stamped from the target geobox, not from the file just written:
+            # xr_reproject writes *onto* this geobox, so the two are the same
+            # grid by construction, and taking it from here keeps the
+            # already-harmonized check a string compare instead of a reopen.
+            grid_signature=geobox_signature(geobox),
         )
 
     def apply_post_processing(self, post_process: PostProcessing) -> "LocalRasterVar":
@@ -598,6 +604,13 @@ class LocalRasterVar(Variable):
             raise FileNotFoundError(
                 f"Cannot set as base raster: raster file not found at {self.path}"
             )
+
+        # The one file open, at the only moment the project's reference grid
+        # can change. Unlike a harmonized output — written *onto* a geobox we
+        # already hold — the base's grid only exists on disk, so it is read
+        # once here and every later status check compares strings instead of
+        # reopening this file.
+        self.grid_signature = geobox_signature(self.get_base_geobox())
 
         # Set this raster as the project's base raster
         self.project.base_raster = self
