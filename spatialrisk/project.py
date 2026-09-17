@@ -1121,8 +1121,9 @@ class Project(BaseModel):
             Restrict the run to these source-collection keys. ``None`` (default)
             reprojects every raster, which is what the notebooks expect;
             ``process_actions.run_processing`` passes the keys that
-            ``harmonization_status`` reports as pending, so an already-aligned
-            layer is not re-derived. An empty iterable means "nothing to do".
+            ``harmonization_status_from_disk`` reports as pending, so an
+            already-aligned layer is not re-derived. An empty iterable means
+            "nothing to do".
         add_to_processed : bool, optional
             Whether to add reprojected variables to the processed collection
             (default: True).

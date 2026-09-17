@@ -90,3 +90,23 @@ def test_inactive_vector_is_excluded():
     v.active = False
     p = _Project({"v": v}, {}, base_sig="SIG")
     assert harmonization_status(p).total == 0
+
+
+def test_a_never_harmonized_layer_is_pending_even_against_an_unstamped_base():
+    """A missing output is a complete answer without any base signature.
+
+    Deferring it to ``unknown`` makes every row of a legacy project the cached
+    disk verdict — and no in-place variable edit moves that cache, because the
+    edit keeps the ``{name}_{year}`` key and only drops the processed entry. The
+    row then goes on reading harmonized over a raster the edit invalidated.
+    """
+    p = _Project(
+        {"a": _Var("a"), "b": _Var("b")},
+        {"b": _Var("b", sig="SIG")},
+        base_sig=None,
+    )
+    p.base_raster = _Var("base", sig=None)
+    status = harmonization_status(p)
+    assert status.pending == ["a"]
+    assert status.unknown == ["b"]
+    assert status.current == []

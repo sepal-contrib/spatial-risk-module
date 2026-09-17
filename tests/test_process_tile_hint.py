@@ -342,6 +342,84 @@ def test_harmonization_hint_refires_on_an_in_place_variable_edit(monkeypatch):
         rc.close()
 
 
+def _legacy_project(n_vars: int = 2) -> Project:
+    """A project saved before the grid signatures: base and outputs unstamped.
+
+    Every layer is ``unknown`` to the pure check, so what the rows say is
+    entirely the cached disk verdict — the one state in which a ``hint_key``
+    that carries no per-variable path can go stale without a trace.
+    """
+    p = _project_with_base(n_vars)
+    for key, var in list(p.raw_variables.items()):
+        p.processed_variables[key] = LocalRasterVar.model_construct(
+            name=var.name,
+            data_type="raster",
+            raster_type="continuous",
+            path=Path(f"/nowhere/{key}_harmonized.tif"),
+            project=p,
+        )
+    return p
+
+
+def test_a_legacy_project_drops_harmonized_after_an_in_place_edit(monkeypatch):
+    """The same edit, on a project whose base carries no signature.
+
+    Its sibling above stubs the pure check, so it no longer covers this path.
+    Here the real one runs: with no base stamp every layer used to come back
+    ``unknown``, the rows were 100% the cached disk verdict, and nothing in
+    ``hint_key`` moved on an edit — ``on_save`` re-registers under the same
+    ``{name}_{year}`` key, so neither the raw keys nor the unknown set change.
+    The disk task never refired and the row kept reading "harmonized" with
+    Harmonize-all dead: the UI telling the user not to press Run over the very
+    raster their edit invalidated. "Never harmonized" needs no base signature,
+    so it must be decided in memory — and the key then moves with it.
+    """
+    disk_calls = []
+
+    def _disk(project, keys=None):
+        wanted = sorted(keys if keys is not None else project.raw_variables)
+        disk_calls.append(wanted)
+        return HarmonizationStatus(pending=[], current=wanted)
+
+    monkeypatch.setattr(process_tile, "harmonization_status_from_disk", _disk)
+
+    project = solara.reactive(_legacy_project(2), equals=lambda a, b: a is b)
+    rc = _render_process_tile(project)
+    harmonized = t("widgets.product_table.status_harmonized")
+    try:
+        assert _wait_until(
+            lambda: _row_status_labels(rc).count(harmonized) == 2
+        ), f"the legacy rows never took the disk verdict: {_row_status_labels(rc)}"
+
+        # Exactly what on_save does: pop the key, rebuild the variable from the
+        # modal entry, re-register it under the SAME key — and drop the
+        # processed entry, because the edit invalidated that output.
+        p = project.value
+        old = p.raw_variables.pop("layer0")
+        p.raw_variables["layer0"] = LocalRasterVar.model_construct(
+            name=old.name,
+            year=old.year,
+            data_type="raster",
+            raster_type="continuous",
+            path=Path("/nowhere/my_dem.tif"),
+            project=p,
+        )
+        p.processed_variables.pop("layer0", None)
+        project.set(p.model_copy())
+
+        moved = _wait_until(lambda: _row_status_labels(rc).count(harmonized) < 2)
+        assert moved, (
+            f"the edited layer still reads harmonized; disk calls={disk_calls} — "
+            "an unstamped base made every verdict the cached disk one, and "
+            "nothing in hint_key moves on an in-place edit"
+        )
+        assert (
+            _harmonize_all(rc).disabled is False
+        ), "Harmonize all stayed dead over a layer the edit just invalidated"
+    finally:
+        rc.close()
+
+
 def _harmonize_all(rc):
     """The bulk button, found by its label."""
 

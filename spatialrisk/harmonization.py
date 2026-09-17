@@ -209,12 +209,13 @@ def is_current(var: Any, output: Any, geobox) -> bool:
         return False
     # Every enum in ``spatialrisk/variables/models.py`` is a ``(str, Enum)``,
     # which is the only reason this comparison (and the ``data_type`` filter in
-    # ``harmonization_status``) works across both construction paths: a
-    # validated variable stores the plain string (``use_enum_values=True`` ->
-    # ``"continuous"``) while a ``model_construct``ed one keeps the member
-    # (``RasterType.continuous``). Drop that ``str`` mixin and no layer is ever
-    # current here, and — far worse — the ``data_type`` filter matches nothing,
-    # so Run silently becomes a no-op.
+    # ``is_harmonizable``, which both status functions run) works across both
+    # construction paths: a validated variable stores the plain string
+    # (``use_enum_values=True`` -> ``"continuous"``) while a
+    # ``model_construct``ed one keeps the member (``RasterType.continuous``).
+    # Drop that ``str`` mixin and no layer is ever current here, and — far
+    # worse — the ``data_type`` filter matches nothing, so Run silently becomes
+    # a no-op.
     if getattr(output, "raster_type", None) != expected_raster_type(var):
         return False  # the layer is harmonized differently now
     src_path = getattr(var, "path", None)
@@ -305,13 +306,23 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     file open per layer on every reference change, and the app already knew the
     answer because it wrote those files.
 
-    An entry lands in ``unknown`` when either side carries no signature: a
-    project saved before the field existed. Those go to
-    ``harmonization_status_from_disk``, and stop being unknown once re-harmonized.
+    An entry lands in ``unknown`` when it has a registered output and a
+    signature is missing on either side: a project saved before the field
+    existed. Those go to ``harmonization_status_from_disk``; an output stops
+    being unknown once it is re-harmonized, a base once a new reference is set.
+    A layer with *no* registered output is ``pending`` whatever the base
+    carries — that verdict needs no signature at all, and deferring it would
+    leave a legacy project's rows entirely at the mercy of a cached disk
+    verdict that an in-place edit never moves.
 
-    The one rule that cannot come along is the disk check's "source newer than
-    output" test, which needs two ``stat`` calls: a source rewritten in place
-    still reads as current here. That is an accepted residual, not an oversight.
+    Three of the disk check's rules stayed behind, and only one of them had
+    to. Forced: "source newer than output", which needs two ``stat`` calls, so
+    a source rewritten in place still reads as current here. Chosen: the
+    ``exists()`` checks on source and output, and the shared-output-path guard
+    for the pre-F5 vector pairs — both are decidable in memory only by paying
+    the filesystem call this function exists to avoid, and both are still
+    enforced by the pre-write check. All three are accepted residuals of a
+    display-only path, not oversights.
 
     This decides *display* only. ``run_processing`` still verifies against the
     filesystem before it writes, so a stale signature can make a row optimistic
@@ -321,7 +332,11 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     processed = getattr(project, "processed_variables", None) or {}
     base = getattr(project, "base_raster", None)
 
-    candidates = [(key, var) for key, var in raw.items() if is_harmonizable(var)]
+    # ``list(...)``: this runs in the render body, where a Variables-tab
+    # multi-image download adding a key mid-iteration would raise
+    # "dictionary changed size during iteration" — and a raise here fails the
+    # render, not a worker whose except-clause used to log and move on.
+    candidates = [(key, var) for key, var in list(raw.items()) if is_harmonizable(var)]
     if base is None:
         return HarmonizationStatus(pending=[k for k, _ in candidates], current=[])
 
@@ -330,10 +345,6 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     # call this function exists to avoid. The residual (a base file swapped
     # behind the app's back) is display-only, and the pre-write check catches it.
     base_sig = getattr(base, "grid_signature", None)
-    if not base_sig:
-        return HarmonizationStatus(
-            pending=[], current=[], unknown=[k for k, _ in candidates]
-        )
 
     pending: List[str] = []
     current: List[str] = []
@@ -341,7 +352,18 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
     for key, var in candidates:
         output = processed.get(output_key(var))
         if output is None:
+            # Decided before the base stamp is even consulted: "no output is
+            # registered" is a complete answer on its own, and an unstamped
+            # base must not turn it into an ``unknown``. On a project saved
+            # before the stamp existed that would make EVERY layer unknown,
+            # and the display would then be entirely the cached disk verdict —
+            # which no in-place edit moves, because the edit keeps the
+            # ``{name}_{year}`` key and only drops the processed entry. The row
+            # would keep reading harmonized over a raster the edit invalidated.
             pending.append(key)  # never harmonized
+            continue
+        if not base_sig:
+            unknown.append(key)  # nothing to compare the output's stamp against
             continue
         out_sig = getattr(output, "grid_signature", None)
         if not out_sig:
