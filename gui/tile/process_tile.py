@@ -186,6 +186,17 @@ def BaseProjectionForm(
                 hint=t("tiles.process.resolution_hint"),
             )
         rv.use_event(epsg_field, "click:append", lambda *_: on_auto_utm())
+        # Non-blocking: CreationDialog's two channels both stop the user
+        # (validate() -> error Alert, will_replace() -> confirm), and neither
+        # says "go ahead, but know this". Rendering it here also lets it
+        # update live as the field is typed.
+        _, warning = process_actions.validate_projection(epsg, resolution)
+        if warning == "geographic_crs":
+            rv.Alert(
+                type="warning",
+                dense=True,
+                children=[t("tiles.process.warn_geographic_crs", epsg=epsg.strip())],
+            )
         if autofill_pending:
             solara.Text(
                 t("tiles.process.detecting_projection"),
