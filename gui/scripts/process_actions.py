@@ -10,7 +10,7 @@ from collections import namedtuple
 from pathlib import Path
 from typing import List
 
-from spatialrisk.harmonization import harmonization_status
+from spatialrisk.harmonization import harmonization_status_from_disk
 
 logger = logging.getLogger("spatial_risk")
 
@@ -111,11 +111,57 @@ def base_raster_resolution(var) -> "float | None":
     return float(xres)
 
 
-def set_base_raster(project, base_key: str, epsg: str, resolution: float):
-    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base."""
+def validate_projection(epsg: str, resolution: str):
+    """Check a reference CRS and pixel size before any raster work starts.
+
+    Returns ``(blocking_error, warning)`` as sentinel keys, or ``None`` for
+    either. Kept free of ``t()`` so the module stays Solara-free and the rules
+    stay unit-testable; the caller maps the sentinels to messages.
+
+    ``pyproj`` is imported lazily like every other geo dependency in this
+    module, and is already present via rasterio/rioxarray.
+    """
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    text = (epsg or "").strip()
+    if not text:
+        return "need_epsg", None
+    # The field's placeholder invites a bare code and `auto_utm_epsg` already
+    # normalises its own output this way, as does `LocalRasterVar.reproject`.
+    # pyproj does not reliably parse a bare digit string, so prefix it here and
+    # keep the three call sites agreeing on what a valid entry looks like.
+    normalised = text if ":" in text else f"EPSG:{text}"
+    try:
+        crs = CRS.from_user_input(normalised)
+    except (CRSError, ValueError, TypeError):
+        return "bad_epsg", None
+
+    try:
+        metres = float(str(resolution).strip())
+    except (TypeError, ValueError):
+        return "bad_resolution", None
+    if metres <= 0:
+        return "bad_resolution", None
+
+    # Resolution is metres throughout (auto_utm_epsg returns UTM;
+    # base_raster_resolution documents "(m)"), so a geographic CRS silently
+    # reinterprets the number as degrees. Worth saying; not worth blocking.
+    return None, ("geographic_crs" if crs.is_geographic else None)
+
+
+def set_base_raster(
+    project, base_key: str, epsg: str, resolution: float, auto_save: bool = True
+):
+    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base.
+
+    ``auto_save=False`` leaves the project unsaved so a background caller can
+    check the project is still the open one before writing it to disk — see the
+    reference worker in ``process_tile``.
+    """
     base = project.raw_variables[base_key]
     reprojected = base.reproject(target_epsg=epsg, resolution=resolution)
-    reprojected.use_as_base_raster()
+    reprojected.use_as_base_raster(auto_save=auto_save)
     return reprojected
 
 
@@ -127,10 +173,12 @@ def run_processing(project, keys=None) -> dict:
     ``keys`` are reported as skipped whatever their status.
 
     Incremental by design: with N layers already aligned, adding one variable
-    used to cost N+1 reprojections. ``harmonization_status`` decides what is
-    still pending — see ``spatialrisk/harmonization.py`` for the three
-    conditions. Re-deriving an aligned layer is a no-op in output terms, so
-    skipping it is safe; a changed reference raster invalidates every layer's
+    used to cost N+1 reprojections. ``harmonization_status_from_disk`` decides
+    what is still pending — see ``spatialrisk/harmonization.py`` for the three
+    conditions. The disk check, not the in-memory one the tile displays: this
+    is about to write files, so it verifies rather than trusting a stamp.
+    Re-deriving an aligned layer is a no-op in output terms, so skipping it
+    is safe; a changed reference raster invalidates every layer's
     grid and they all re-run automatically.
 
     To force one layer through again, remove its harmonized output from the
@@ -153,7 +201,7 @@ def run_processing(project, keys=None) -> dict:
     else:
         materialize_raw_layers(project, list(keys))
 
-    status = harmonization_status(project)
+    status = harmonization_status_from_disk(project)
     pending = list(status.pending)
     skipped = list(status.current)
     if keys is not None:

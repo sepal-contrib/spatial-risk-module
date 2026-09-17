@@ -249,14 +249,20 @@ def harmonization_row_status(
 
     Precedence: a run rewriting this layer beats everything; a cloud-backed
     layer is "not downloaded" whatever the grid check says (it has no local
-    file to check); a None ``status`` means the off-thread check has not
-    resolved yet.
+    file to check); a None ``status``, or an entry ``status`` lists as
+    ``unknown``, means the check that decides has not resolved yet.
     """
     if key in (running_keys or ()):
         return "running"
     if is_cloud:
         return "not_downloaded"
     if status is None:
+        return "checking"
+    if key in (getattr(status, "unknown", None) or ()):
+        # Signature-less entry, disk verdict still pending. Without this it
+        # falls through to "harmonized" and claims work that was never checked.
+        # ``getattr`` rather than ``status.unknown`` so the function keeps
+        # working against a status built by older code paths.
         return "checking"
     return "pending" if key in status.pending else "harmonized"
 

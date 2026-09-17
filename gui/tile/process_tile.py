@@ -9,8 +9,13 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
-from gui.scripts.solara_threads import publish_if_current, to_thread_in_context
+from gui.scripts.solara_threads import (
+    publish_if_current,
+    spawn_in_context,
+    to_thread_in_context,
+)
 from gui.scripts.variable_identity import base_raster_key, is_base_raster
 from gui.store.project_writers import writing
 from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
@@ -19,9 +24,22 @@ from gui.widget.creation_dialog import CreationDialog
 from gui.widget.help import InfoButton
 from gui.widget.text_style import MUTED
 from gui.widget.variable_list import HarmonizationVariableList
-from spatialrisk.harmonization import harmonization_status
+from spatialrisk.harmonization import (
+    HarmonizationStatus,
+    harmonization_status,
+    harmonization_status_from_disk,
+)
 
 logger = logging.getLogger("spatial_risk")
+
+# Only one reference warp at a time (see InflightKeys).
+reference_inflight = InflightKeys(key="reference_inflight")
+
+
+def base_sig_of(p):
+    """The open project's base grid signature, or None."""
+    base = getattr(p, "base_raster", None) if p is not None else None
+    return getattr(base, "grid_signature", None) if base is not None else None
 
 
 def _raw_raster_keys(p):
@@ -68,7 +86,7 @@ STRIP_CSS = """
 
 
 @solara.component
-def ReferenceStrip(project, on_open):
+def ReferenceStrip(project, on_open, pending=False):
     """Clickable statement of the current reference grid; opens the form.
 
     It carries the whole choice — raster, CRS and pixel size — because it
@@ -76,10 +94,20 @@ def ReferenceStrip(project, on_open):
     Unset, it prompts instead, in warning colours: that is also what tells the
     user why Run is disabled, so no separate "set a reference first" line is
     needed.
+
+    ``pending`` is True while the reference warp runs on its worker thread: the
+    strip then says so, carries a progress bar and stops opening the form,
+    because the old reference it still holds is about to be replaced and the UI
+    is otherwise unchanged (the warp no longer freezes it, so nothing else
+    signals that work is happening). Disabling it is what keeps the user from
+    typing a correction that ``on_set_base`` would only have to refuse — and the
+    pending line it carries is the reason, so the disabled state is not mute.
     """
     p = project.value
     base = p.base_raster if p is not None else None
-    if base is not None:
+    if pending:
+        summary = t("tiles.process.reference_pending")
+    elif base is not None:
         summary = t(
             "tiles.process.reference_summary",
             name=base.name,
@@ -103,6 +131,7 @@ def ReferenceStrip(project, on_open):
             color="primary" if base is not None else "warning",
             style=STRIP_STYLE,
             on_click=on_open,
+            disabled=pending,
             children=[
                 solara.Row(
                     style="width:100%;align-items:center;gap:8px;flex-wrap:nowrap;",
@@ -126,6 +155,8 @@ def ReferenceStrip(project, on_open):
                 )
             ],
         )
+        if pending:
+            solara.ProgressLinear(True)
 
 
 @solara.component
@@ -186,6 +217,17 @@ def BaseProjectionForm(
                 hint=t("tiles.process.resolution_hint"),
             )
         rv.use_event(epsg_field, "click:append", lambda *_: on_auto_utm())
+        # Non-blocking: CreationDialog's two channels both stop the user
+        # (validate() -> error Alert, will_replace() -> confirm), and neither
+        # says "go ahead, but know this". Rendering it here also lets it
+        # update live as the field is typed.
+        _, warning = process_actions.validate_projection(epsg, resolution)
+        if warning == "geographic_crs":
+            rv.Alert(
+                type="warning",
+                dense=True,
+                children=[t("tiles.process.warn_geographic_crs", epsg=epsg.strip())],
+            )
         if autofill_pending:
             solara.Text(
                 t("tiles.process.detecting_projection"),
@@ -217,11 +259,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # Raw key the next run is restricted to (per-row harmonize button), or
     # None for a full run — the same shape as pending_download in Step 2.
     pending_harmonize = solara.use_reactive(None)
-    # Last resolved status, tagged with the inputs it was computed from: the
-    # hint task yields None while a run is in flight (it would be reading files
-    # the run is rewriting), and the list must not blank out its rows meanwhile
-    # — but a status computed for other inputs (another project, a different
-    # base) must never be shown against the current rows.
+    # Last resolved *disk* verdict, tagged with the inputs it was computed
+    # from: the hint task yields None while a run is in flight (it would be
+    # reading files the run is rewriting), and the unstamped rows must not
+    # blank out meanwhile — but a verdict computed for other inputs (another
+    # project, a different base) must never be shown against the current rows.
     last_status = solara.use_ref((None, None))
 
     def _do_remove(key: str):
@@ -298,67 +340,101 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 t("tiles.process.error_auto_utm", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
 
+    _VALIDATION_MESSAGES = {
+        "need_epsg": "tiles.process.error_need_epsg",
+        "bad_epsg": "tiles.process.error_bad_epsg",
+        "bad_resolution": "tiles.process.error_bad_resolution",
+    }
+
     def validate_reference():
-        """Name the missing field — the form's submit used to just sit disabled."""
+        """Name the missing or bad field — the submit used to just sit disabled."""
         if not base_key:
             return t("tiles.process.error_pick_reference")
-        if not epsg.strip():
-            return t("tiles.process.error_need_epsg")
-        return None
+        error, _ = process_actions.validate_projection(epsg, resolution)
+        if error is None:
+            return None
+        return t(_VALIDATION_MESSAGES[error], epsg=epsg.strip())
 
     def on_set_base():
+        """Warp the chosen raster onto the new grid, off the websocket loop.
+
+        `set_base_raster` runs a full GDAL warp that writes a raster. Solara
+        widget callbacks run inside process_kernel_messages under the session's
+        context lock, so doing that here froze the whole UI for the duration.
+        All continuation work — the republish and the error toast — lives in the
+        worker, per gui/scripts/solara_threads.
+        """
         if p is None:
             return
+        if not reference_inflight.claim("reference"):
+            # The strip is disabled while a warp runs, but `disabled=` is a
+            # render-time prop and reaches the browser a round-trip late, so a
+            # click can still get the form open. CreationDialog closes on any
+            # launch that returns, so refusing in silence would look exactly
+            # like a successful submit — and the corrected EPSG the user just
+            # typed would never be applied. Say so instead.
+            notifications.warning(
+                t("tiles.process.reference_already_running"),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+            return
+        # Safe on this thread: validate_reference() has already parsed it.
+        res = float(resolution)
+        key, code = base_key, epsg.strip()
+
+        def _worker():
+            try:
+                # auto_save=False is load-bearing: use_as_base_raster() saves by
+                # default, and publish_if_current can only stop the *reactive*
+                # publish. A worker that saved first would already have written a
+                # project the user switched away from or deleted mid-warp — and
+                # Project.save() recreates the folder it writes into. So check
+                # liveness first, then save.
+                process_actions.set_base_raster(p, key, code, res, auto_save=False)
+                if publish_if_current(project, p):
+                    p.save()
+            except Exception as exc:
+                logger.exception("setting the reference raster failed")
+                notifications.error(
+                    t("tiles.process.error_set_base", exc=exc),
+                    timeout=ERROR_TOAST_TIMEOUT,
+                )
+            finally:
+                reference_inflight.release("reference")
+
         try:
-            res = float(resolution) if str(resolution).strip() else 30.0
-            process_actions.set_base_raster(p, base_key, epsg.strip(), res)
-            project.set(p.model_copy())
+            spawn_in_context(_worker)
         except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread that
+            # never starts would hold it for the rest of the session.
+            reference_inflight.release("reference")
+            logger.exception("could not start the reference worker")
             notifications.error(
                 t("tiles.process.error_set_base", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
 
-    # Rebuilt from scalars on every render: the project reactive is republished
-    # via model_copy(), which compares equal to its predecessor, so a use_task
-    # keyed on it would never retrigger. `processing.value` is what refreshes
-    # the hint after a run whose key sets did not change (a re-harmonization
-    # after the reference raster moved).
+    # Pure and in-memory (see harmonization.harmonization_status): no file
+    # opens, so unlike the old disk scan this belongs in the render body. Every
+    # output stamped by this version carries the grid it was written onto, and
+    # comparing those strings against the base's is what the rows are drawn
+    # from — a re-render costs attribute reads, not `1 + N` file opens on the
+    # session's websocket loop.
+    pure = harmonization_status(p) if p is not None else None
+    unknown_keys = tuple(sorted(pure.unknown)) if pure is not None else ()
+    # Only the entries the signatures cannot answer reach disk. In a project
+    # harmonized by this version the tuple is empty, the task returns
+    # immediately, and the status path performs no I/O at all.
     #
-    # Raw variables contribute their edit-sensitive scalars, not just their
-    # keys: editing a variable in place keeps name+year, so the key SET does not
-    # move and a key-only dependency would never refire — leaving the hint
-    # reading "already harmonized" about a layer the edit just made stale, which
-    # is precisely the advice not to press Run. These are attribute reads, no
-    # disk I/O, so they are safe in a render body.
-    #
-    # Known gap, accepted: re-setting the SAME reference raster at the SAME CRS
-    # and resolution after its source extent changed yields a new geobox this
-    # key cannot see. Harmless — F3 recomputes status from disk the instant Run
-    # is pressed, so only the hint goes stale, never the run. The honest fix
-    # (stat() on the base file here) is blocking disk I/O in the render body,
-    # i.e. the websocket loop, which a cosmetic staleness does not justify.
+    # The project name and base signature are in the key for staleness, not for
+    # retriggering: `unknown_keys` alone aliases badly — two different projects,
+    # or the same project against a different base, can produce an identical
+    # tuple, and `last_status` would then serve one state's disk verdict against
+    # another's rows. That is exactly the invariant the existing `status_key`
+    # tagging exists to hold (see the `last_status` comment above).
     hint_key = (
-        base_raster_key(p),
-        getattr(p.base_raster, "default_crs", None) if p and p.base_raster else None,
-        (
-            getattr(p.base_raster, "default_resolution", None)
-            if p and p.base_raster
-            else None
-        ),
-        (
-            tuple(
-                (
-                    k,
-                    str(getattr(v, "path", None)),
-                    getattr(v, "raster_type", None),
-                    getattr(v, "rasterization_method", None),
-                )
-                for k, v in sorted(p.raw_variables.items())
-            )
-            if p
-            else ()
-        ),
-        tuple(sorted(p.processed_variables)) if p else (),
+        getattr(p, "project_name", None),
+        base_sig_of(p),
+        unknown_keys,
         processing.value,
     )
 
@@ -366,25 +442,23 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         dependencies=[hint_key], raise_error=False, prefer_threaded=True
     )
     async def harmonization_hint():
-        """How many layers Run would actually process, checked off-thread.
+        """Disk verdicts for the layers with no recorded grid signature.
 
-        Reading each output's header and mtime is disk I/O; done in the render
-        body it would block the session's websocket loop. Returns None when
-        there is nothing to say — no project, no reference raster, or a run in
-        flight rewriting the very files we would be inspecting.
+        Kept threaded: this is the only remaining disk I/O on the status path,
+        and in the render body it would block the session's websocket loop.
+        Returns None when there is nothing to check or a run is rewriting the
+        very files we would inspect.
         """
-        if p is None or p.base_raster is None or processing.value:
+        if p is None or p.base_raster is None or processing.value or not unknown_keys:
             return None
         try:
-            return await asyncio.to_thread(harmonization_status, p)
+            return await asyncio.to_thread(
+                harmonization_status_from_disk, p, list(unknown_keys)
+            )
         except Exception:
-            # The hint is advisory, so failing it must never surface as an
-            # error — but ``raise_error=False`` swallows the exception with no
-            # trace at all. The race is real: this walks ``p.raw_variables`` on
-            # a worker thread while a Variables-tab download can be adding keys
-            # to it (a multi-image GEEVar), which raises "dictionary changed
-            # size during iteration". Logging turns an invisible blank hint
-            # into a diagnosable one.
+            # Advisory only, and raise_error=False swallows it silently
+            # otherwise. The race is real: this walks raw_variables on a worker
+            # thread while a Variables-tab download can be adding keys.
             logger.debug("Harmonization hint failed", exc_info=True)
             return None
 
@@ -460,35 +534,75 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         # dialog and this states the choice. Everything below is the list you
         # actually work in — the shape of Step 2, whose variable form is
         # likewise a dialog.
-        ReferenceStrip(project=project, on_open=lambda: reference_open.set(True))
+        ReferenceStrip(
+            project=project,
+            on_open=lambda: reference_open.set(True),
+            pending="reference" in reference_inflight,
+        )
 
         # Everything in hint_key except processing.value: a run in flight must
         # keep the status it started from, not invalidate it.
         status_key = hint_key[:-1]
         if harmonization_hint.value is not None:
             last_status.current = (status_key, harmonization_hint.value)
-        status = (
-            last_status.current[1] if last_status.current[0] == status_key else None
-        )
+        disk = last_status.current[1] if last_status.current[0] == status_key else None
+        # The pure verdict stands; the disk one overrides for unknown keys only.
+        if pure is None:
+            status = None
+        elif not pure.unknown:
+            status = pure  # steady state: no disk involved
+        elif disk is None:
+            # `pure` still carries its `unknown` list, which is what makes the
+            # rows render "checking" rather than "harmonized".
+            status = pure
+        else:
+            status = HarmonizationStatus(
+                pending=pure.pending + disk.pending,
+                current=pure.current + disk.current,
+            )
         run_in_flight = processing.value or process_task.pending
         # Only once the status has actually landed: while it is still being
-        # checked (status None) we do not know there is nothing to do, and
-        # disabling on a maybe would block a run the user is entitled to.
-        nothing_pending = status is not None and not status.pending
-        if run_in_flight:
-            only = pending_harmonize.value
-            running_keys = (
-                {only} if only is not None else set(status.pending if status else ())
-            )
-        else:
+        # checked we do not know there is nothing to do, and disabling on a
+        # maybe would block a run the user is entitled to. An `unknown` entry
+        # is such a maybe — it sits in neither list, so keying off an empty
+        # `pending` alone would kill the button on exactly the legacy projects
+        # that most need a run.
+        nothing_pending = (
+            status is not None
+            and not status.pending
+            and not getattr(status, "unknown", ())
+        )
+        if not run_in_flight:
             running_keys = set()
+        elif pending_harmonize.value is not None:
+            running_keys = {pending_harmonize.value}
+        elif status is None:
+            running_keys = set()
+        else:
+            # A bulk run recomputes its own status from disk over the whole
+            # project, so an unstamped layer is genuinely under consideration
+            # and must not read as idle while the run works on it. Normally
+            # moot — the merge above resolves `unknown` away before a run
+            # starts — but not on a legacy project where Run is pressed before
+            # the disk verdict lands, which is the case this exists for.
+            running_keys = set(status.pending) | set(
+                getattr(status, "unknown", None) or ()
+            )
 
         HarmonizationVariableList(
             project=project,
             status=status,
             on_harmonize=harmonize_one,
             running_keys=running_keys,
-            harmonize_disabled=run_in_flight or not has_base,
+            # The reference warp gates the row hammers too, not just the strip
+            # and Harmonize-all: a per-row run started mid-warp hands GDAL a
+            # ``p.base_raster`` the reference worker is about to replace, and
+            # races its ``Project.save()`` against the worker's. Before the warp
+            # moved off the websocket loop the frozen UI made that click
+            # impossible; now it has to be refused explicitly.
+            harmonize_disabled=run_in_flight
+            or not has_base
+            or "reference" in reference_inflight,
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
             on_remove=set_pending_remove,
@@ -497,7 +611,14 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         # Only the still-resolving case needs a line of its own: until the
         # status lands no row can state one. Once it does, every row says its
         # own, so a summary above them would only repeat the column beside.
-        if status is None and harmonization_hint.pending:
+        # "Still resolving" now means unresolved *unknowns*: the pure verdict
+        # lands on the first render, so a missing status is no longer the test.
+        if (
+            pure is not None
+            and pure.unknown
+            and disk is None
+            and harmonization_hint.pending
+        ):
             solara.Text(
                 t("tiles.process.checking_status"),
                 style=MUTED + "font-size:0.8rem;font-style:italic;",
@@ -524,7 +645,10 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # with every layer already on the reference grid a run rewrites
             # nothing, and the sentence that used to say so is gone, so the
             # button carries it — as Download-all does with no cloud layers left.
-            disabled=run_in_flight or not has_base or nothing_pending,
+            disabled=run_in_flight
+            or not has_base
+            or nothing_pending
+            or "reference" in reference_inflight,
         )
         if processing.value:
             solara.ProgressLinear(True)

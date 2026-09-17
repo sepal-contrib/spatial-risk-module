@@ -90,7 +90,7 @@ def local_var(tmp_path):
 
 
 class _FakeGeobox:
-    """Just enough geobox for the post-reproject metadata extraction."""
+    """Just enough geobox for the metadata extraction and the grid stamp."""
 
     class crs:
         @staticmethod
@@ -99,6 +99,13 @@ class _FakeGeobox:
 
     class resolution:
         x = 30.0
+
+    # A real GeoBox always carries these; reproject_and_match stamps the
+    # output's grid_signature from them (see harmonization.geobox_signature).
+    transform = (30.0, 0.0, 500000.0, 0.0, -30.0, 4000000.0)
+
+    class shape:
+        yx = (32, 32)
 
 
 def _fake_xr_reproject_writing(value):

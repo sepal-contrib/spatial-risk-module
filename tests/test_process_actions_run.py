@@ -49,7 +49,8 @@ def test_run_processing_sequences_steps():
     p.base_raster = MagicMock(name="base")
     status = SimpleNamespace(pending=["subj"], current=[])
     with patch("gui.scripts.process_actions.materialize_raw_layers") as mat, patch(
-        "gui.scripts.process_actions.harmonization_status", return_value=status
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
     ):
         process_actions.run_processing(p)
 
@@ -90,7 +91,8 @@ def test_run_processing_logs_reproject_and_rasterize(caplog):
     status = SimpleNamespace(pending=["subj"], current=[])
     with caplog.at_level(logging.INFO, logger="spatial_risk"):
         with patch("gui.scripts.process_actions.materialize_raw_layers"), patch(
-            "gui.scripts.process_actions.harmonization_status", return_value=status
+            "gui.scripts.process_actions.harmonization_status_from_disk",
+            return_value=status,
         ):
             process_actions.run_processing(p)
     text = caplog.text.lower()
@@ -118,7 +120,8 @@ def test_run_processing_only_passes_pending_keys():
     p.base_raster = MagicMock(name="base")
     status = SimpleNamespace(pending=["new_layer"], current=["old_a", "old_b"])
     with patch("gui.scripts.process_actions.materialize_raw_layers"), patch(
-        "gui.scripts.process_actions.harmonization_status", return_value=status
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
     ):
         out = process_actions.run_processing(p)
 
@@ -134,7 +137,10 @@ def test_run_processing_skips_the_bulk_calls_when_nothing_is_pending():
     status = SimpleNamespace(pending=[], current=["old_a"])
     with patch(
         "gui.scripts.process_actions.materialize_raw_layers", return_value=[]
-    ), patch("gui.scripts.process_actions.harmonization_status", return_value=status):
+    ), patch(
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
+    ):
         out = process_actions.run_processing(p)
 
     assert p.reproject_keys is None
@@ -155,7 +161,10 @@ def test_run_processing_saves_even_when_nothing_was_pending_or_downloaded():
     status = SimpleNamespace(pending=[], current=["old_a"])
     with patch(
         "gui.scripts.process_actions.materialize_raw_layers", return_value=[]
-    ), patch("gui.scripts.process_actions.harmonization_status", return_value=status):
+    ), patch(
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
+    ):
         process_actions.run_processing(p)
 
     assert p.saved is True
@@ -174,7 +183,10 @@ def test_run_processing_saves_materialization_even_with_nothing_pending():
     with patch(
         "gui.scripts.process_actions.materialize_raw_layers",
         return_value=["altitude"],
-    ), patch("gui.scripts.process_actions.harmonization_status", return_value=status):
+    ), patch(
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
+    ):
         process_actions.run_processing(p)
 
     assert p.saved is True
@@ -190,7 +202,7 @@ def test_run_processing_status_is_computed_after_downloading():
         "gui.scripts.process_actions.materialize_raw_layers",
         side_effect=lambda proj, **kw: calls.append("materialize"),
     ), patch(
-        "gui.scripts.process_actions.harmonization_status",
+        "gui.scripts.process_actions.harmonization_status_from_disk",
         side_effect=lambda proj: (
             calls.append("status"),
             SimpleNamespace(pending=["x"], current=[]),
@@ -208,7 +220,8 @@ def test_run_processing_logs_both_counts(caplog):
     status = SimpleNamespace(pending=["new_layer"], current=["old_a", "old_b"])
     with caplog.at_level(logging.INFO, logger="spatial_risk"):
         with patch("gui.scripts.process_actions.materialize_raw_layers"), patch(
-            "gui.scripts.process_actions.harmonization_status", return_value=status
+            "gui.scripts.process_actions.harmonization_status_from_disk",
+            return_value=status,
         ):
             process_actions.run_processing(p)
     # The exact rendered message, not "a 1 and a 2 appear somewhere": caplog.text
@@ -223,7 +236,8 @@ def test_run_processing_keys_restricts_download_and_harmonization():
     p.base_raster = MagicMock(name="base")
     status = SimpleNamespace(pending=["a", "b"], current=["c"])
     with patch("gui.scripts.process_actions.materialize_raw_layers") as mat, patch(
-        "gui.scripts.process_actions.harmonization_status", return_value=status
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
     ):
         out = process_actions.run_processing(p, keys=["b", "c"])
 
@@ -241,7 +255,8 @@ def test_run_processing_keys_with_nothing_pending_saves_and_skips():
     p.base_raster = MagicMock(name="base")
     status = SimpleNamespace(pending=["a"], current=["c"])
     with patch("gui.scripts.process_actions.materialize_raw_layers"), patch(
-        "gui.scripts.process_actions.harmonization_status", return_value=status
+        "gui.scripts.process_actions.harmonization_status_from_disk",
+        return_value=status,
     ):
         out = process_actions.run_processing(p, keys=["c"])
 

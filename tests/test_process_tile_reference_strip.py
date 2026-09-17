@@ -7,6 +7,7 @@ states the current choice and opens the form on demand — the shape of Step 2,
 whose variable form is likewise a dialog.
 """
 
+import threading
 import time
 from pathlib import Path
 
@@ -14,6 +15,9 @@ import ipyvuetify as vw
 import pytest
 import reacton
 import solara
+from pysepal.solara.notifications.bus import NotificationBus
+from pysepal.solara.notifications.notifier import Notifier
+from pysepal.solara.notifications.state import ToastType
 
 from gui.i18n import t
 from gui.scripts import process_actions
@@ -25,6 +29,19 @@ from spatialrisk.variables.local_raster_var import LocalRasterVar
 Project._ensure_model_schemas()
 
 STRIP_CLASS = "sr-reference-strip"
+
+
+@pytest.fixture(autouse=True)
+def _reference_claim_never_outlives_its_test():
+    """``reference_inflight`` is module-level state shared by every test here.
+
+    A worker that failed to release it — or a test that failed before its own
+    wait — would refuse the *next* test's submit, turning one flake into a
+    confusing multi-test failure somewhere else. Each test still asserts the
+    release on its own terms; this only stops the damage from spreading.
+    """
+    yield
+    process_tile.reference_inflight.release("reference")
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +112,16 @@ def _settle(rc, timeout: float = 5.0):
         time.sleep(0.02)
 
 
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    """Poll ``predicate`` until it holds — worker threads land asynchronously."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
+
+
 def _texts(rc):
     """Every string leaf in render order (``rc.find`` does not descend cells)."""
     out = []
@@ -136,6 +163,20 @@ def _btn_by_label(rc, label):
     hits = [b for b in rc.find(vw.Btn).widgets if label in list(_leaves(b))]
     assert hits, f"no button labelled {label!r}"
     return hits[0]
+
+
+def _submit_reference(rc, epsg_code="EPSG:5490"):
+    """Open the strip's form, fill it in and press Set."""
+    _strip(rc).click()
+    rc.find(vw.Select).widget.v_model = "fc_2020"
+    # Choosing the raster kicks off autofill_base on a worker thread; let it
+    # land before grabbing widget refs it would re-render out from under.
+    _settle(rc)
+    epsg, resolution = rc.find(vw.TextField).widgets[:2]
+    epsg.v_model = epsg_code
+    resolution.v_model = "30"
+    _settle(rc)
+    _btn_by_label(rc, t("tiles.process.set_base_button")).click()
 
 
 def _reference_dialog(rc):
@@ -183,31 +224,204 @@ def test_the_form_is_behind_the_strip_not_in_the_tile_body():
         rc.close()
 
 
-def test_submitting_the_dialog_sets_the_reference_from_the_form_values(monkeypatch):
-    """The dialog's Set button runs the real action with what the user typed."""
+def test_submitting_the_dialog_warps_off_the_render_thread(monkeypatch):
+    """The Set button hands the form values to a worker and returns at once.
+
+    ``set_base_raster`` runs a full GDAL warp. Solara widget callbacks run
+    inside ``process_kernel_messages`` under the session's context lock, so
+    doing it inline froze the whole UI for its duration. The stub blocks until
+    this test lets it go: the click returning while it is still inside the warp
+    is the property, and the strip must say so meanwhile.
+    """
     calls = []
+    started, release = threading.Event(), threading.Event()
+
+    def _slow_set_base(p, key, epsg, res, auto_save=True):
+        calls.append((key, epsg, res, auto_save))
+        started.set()
+        release.wait(5.0)
+
+    monkeypatch.setattr(process_actions, "set_base_raster", _slow_set_base)
+    # The project is still the open one, so the worker goes on to save it —
+    # Project.save() would create a real project folder under the data root.
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
+    rc = _render(_project(with_base=False))
+    try:
+        _submit_reference(rc)
+
+        # The click has already returned; the warp is still running.
+        assert started.wait(5.0), "the warp never reached a worker thread"
+        # auto_save=False: the worker checks the project is still the open one
+        # before anything is written to disk.
+        assert calls == [("fc_2020", "EPSG:5490", 30.0, False)]
+        _settle(rc)
+        assert t("tiles.process.reference_pending") in list(_leaves(_strip(rc)))
+        assert rc.find(vw.ProgressLinear).widgets, "no progress bar while warping"
+    finally:
+        release.set()
+        # Let the worker release its in-flight key: it is module-level, so a
+        # thread still holding it would refuse the next test's submit. Recorded
+        # here and asserted after the block: an ``assert`` inside ``finally``
+        # replaces the real exception with its own and skips the ``rc.close()``
+        # below it, leaking a render context on top of everything else.
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
+        rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
+
+
+def test_the_strip_stops_inviting_a_change_while_a_warp_runs(monkeypatch):
+    """The strip is the only way into the form, so it closes while warping.
+
+    A country-scale warp takes minutes. Leaving the strip live would invite a
+    correction the app cannot apply — the claim is already taken, so that
+    submit could only be refused. Disabling the one entry point is the honest
+    gate, and the pending line on the strip itself says why. It must come back
+    once the warp lands, or the reference becomes unchangeable for the session.
+    """
+    release = threading.Event()
     monkeypatch.setattr(
         process_actions,
         "set_base_raster",
-        lambda p, key, epsg, res: calls.append((key, epsg, res)),
+        lambda p, key, epsg, res, auto_save=True: release.wait(5.0),
     )
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
     rc = _render(_project(with_base=False))
     try:
-        _strip(rc).click()
-        rc.find(vw.Select).widget.v_model = "fc_2020"
-        # Choosing the raster kicks off autofill_base on a worker thread; let
-        # it land before grabbing widget refs it would re-render out from under.
+        assert _strip(rc).disabled is False, "the strip starts open for business"
+        _submit_reference(rc)
+        assert _wait_until(lambda: "reference" in process_tile.reference_inflight)
         _settle(rc)
-        epsg, resolution = rc.find(vw.TextField).widgets[:2]
-        epsg.v_model = "EPSG:5490"
-        resolution.v_model = "30"
-        _settle(rc)
+        assert _strip(rc).disabled is True, "the strip still invites a change"
 
-        _btn_by_label(rc, t("tiles.process.set_base_button")).click()
-
-        assert calls == [("fc_2020", "EPSG:5490", 30.0)]
+        release.set()
+        assert _wait_until(
+            lambda: _strip(rc).disabled is False
+        ), "the strip never re-opened after the warp landed"
     finally:
+        release.set()
+        # Asserted after the block, never inside ``finally`` — see the comment
+        # in test_submitting_the_dialog_warps_off_the_render_thread.
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
         rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
+
+
+def _row_hammers(rc):
+    """The per-row harmonize buttons (the bulk one carries a label as well)."""
+    label = t("tiles.process.harmonize_all_button")
+    return [
+        b
+        for b in rc.find(vw.Btn).widgets
+        if "mdi-hammer" in list(_leaves(b)) and label not in list(_leaves(b))
+    ]
+
+
+def test_the_row_actions_close_while_a_warp_runs(monkeypatch):
+    """P3 disables the Create button *and the row actions* for the duration.
+
+    The strip and Harmonize-all were gated; the per-row hammer was not, and it
+    is a window this branch opened — before the warp moved off the websocket
+    loop the frozen UI made the click impossible. Pressing it during a
+    country-scale warp starts a second GDAL job against a ``p.base_raster`` the
+    reference worker is about to swap, and races two ``Project.save()`` calls
+    on the same object. It must come back once the warp lands.
+    """
+    monkeypatch.setattr(
+        process_tile,
+        "harmonization_status",
+        lambda p: HarmonizationStatus(pending=list(p.raw_variables), current=[]),
+    )
+    release = threading.Event()
+    monkeypatch.setattr(
+        process_actions,
+        "set_base_raster",
+        lambda p, key, epsg, res, auto_save=True: release.wait(5.0),
+    )
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
+    # With a reference already set — the row hammer is dead without one anyway,
+    # and re-pointing the reference of a project that has layers is exactly the
+    # situation where a row click can land mid-warp.
+    rc = _render(_project())
+    try:
+        hammers = _row_hammers(rc)
+        assert hammers, "no per-row harmonize button to gate"
+        assert not any(b.disabled for b in hammers), "the row action starts live"
+
+        _submit_reference(rc)
+        assert _wait_until(lambda: "reference" in process_tile.reference_inflight)
+        _settle(rc)
+        assert all(
+            b.disabled for b in _row_hammers(rc)
+        ), "a row harmonize stayed pressable while the reference was being warped"
+
+        release.set()
+        assert _wait_until(
+            lambda: not any(b.disabled for b in _row_hammers(rc))
+        ), "the row actions never came back after the warp landed"
+    finally:
+        release.set()
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
+        rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
+
+
+def test_a_second_submit_is_refused_out_loud_not_dropped(monkeypatch):
+    """One warp at a time — and the user hears about the one that was refused.
+
+    ``disabled=`` is a render-time prop and reaches the browser a round-trip
+    after the claim, so a click can still get the form open mid-warp. That is
+    the dangerous path: ``CreationDialog.do_launch`` closes the dialog for any
+    launch that returns, so a silent refusal is indistinguishable from a
+    successful submit and the user walks away believing their corrected EPSG
+    applied. The claim must hold AND the refusal must be audible.
+    """
+    calls = []
+    release = threading.Event()
+    bus = NotificationBus()
+    monkeypatch.setattr(process_tile, "use_notifications", lambda: Notifier(bus))
+
+    def _slow_set_base(p, key, epsg, res, auto_save=True):
+        calls.append(epsg)
+        release.wait(5.0)
+
+    monkeypatch.setattr(process_actions, "set_base_raster", _slow_set_base)
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
+    rc = _render(_project(with_base=False))
+    try:
+        _submit_reference(rc, epsg_code="EPSG:5490")
+        assert _wait_until(lambda: calls == ["EPSG:5490"]), "the first warp never ran"
+
+        _submit_reference(rc, epsg_code="EPSG:32721")  # the user's correction
+
+        time.sleep(0.2)  # a second worker would have appended by now
+        assert calls == ["EPSG:5490"], f"the correction started a warp too: {calls}"
+        warned = [
+            toast.message
+            for toast in bus.toasts.value
+            if toast.type is ToastType.WARNING
+        ]
+        assert (
+            t("tiles.process.reference_already_running") in warned
+        ), f"the refusal was silent; toasts were {bus.toasts.value}"
+    finally:
+        release.set()
+        # Asserted after the block, never inside ``finally`` — see the comment
+        # in test_submitting_the_dialog_warps_off_the_render_thread.
+        released = _wait_until(
+            lambda: "reference" not in process_tile.reference_inflight
+        )
+        rc.close()
+    assert released, "the warp worker never gave its in-flight key back"
 
 
 def test_the_dialog_refuses_an_empty_form_instead_of_silently_disabling():
