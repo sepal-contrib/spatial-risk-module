@@ -321,6 +321,11 @@ def HarmonizationVariableList(
                 "cells": [
                     {"type": "text", "value": var.name, "chips": name_chips},
                     {"type": "chip", "value": data_type_label, "color": "primary"},
+                    {
+                        "type": "text",
+                        "value": str(var.year) if getattr(var, "year", None) else "—",
+                        "muted": True,
+                    },
                     {"type": "status", "status": row_status},
                 ],
                 "actions": actions,
@@ -334,10 +339,14 @@ def HarmonizationVariableList(
                 "label": t("widgets.variable_list.source_col_name"),
                 "width": "minmax(0,2fr)",
             },
-            {"label": t("widgets.variable_list.source_col_type"), "width": "64px"},
+            # Lean fixed widths: the panel is ~450px wide and the Name column
+            # takes whatever is left, so every fixed px here is a truncated
+            # name (see list-grid alignment: no max-content columns).
+            {"label": t("widgets.variable_list.source_col_type"), "width": "58px"},
+            {"label": t("widgets.variable_list.source_col_year"), "width": "40px"},
             {
                 "label": t("widgets.variable_list.harmonization_col_status"),
-                "width": "118px",
+                "width": "108px",
             },
         ],
         rows=rows,

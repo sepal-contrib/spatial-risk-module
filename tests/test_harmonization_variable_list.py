@@ -25,14 +25,14 @@ def _named(type_name, **attrs):
     return type(type_name, (), attrs)()
 
 
-def _raster(name, **extra):
-    return _named("LocalRasterVar", name=name, data_type="raster", year=None, **extra)
+def _raster(name, year=None, **extra):
+    return _named("LocalRasterVar", name=name, data_type="raster", year=year, **extra)
 
 
 def _project():
     p = SimpleNamespace(
         raw_variables={
-            "fc": _raster("fc", path="/x/fc.tif"),
+            "fc": _raster("fc", path="/x/fc.tif", year=2020),
             "roads": _named(
                 "LocalVectorVar",
                 name="roads",
@@ -49,7 +49,8 @@ def _project():
                 active=False,
             ),
         },
-        processed_variables={"fc": _raster("fc", path="/x/out/fc.tif")},
+        # Output keys carry the year (``output_key``): fc_2020, not fc.
+        processed_variables={"fc_2020": _raster("fc", path="/x/out/fc.tif", year=2020)},
         base_raster=None,
     )
     return p
@@ -143,6 +144,9 @@ def test_lists_every_harmonizable_variable_with_its_status():
         names = _texts(rc)
         assert "fc" in names and "roads" in names and "rivers" in names
         assert "inactive" not in names  # Run never touches an inactive vector
+        # A temporal layer repeats its name per year — the year column is
+        # what tells the rows apart (same as the source list in Step 2).
+        assert names.count("2020") == 1
         assert _status_labels(rc) == [
             t("widgets.product_table.status_harmonized"),
             t("widgets.product_table.status_pending"),
@@ -167,7 +171,7 @@ def test_harmonize_button_is_live_only_where_there_is_work():
         ]
         assert len(trash) == 1
         trash[0].click()
-        assert calls[-1] == ("remove", "fc")
+        assert calls[-1] == ("remove", "fc_2020")  # the OUTPUT key
     finally:
         rc.close()
 
