@@ -110,6 +110,45 @@ def base_raster_resolution(var) -> "float | None":
     return float(xres)
 
 
+def validate_projection(epsg: str, resolution: str):
+    """Check a reference CRS and pixel size before any raster work starts.
+
+    Returns ``(blocking_error, warning)`` as sentinel keys, or ``None`` for
+    either. Kept free of ``t()`` so the module stays Solara-free and the rules
+    stay unit-testable; the caller maps the sentinels to messages.
+
+    ``pyproj`` is imported lazily like every other geo dependency in this
+    module, and is already present via rasterio/rioxarray.
+    """
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    text = (epsg or "").strip()
+    if not text:
+        return "need_epsg", None
+    # The field's placeholder invites a bare code and `auto_utm_epsg` already
+    # normalises its own output this way, as does `LocalRasterVar.reproject`.
+    # pyproj does not reliably parse a bare digit string, so prefix it here and
+    # keep the three call sites agreeing on what a valid entry looks like.
+    normalised = text if ":" in text else f"EPSG:{text}"
+    try:
+        crs = CRS.from_user_input(normalised)
+    except (CRSError, ValueError, TypeError):
+        return "bad_epsg", None
+
+    try:
+        metres = float(str(resolution).strip())
+    except (TypeError, ValueError):
+        return "bad_resolution", None
+    if metres <= 0:
+        return "bad_resolution", None
+
+    # Resolution is metres throughout (auto_utm_epsg returns UTM;
+    # base_raster_resolution documents "(m)"), so a geographic CRS silently
+    # reinterprets the number as degrees. Worth saying; not worth blocking.
+    return None, ("geographic_crs" if crs.is_geographic else None)
+
+
 def set_base_raster(project, base_key: str, epsg: str, resolution: float):
     """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base."""
     base = project.raw_variables[base_key]
