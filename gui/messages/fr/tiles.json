@@ -25,7 +25,18 @@
       "error_base_raster_reset": "Le raster de référence a été réinitialisé car sa couche source '{name}' a changé — redéfinissez-le à l'étape Harmonisation.",
       "error_save_variable": "Impossible d'enregistrer la variable : {exc}",
       "error_base_raster_removed": "Le raster de référence a été réinitialisé car sa couche source '{name}' a été retirée — redéfinissez-le à l'étape Harmonisation.",
-      "error_toggle_map": "Impossible d'afficher '{key}' sur la carte : {exc}"
+      "error_toggle_map": "Impossible d'afficher '{key}' sur la carte : {exc}",
+      "confirm_overwrite_title": "Certaines couches sont déjà téléchargées",
+      "confirm_overwrite_title_one": "Cette couche est déjà téléchargée",
+      "confirm_overwrite_message": "{count} des {total} couches ont déjà un fichier dans ce projet :",
+      "confirm_overwrite_message_one": "Un fichier pour « {name} » existe déjà dans ce projet :",
+      "confirm_overwrite_note": "Retélécharger les remplace. Les conserver ne télécharge que les {remaining} autres couches.",
+      "confirm_overwrite_note_one_left": "Retélécharger les remplace. Les conserver ne télécharge que la couche restante.",
+      "confirm_overwrite_note_one": "Retélécharger le remplace.",
+      "confirm_overwrite_keep": "Conserver l'existant",
+      "confirm_overwrite_redownload": "Retélécharger",
+      "notify_files_deleted": "{count} fichier(s) supprimé(s) du disque ({size}).",
+      "error_delete_files": "Impossible de supprimer les fichiers : {exc}"
     },
     "process": {
       "header": "### Harmonisation",

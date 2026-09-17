@@ -25,7 +25,18 @@
       "error_base_raster_reset": "Reference raster was reset because its source layer '{name}' changed — re-set it in the Harmonization step.",
       "error_save_variable": "Could not save variable: {exc}",
       "error_base_raster_removed": "Reference raster was reset because its source layer '{name}' was removed — re-set it in the Harmonization step.",
-      "error_toggle_map": "Could not toggle '{key}' on map: {exc}"
+      "error_toggle_map": "Could not toggle '{key}' on map: {exc}",
+      "confirm_overwrite_title": "Some layers are already downloaded",
+      "confirm_overwrite_title_one": "This layer is already downloaded",
+      "confirm_overwrite_message": "{count} of the {total} layers already have a file in this project:",
+      "confirm_overwrite_message_one": "A file for '{name}' is already in this project:",
+      "confirm_overwrite_note": "Re-downloading replaces them. Keeping them downloads only the other {remaining} layers.",
+      "confirm_overwrite_note_one_left": "Re-downloading replaces them. Keeping them downloads only the remaining layer.",
+      "confirm_overwrite_note_one": "Re-downloading replaces it.",
+      "confirm_overwrite_keep": "Keep existing",
+      "confirm_overwrite_redownload": "Re-download",
+      "notify_files_deleted": "Deleted {count} file(s) from disk ({size}).",
+      "error_delete_files": "Could not delete the files: {exc}"
     },
     "process": {
       "header": "### Harmonization",

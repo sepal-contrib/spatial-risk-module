@@ -25,7 +25,18 @@
       "error_base_raster_reset": "El ráster de referencia se restableció porque su capa fuente '{name}' cambió — volvé a configurarlo en el paso Armonización.",
       "error_save_variable": "No se pudo guardar la variable: {exc}",
       "error_base_raster_removed": "El ráster de referencia se restableció porque su capa fuente '{name}' fue eliminada — volvé a configurarlo en el paso Armonización.",
-      "error_toggle_map": "No se pudo alternar '{key}' en el mapa: {exc}"
+      "error_toggle_map": "No se pudo alternar '{key}' en el mapa: {exc}",
+      "confirm_overwrite_title": "Algunas capas ya están descargadas",
+      "confirm_overwrite_title_one": "Esta capa ya está descargada",
+      "confirm_overwrite_message": "{count} de las {total} capas ya tienen un archivo en este proyecto:",
+      "confirm_overwrite_message_one": "Ya hay un archivo de '{name}' en este proyecto:",
+      "confirm_overwrite_note": "Volver a descargar los reemplaza. Conservarlos descarga solo las otras {remaining} capas.",
+      "confirm_overwrite_note_one_left": "Volver a descargar los reemplaza. Conservarlos descarga solo la capa restante.",
+      "confirm_overwrite_note_one": "Volver a descargarla la reemplaza.",
+      "confirm_overwrite_keep": "Conservar existentes",
+      "confirm_overwrite_redownload": "Volver a descargar",
+      "notify_files_deleted": "Se eliminaron {count} archivo(s) del disco ({size}).",
+      "error_delete_files": "No se pudieron eliminar los archivos: {exc}"
     },
     "process": {
       "header": "### Armonización",

@@ -15,7 +15,10 @@ def test_variables_tile_confirms_remove():
     src = inspect.getsource(VariablesTile)
     assert "ConfirmDialog" in src
     # The list's remove button opens the dialog rather than deleting directly.
-    assert "on_remove=set_pending_remove" in src
+    # ``_ask_remove`` is set_pending_remove plus the reset of the "delete the
+    # files too" tick — see test_variable_delete_files_wiring.
+    assert "on_remove=_ask_remove" in src
+    assert "set_pending_remove(key)" in src
 
 
 def test_dataset_tile_confirms_remove():

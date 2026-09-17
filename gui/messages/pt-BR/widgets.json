@@ -170,6 +170,13 @@
     "creation_dialog": {
       "replace_title": "Substituir o existente?",
       "replace_message": "'{key}' já existe e será substituído. Continuar?"
+    },
+    "file_cleanup": {
+      "checkbox_one": "Excluir também o arquivo do disco ({size})",
+      "checkbox_other": "Excluir também os {n} arquivos do disco ({size})",
+      "blocked_outside": "O arquivo está fora da pasta deste projeto ({path}) e será mantido: apenas arquivos criados pelo aplicativo são excluídos.",
+      "blocked_shared": "O arquivo também é usado por '{name}' e será mantido.",
+      "file_line": "{path} · {size} · {date}"
     }
   }
 }

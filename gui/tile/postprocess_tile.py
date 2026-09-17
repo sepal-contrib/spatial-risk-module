@@ -7,7 +7,8 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
-from gui.scripts.notify_bridge import tracked_job
+from gui.scripts.file_prompts import DeletePrompt, delete_prompt
+from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
 from gui.scripts.solara_threads import publish_if_current, to_thread_in_context
 from gui.store.project_writers import writing
 from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
@@ -15,6 +16,7 @@ from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.derived_layer_dialog import CHANGE_OPS, DerivedLayerDialog
 from gui.widget.help import InfoButton
 from gui.widget.variable_list import DerivedVariableList
+from spatialrisk.variables.file_cleanup import FilePlan
 
 logger = logging.getLogger("spatial_risk")
 
@@ -38,12 +40,30 @@ def PostProcessTile(project, map_=None, legend_port=None):
         project, map_, notifications, legend_port=legend_port
     )
     pending_remove, set_pending_remove = solara.use_state(None)
+    # Reset for every removal — see the same state in Step 3.
+    delete_files, set_delete_files = solara.use_state(False)
 
     p = project.value
 
-    def _do_remove(key: str):
-        """Unregister a derived layer (the raster stays on disk)."""
-        if process_actions.remove_processed_variable(p, key, map_, legend_port):
+    def _ask_remove(key: str):
+        set_delete_files(False)
+        set_pending_remove(key)
+
+    def _do_remove(key: str, also_delete: bool = False):
+        """Unregister a derived layer; optionally delete its raster too."""
+        try:
+            removed = process_actions.remove_processed_variable(
+                p, key, map_, legend_port, delete_file=also_delete
+            )
+        except Exception as exc:
+            # The entry is gone either way (unlinked under a finally there).
+            logger.exception("deleting the files of %s failed", key)
+            notifications.error(
+                t("tiles.variables.error_delete_files", exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+            removed = True
+        if removed:
             project.set(p.model_copy())
 
     @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
@@ -143,17 +163,30 @@ def PostProcessTile(project, map_=None, legend_port=None):
             keys=process_actions.postprocess_output_keys(p),
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
-            on_remove=set_pending_remove,
+            on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
         )
 
     DerivedLayerDialog(project=project, open_=dialog_open, on_submit=on_submit)
+    _files = (
+        delete_prompt(p, pending_remove)
+        if (p is not None and pending_remove)
+        else DeletePrompt(plan=FilePlan())
+    )
     ConfirmDialog(
         open=pending_remove is not None,
         on_cancel=lambda: set_pending_remove(None),
-        on_confirm=lambda: (_do_remove(pending_remove), set_pending_remove(None)),
+        on_confirm=lambda: (
+            _do_remove(pending_remove, delete_files),
+            set_pending_remove(None),
+        ),
         title=t("tiles.postprocess.confirm_remove_title"),
         message=t(
             "tiles.postprocess.confirm_remove_message", name=pending_remove or ""
         ),
         confirm_label=t("common.remove"),
+        checkbox_label=_files.checkbox_label,
+        checkbox_value=delete_files,
+        on_checkbox=set_delete_files,
+        details=_files.details,
+        note=_files.note,
     )

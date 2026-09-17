@@ -170,6 +170,13 @@
     "creation_dialog": {
       "replace_title": "Replace existing?",
       "replace_message": "'{key}' already exists and will be replaced. Continue?"
+    },
+    "file_cleanup": {
+      "checkbox_one": "Also delete the file from disk ({size})",
+      "checkbox_other": "Also delete the {n} files from disk ({size})",
+      "blocked_outside": "The file is outside this project's folder ({path}) and will be kept — only files the app created are deleted.",
+      "blocked_shared": "The file is also used by '{name}' and will be kept.",
+      "file_line": "{path} · {size} · {date}"
     }
   }
 }

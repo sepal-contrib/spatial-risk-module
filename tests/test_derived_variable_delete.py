@@ -23,7 +23,7 @@ def test_process_tile_lists_harmonized_vars_with_remove():
     from gui.tile.process_tile import ProcessTile
 
     src = _src(ProcessTile)
-    assert "on_remove=set_pending_remove" in src  # opens the dialog, never deletes
+    assert "on_remove=_ask_remove" in src  # opens the dialog, never deletes
     assert "ConfirmDialog" in src
     assert "remove_processed_variable" in src  # the layer goes with the entry
 
@@ -33,7 +33,7 @@ def test_postprocess_tile_lists_derived_vars_with_remove():
     from gui.tile.postprocess_tile import PostProcessTile
 
     src = _src(PostProcessTile)
-    assert "on_remove=set_pending_remove" in src
+    assert "on_remove=_ask_remove" in src
     assert "ConfirmDialog" in src
     assert "remove_processed_variable" in src
 
