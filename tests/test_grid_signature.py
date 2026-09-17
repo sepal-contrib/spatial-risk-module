@@ -1,6 +1,9 @@
 """The stored grid signature: formatting, stability, and persistence."""
 
 from spatialrisk.harmonization import geobox_signature
+from spatialrisk.project import Project
+
+Project._ensure_model_schemas()
 
 
 class _Shape:
