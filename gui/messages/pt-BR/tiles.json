@@ -36,6 +36,7 @@
       "reference_label": "REFERÊNCIA",
       "reference_unset": "Não definida — escolha um raster e um CRS",
       "reference_summary": "{name} · {crs} · {resolution} m",
+      "reference_pending": "Definindo a grade de referência…",
       "reference_dialog_title": "Referência e projeção",
       "base_raster_label": "Raster de referência",
       "base_raster_hint": "Define a grade de análise (SRC, tamanho do pixel, extensão) à qual todas as camadas são alinhadas.",

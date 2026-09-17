@@ -149,11 +149,18 @@ def validate_projection(epsg: str, resolution: str):
     return None, ("geographic_crs" if crs.is_geographic else None)
 
 
-def set_base_raster(project, base_key: str, epsg: str, resolution: float):
-    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base."""
+def set_base_raster(
+    project, base_key: str, epsg: str, resolution: float, auto_save: bool = True
+):
+    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base.
+
+    ``auto_save=False`` leaves the project unsaved so a background caller can
+    check the project is still the open one before writing it to disk — see the
+    reference worker in ``process_tile``.
+    """
     base = project.raw_variables[base_key]
     reprojected = base.reproject(target_epsg=epsg, resolution=resolution)
-    reprojected.use_as_base_raster()
+    reprojected.use_as_base_raster(auto_save=auto_save)
     return reprojected
 
 

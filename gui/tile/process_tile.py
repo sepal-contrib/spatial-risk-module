@@ -9,8 +9,13 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
-from gui.scripts.solara_threads import publish_if_current, to_thread_in_context
+from gui.scripts.solara_threads import (
+    publish_if_current,
+    spawn_in_context,
+    to_thread_in_context,
+)
 from gui.scripts.variable_identity import base_raster_key, is_base_raster
 from gui.store.project_writers import writing
 from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
@@ -26,6 +31,9 @@ from spatialrisk.harmonization import (
 )
 
 logger = logging.getLogger("spatial_risk")
+
+# Only one reference warp at a time (see InflightKeys).
+reference_inflight = InflightKeys(key="reference_inflight")
 
 
 def base_sig_of(p):
@@ -78,7 +86,7 @@ STRIP_CSS = """
 
 
 @solara.component
-def ReferenceStrip(project, on_open):
+def ReferenceStrip(project, on_open, pending=False):
     """Clickable statement of the current reference grid; opens the form.
 
     It carries the whole choice — raster, CRS and pixel size — because it
@@ -86,10 +94,17 @@ def ReferenceStrip(project, on_open):
     Unset, it prompts instead, in warning colours: that is also what tells the
     user why Run is disabled, so no separate "set a reference first" line is
     needed.
+
+    ``pending`` is True while the reference warp runs on its worker thread: the
+    strip then says so and carries a progress bar, because the old reference it
+    still holds is about to be replaced and the UI is otherwise unchanged (the
+    warp no longer freezes it, so nothing else signals that work is happening).
     """
     p = project.value
     base = p.base_raster if p is not None else None
-    if base is not None:
+    if pending:
+        summary = t("tiles.process.reference_pending")
+    elif base is not None:
         summary = t(
             "tiles.process.reference_summary",
             name=base.name,
@@ -136,6 +151,8 @@ def ReferenceStrip(project, on_open):
                 )
             ],
         )
+        if pending:
+            solara.ProgressLinear(True)
 
 
 @solara.component
@@ -335,13 +352,47 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         return t(_VALIDATION_MESSAGES[error], epsg=epsg.strip())
 
     def on_set_base():
-        if p is None:
+        """Warp the chosen raster onto the new grid, off the websocket loop.
+
+        `set_base_raster` runs a full GDAL warp that writes a raster. Solara
+        widget callbacks run inside process_kernel_messages under the session's
+        context lock, so doing that here froze the whole UI for the duration.
+        All continuation work — the republish and the error toast — lives in the
+        worker, per gui/scripts/solara_threads.
+        """
+        if p is None or not reference_inflight.claim("reference"):
             return
+        # Safe on this thread: validate_reference() has already parsed it.
+        res = float(resolution)
+        key, code = base_key, epsg.strip()
+
+        def _worker():
+            try:
+                # auto_save=False is load-bearing: use_as_base_raster() saves by
+                # default, and publish_if_current can only stop the *reactive*
+                # publish. A worker that saved first would already have written a
+                # project the user switched away from or deleted mid-warp — and
+                # Project.save() recreates the folder it writes into. So check
+                # liveness first, then save.
+                process_actions.set_base_raster(p, key, code, res, auto_save=False)
+                if publish_if_current(project, p):
+                    p.save()
+            except Exception as exc:
+                logger.exception("setting the reference raster failed")
+                notifications.error(
+                    t("tiles.process.error_set_base", exc=exc),
+                    timeout=ERROR_TOAST_TIMEOUT,
+                )
+            finally:
+                reference_inflight.release("reference")
+
         try:
-            res = float(resolution)
-            process_actions.set_base_raster(p, base_key, epsg.strip(), res)
-            project.set(p.model_copy())
+            spawn_in_context(_worker)
         except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread that
+            # never starts would hold it for the rest of the session.
+            reference_inflight.release("reference")
+            logger.exception("could not start the reference worker")
             notifications.error(
                 t("tiles.process.error_set_base", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
@@ -467,7 +518,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         # dialog and this states the choice. Everything below is the list you
         # actually work in — the shape of Step 2, whose variable form is
         # likewise a dialog.
-        ReferenceStrip(project=project, on_open=lambda: reference_open.set(True))
+        ReferenceStrip(
+            project=project,
+            on_open=lambda: reference_open.set(True),
+            pending="reference" in reference_inflight,
+        )
 
         # Everything in hint_key except processing.value: a run in flight must
         # keep the status it started from, not invalidate it.
@@ -566,7 +621,10 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # with every layer already on the reference grid a run rewrites
             # nothing, and the sentence that used to say so is gone, so the
             # button carries it — as Download-all does with no cloud layers left.
-            disabled=run_in_flight or not has_base or nothing_pending,
+            disabled=run_in_flight
+            or not has_base
+            or nothing_pending
+            or "reference" in reference_inflight,
         )
         if processing.value:
             solara.ProgressLinear(True)

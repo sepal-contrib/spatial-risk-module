@@ -36,6 +36,7 @@
       "reference_label": "RÉFÉRENCE",
       "reference_unset": "Non définie — choisissez un raster et un CRS",
       "reference_summary": "{name} · {crs} · {resolution} m",
+      "reference_pending": "Définition de la grille de référence…",
       "reference_dialog_title": "Référence et projection",
       "base_raster_label": "Raster de référence",
       "base_raster_hint": "Définit la grille d'analyse (SCR, taille de pixel, emprise) sur laquelle toutes les couches sont alignées.",

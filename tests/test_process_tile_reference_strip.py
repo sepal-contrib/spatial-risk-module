@@ -7,6 +7,7 @@ states the current choice and opens the form on demand — the shape of Step 2,
 whose variable form is likewise a dialog.
 """
 
+import threading
 import time
 from pathlib import Path
 
@@ -93,6 +94,16 @@ def _settle(rc, timeout: float = 5.0):
         stable = stable + 1 if snapshot == previous else 0
         previous = snapshot
         time.sleep(0.02)
+
+
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    """Poll ``predicate`` until it holds — worker threads land asynchronously."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def _texts(rc):
@@ -183,14 +194,28 @@ def test_the_form_is_behind_the_strip_not_in_the_tile_body():
         rc.close()
 
 
-def test_submitting_the_dialog_sets_the_reference_from_the_form_values(monkeypatch):
-    """The dialog's Set button runs the real action with what the user typed."""
+def test_submitting_the_dialog_warps_off_the_render_thread(monkeypatch):
+    """The Set button hands the form values to a worker and returns at once.
+
+    ``set_base_raster`` runs a full GDAL warp. Solara widget callbacks run
+    inside ``process_kernel_messages`` under the session's context lock, so
+    doing it inline froze the whole UI for its duration. The stub blocks until
+    this test lets it go: the click returning while it is still inside the warp
+    is the property, and the strip must say so meanwhile.
+    """
     calls = []
-    monkeypatch.setattr(
-        process_actions,
-        "set_base_raster",
-        lambda p, key, epsg, res: calls.append((key, epsg, res)),
-    )
+    started, release = threading.Event(), threading.Event()
+
+    def _slow_set_base(p, key, epsg, res, auto_save=True):
+        calls.append((key, epsg, res, auto_save))
+        started.set()
+        release.wait(5.0)
+
+    monkeypatch.setattr(process_actions, "set_base_raster", _slow_set_base)
+    # The project is still the open one, so the worker goes on to save it —
+    # Project.save() would create a real project folder under the data root.
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
     rc = _render(_project(with_base=False))
     try:
         _strip(rc).click()
@@ -205,8 +230,57 @@ def test_submitting_the_dialog_sets_the_reference_from_the_form_values(monkeypat
 
         _btn_by_label(rc, t("tiles.process.set_base_button")).click()
 
-        assert calls == [("fc_2020", "EPSG:5490", 30.0)]
+        # The click has already returned; the warp is still running.
+        assert started.wait(5.0), "the warp never reached a worker thread"
+        # auto_save=False: the worker checks the project is still the open one
+        # before anything is written to disk.
+        assert calls == [("fc_2020", "EPSG:5490", 30.0, False)]
+        _settle(rc)
+        assert t("tiles.process.reference_pending") in list(_leaves(_strip(rc)))
+        assert rc.find(vw.ProgressLinear).widgets, "no progress bar while warping"
     finally:
+        release.set()
+        # Let the worker release its in-flight key: it is module-level, so a
+        # thread still holding it would refuse the next test's submit.
+        assert _wait_until(lambda: "reference" not in process_tile.reference_inflight)
+        rc.close()
+
+
+def test_a_second_submit_is_dropped_while_the_first_warp_runs(monkeypatch):
+    """One reference warp at a time — two would fight over the same output.
+
+    The dialog's ``disabled=`` is a render-time prop and reaches the browser a
+    round-trip after the click, so the in-flight key is the real guard.
+    """
+    calls = []
+    release = threading.Event()
+
+    def _slow_set_base(p, key, epsg, res, auto_save=True):
+        calls.append(key)
+        release.wait(5.0)
+
+    monkeypatch.setattr(process_actions, "set_base_raster", _slow_set_base)
+    monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
+
+    rc = _render(_project(with_base=False))
+    try:
+        _strip(rc).click()
+        rc.find(vw.Select).widget.v_model = "fc_2020"
+        _settle(rc)
+        epsg, resolution = rc.find(vw.TextField).widgets[:2]
+        epsg.v_model = "EPSG:5490"
+        resolution.v_model = "30"
+        _settle(rc)
+
+        _btn_by_label(rc, t("tiles.process.set_base_button")).click()
+        assert _wait_until(lambda: calls == ["fc_2020"]), "the first warp never ran"
+        _btn_by_label(rc, t("tiles.process.set_base_button")).click()
+
+        time.sleep(0.2)  # a second worker would have appended by now
+        assert calls == ["fc_2020"], f"the second submit started a warp too: {calls}"
+    finally:
+        release.set()
+        assert _wait_until(lambda: "reference" not in process_tile.reference_inflight)
         rc.close()
 
 

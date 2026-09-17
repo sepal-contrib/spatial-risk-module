@@ -36,6 +36,7 @@
       "reference_label": "REFERENCIA",
       "reference_unset": "Sin definir — elegí un ráster y un CRS",
       "reference_summary": "{name} · {crs} · {resolution} m",
+      "reference_pending": "Estableciendo la cuadrícula de referencia…",
       "reference_dialog_title": "Referencia y proyección",
       "base_raster_label": "Ráster de referencia",
       "base_raster_hint": "Define la cuadrícula de análisis (CRS, tamaño de píxel, extensión) a la que se alinean las capas.",
