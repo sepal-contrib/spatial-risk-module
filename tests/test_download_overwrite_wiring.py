@@ -115,7 +115,9 @@ def _record_downloads(monkeypatch):
     """Replace the real export with a recorder; returns (calls, finished event)."""
     calls, done = [], threading.Event()
 
-    def _fake_materialize(project, keys=None, on_progress=None, overwrite=False):
+    def _fake_materialize(
+        project, keys=None, on_progress=None, overwrite=False, on_wait=None
+    ):
         calls.append({"keys": keys, "overwrite": overwrite})
         done.set()
         return []
