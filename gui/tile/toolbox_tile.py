@@ -301,6 +301,12 @@ def ToolboxTile(project, map_=None, sepal_client=None, legend_port=None):
             running_names=frozenset(
                 job["name"] for job in allocation_jobs.value if job.get("name")
             ),
+            # Rejected outright, so a second click cannot start a second run.
+            active_names=frozenset(
+                job["name"]
+                for job in allocation_jobs.value
+                if job.get("name") and job.get("status") == "running"
+            ),
             prefill=prefill,
         )
         AllocationDetailsDialog(

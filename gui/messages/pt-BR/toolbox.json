@@ -44,6 +44,7 @@
       "density_option_project": "Apenas os limites do projeto",
       "density_option_aoi": "Toda a área de interesse",
       "run": "Executar alocação",
+      "error_name_running": "Uma alocação chamada '{name}' está em execução — aguarde terminar ou escolha outro nome.",
       "running": "Alocando desmatamento…",
       "result_annual": "Anual",
       "result_total": "Período inteiro",

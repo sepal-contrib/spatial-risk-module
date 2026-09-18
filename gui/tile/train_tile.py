@@ -267,7 +267,19 @@ def TrainTile(project):
             confirm_label=t("common.delete"),
         )
 
-    ModelFormDialog(project=project, open_=dialog_open, on_submit=on_submit)
+    # A model registers only when its worker finishes, so p.models lags a
+    # launch; the dialog rejects the storage key of a run still in flight.
+    running_keys = frozenset(
+        _storage_key(j["model_type"], j["model_name"])
+        for j in train_jobs.value
+        if j.get("status") == "running"
+    )
+    ModelFormDialog(
+        project=project,
+        open_=dialog_open,
+        on_submit=on_submit,
+        running_keys=running_keys,
+    )
     ModelDetailsDialog(
         project=project, model_key=details_key, on_close=lambda: set_details_key(None)
     )

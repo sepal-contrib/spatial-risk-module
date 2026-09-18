@@ -44,6 +44,7 @@
       "density_option_project": "Limites du projet uniquement",
       "density_option_aoi": "Toute la zone d'intérêt",
       "run": "Lancer l'allocation",
+      "error_name_running": "Une allocation nommée '{name}' est en cours d'exécution — attendez la fin ou choisissez un autre nom.",
       "running": "Allocation de la déforestation…",
       "result_annual": "Annuel",
       "result_total": "Période entière",

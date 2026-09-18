@@ -107,6 +107,7 @@ def AllocationFormDialog(
     sepal_client=None,
     running_names=frozenset(),
     prefill=None,
+    active_names=frozenset(),
 ):
     """Collect the allocation inputs; hand a validated AllocationForm to on_launch.
 
@@ -125,6 +126,12 @@ def AllocationFormDialog(
             job was launched with (or None). While the dialog is open with a
             non-empty prefill, every field is seeded from it — this is how the
             list's edit action reopens a failed run.
+        active_names: frozenset — names of jobs still *running*. Unlike
+            running_names these are rejected outright: a second click while
+            the first launch is still going would otherwise start a second,
+            identical run (run keys never collide, so nothing else stops it).
+            Failed jobs are left out so the edit action can relaunch one under
+            its own name.
     """
     p = project.value
 
@@ -237,6 +244,9 @@ def AllocationFormDialog(
         )
 
     def validate():
+        pending_name = (name_value or "").strip()
+        if pending_name and pending_name in active_names:
+            return t("toolbox.allocation.error_name_running", name=pending_name)
         if custom_table and not defrate_override:
             # Silent fallback to auto-resolution would betray the visible mode.
             return "Choose the rate-table file, or switch back to automatic resolution."

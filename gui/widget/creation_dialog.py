@@ -118,6 +118,20 @@ def CreationDialog(
     """
     error, set_error = solara.use_state(None)
     pending_replace, set_pending_replace = solara.use_state(None)
+    # One launch per opening. Closing the dialog is a browser round-trip, so
+    # a second Create (or Replace) click queued behind the first is handled
+    # after it, with the form still valid — the reset re-suggests a valid
+    # name, and a job only registers its product when its worker finishes,
+    # so neither validate() nor will_replace() sees the first launch. A ref,
+    # not state: the second handler runs before any re-render could carry a
+    # new closure, so it has to read what the first handler wrote.
+    launched = solara.use_ref(False)
+
+    def _rearm():
+        if open_.value:
+            launched.current = False
+
+    solara.use_effect(_rearm, [open_.value])
 
     def close():
         set_error(None)
@@ -127,6 +141,9 @@ def CreationDialog(
             on_close()
 
     def do_launch():
+        if launched.current:
+            return
+        launched.current = True
         launch()
         close()
 

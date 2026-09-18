@@ -44,6 +44,7 @@
       "density_option_project": "Solo los límites del proyecto",
       "density_option_aoi": "Toda el área de interés",
       "run": "Ejecutar asignación",
+      "error_name_running": "Se está ejecutando una asignación llamada '{name}' — esperá a que termine o elegí otro nombre.",
       "running": "Asignando deforestación…",
       "result_annual": "Anual",
       "result_total": "Periodo completo",
