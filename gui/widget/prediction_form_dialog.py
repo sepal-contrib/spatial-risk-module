@@ -67,7 +67,12 @@ def _value_scale_items():
 
 @solara.component
 def PredictionFormDialog(
-    project, open_, on_submit: Callable[[dict], None], sepal_client=None, prefill=None
+    project,
+    open_,
+    on_submit: Callable[[dict], None],
+    sepal_client=None,
+    prefill=None,
+    running_names=frozenset(),
 ):
     """Prediction form in the shared CreationDialog frame.
 
@@ -87,6 +92,11 @@ def PredictionFormDialog(
             dict (or None). While the dialog is open with a non-empty prefill,
             the fields are seeded from it — this is how a failed run reopens
             for editing. The tile owns clearing it before a fresh "New" open.
+        running_names: names of prediction jobs (runs and imports) still in
+            flight. A prediction registers only when its worker finishes, so
+            ``project.predictions`` lags a launch — without this, the same
+            name resubmitted while the first run is going would skip the
+            overwrite confirm (or, for an import, write a second raster).
     """
     p = project.value
 
@@ -249,6 +259,10 @@ def PredictionFormDialog(
     def validate():
         if p is None:
             return t("tiles.inference.error_no_project")
+        # First: nothing else the user fixes can make a running name free.
+        pending_name = name_value.strip() if source == "import" else clean
+        if pending_name and pending_name in running_names:
+            return t("tiles.inference.error_name_running", name=pending_name)
         if source == "import":
             # First, because nothing the user types in this form can fix it:
             # every import is warped onto the base raster's geobox, so without

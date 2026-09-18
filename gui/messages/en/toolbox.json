@@ -39,6 +39,7 @@
       "density_option_project": "Project borders only",
       "density_option_aoi": "Whole area of interest",
       "run": "Run allocation",
+      "error_name_running": "An allocation named '{name}' is currently running — wait for it to finish or pick another name.",
       "running": "Allocating deforestation…",
       "result_annual": "Annual",
       "result_total": "Entire period",

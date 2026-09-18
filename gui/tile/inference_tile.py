@@ -511,12 +511,21 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
             confirm_label=t("common.delete"),
         )
 
+    # A prediction registers only when its worker finishes, so p.predictions
+    # lags a launch; the dialog rejects the name of a job still in flight.
+    # Runs carry the name as pred_name, imports as their placeholder model_key.
+    running_names = frozenset(
+        j.get("pred_name") or j.get("model_key")
+        for j in inference_jobs.value
+        if j.get("status") == "running"
+    )
     PredictionFormDialog(
         project=project,
         open_=dialog_open,
         on_submit=on_submit,
         sepal_client=sepal_client,
         prefill=prefill,
+        running_names=running_names,
     )
 
     PredictionDetailsDialog(
