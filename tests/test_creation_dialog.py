@@ -40,3 +40,47 @@ def test_creation_dialog_survives_outside_click_but_closes_on_esc():
     esc = next(line for line in src.splitlines() if "keydown.esc" in line)
     assert 'rv.use_event(dialog, "keydown.esc"' in esc
     assert "close()" in esc
+
+
+def test_the_blocking_message_renders_in_error_colours():
+    """A refusal must not render greyer than the advisory sitting above it.
+
+    ``reacton.ipyvuetify.Alert`` takes ``type``; a ``type_`` is swallowed in
+    silence and the alert comes out grey and iconless. Step 3's reference form
+    puts a ``type="warning"`` advisory (a geographic CRS) a few pixels above
+    this one, so the swallowed kwarg inverted the severity hierarchy inside a
+    single dialog. Asserted on the rendered widget, because the mistake is
+    invisible in the source.
+    """
+    import ipyvuetify as vw
+    import reacton
+    import solara
+
+    from gui.widget.creation_dialog import CreationDialog
+
+    box, rc = reacton.render(
+        CreationDialog(
+            open_=solara.reactive(True),
+            title="t",
+            create_label="Create",
+            validate=lambda: "nope",
+            will_replace=lambda: None,
+            launch=lambda: None,
+        ),
+        handle_error=False,
+    )
+    try:
+        create = next(
+            b
+            for b in rc.find(vw.Btn).widgets
+            if "Create" in str(getattr(b, "children", ""))
+        )
+        create.click()
+        alerts = rc.find(vw.Alert).widgets
+        assert alerts, "the refusal was not rendered at all"
+        assert alerts[0].type == "error", (
+            f"the blocking message renders as {alerts[0].type!r}, not 'error' — "
+            "a `type_=` kwarg is swallowed and the alert comes out grey"
+        )
+    finally:
+        rc.close()

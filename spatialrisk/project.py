@@ -770,13 +770,15 @@ class Project(BaseModel):
         # ee.Image objects (not JSON-serializable) and load() only ever
         # reconstructs Local*Var, so a persisted GEEVar could never be read
         # back. Skip them — they are materialized to local vars before save.
-        for var_name, var in self.raw_variables.items():
+        # Registries are snapshotted with list(): background workers insert
+        # into these shared dicts while a save may be walking them.
+        for var_name, var in list(self.raw_variables.items()):
             if type(var).__name__ == "GEEVar":
                 continue
             data["raw_variables"][var_name] = var.model_dump(mode="json")
 
         # Serialize processed variables
-        for var_name, var in self.processed_variables.items():
+        for var_name, var in list(self.processed_variables.items()):
             data["processed_variables"][var_name] = var.model_dump(mode="json")
 
         # Serialize base_raster if it exists
@@ -786,13 +788,13 @@ class Project(BaseModel):
         # Serialize registered ML models
         if self.models:
             data["models"] = {}
-            for key, model in self.models.items():
+            for key, model in list(self.models.items()):
                 data["models"][key] = model.model_dump(mode="json")
 
         # Serialize registered datasets
         if self.datasets:
             data["datasets"] = {}
-            for key, dataset in self.datasets.items():
+            for key, dataset in list(self.datasets.items()):
                 data["datasets"][key] = {
                     "name": dataset.name,
                     "year": dataset.year,
@@ -804,7 +806,7 @@ class Project(BaseModel):
         # Serialize registered samples (location-only; the GPKG is the truth).
         if self.samples:
             data["samples"] = {}
-            for key, s in self.samples.items():
+            for key, s in list(self.samples.items()):
                 data["samples"][key] = {
                     "name": s.name,
                     "raster_var_name": s.raster_var_name,
@@ -826,19 +828,19 @@ class Project(BaseModel):
         # Serialize registered predictions
         if self.predictions:
             data["predictions"] = {}
-            for key, prediction in self.predictions.items():
+            for key, prediction in list(self.predictions.items()):
                 data["predictions"][key] = prediction.model_dump(mode="json")
 
         # Serialize saved evaluation runs
         if self.evaluations:
             data["evaluations"] = {}
-            for key, record in self.evaluations.items():
+            for key, record in list(self.evaluations.items()):
                 data["evaluations"][key] = record.model_dump(mode="json")
 
         # Serialize saved allocation runs
         if self.allocations:
             data["allocations"] = {}
-            for key, run in self.allocations.items():
+            for key, run in list(self.allocations.items()):
                 data["allocations"][key] = run.model_dump(mode="json")
 
         # Serialize the AOI descriptor (geometry lives in the sidecar file)
@@ -1144,8 +1146,9 @@ class Project(BaseModel):
             Restrict the run to these source-collection keys. ``None`` (default)
             reprojects every raster, which is what the notebooks expect;
             ``process_actions.run_processing`` passes the keys that
-            ``harmonization_status`` reports as pending, so an already-aligned
-            layer is not re-derived. An empty iterable means "nothing to do".
+            ``harmonization_status_from_disk`` reports as pending, so an
+            already-aligned layer is not re-derived. An empty iterable means
+            "nothing to do".
         add_to_processed : bool, optional
             Whether to add reprojected variables to the processed collection
             (default: True).

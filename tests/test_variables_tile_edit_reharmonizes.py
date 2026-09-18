@@ -19,7 +19,7 @@ import solara
 from rasterio.transform import from_origin
 
 from gui.tile import variables_tile
-from spatialrisk.harmonization import harmonization_status
+from spatialrisk.harmonization import harmonization_status_from_disk
 from spatialrisk.project import Project
 from spatialrisk.variables.local_raster_var import LocalRasterVar
 from spatialrisk.variables.models import DataType, RasterType
@@ -143,7 +143,7 @@ def test_editing_a_variable_onto_an_older_file_makes_it_pending(monkeypatch, tmp
     # ``is_current``'s mtime condition stays False and cannot help.
     assert out.stat().st_mtime > new_src.stat().st_mtime
 
-    assert harmonization_status(p).current == ["altitude"]
+    assert harmonization_status_from_disk(p).current == ["altitude"]
 
     project = solara.reactive(p, equals=lambda a, b: a is b)
     on_save, rc = _capture_on_save(monkeypatch, project)
@@ -154,7 +154,7 @@ def test_editing_a_variable_onto_an_older_file_makes_it_pending(monkeypatch, tmp
 
     # The edit landed (on_save swallows and toasts its own failures).
     assert p.raw_variables["altitude"].path == new_src
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_editing_a_variable_unregisters_its_harmonized_output(monkeypatch, tmp_path):
@@ -197,7 +197,7 @@ def test_readding_a_removed_variable_onto_an_older_file_makes_it_pending(
 ):
     """The add route's own version of the gap on_save closes for edits."""
     p, out = _harmonized_project(tmp_path)
-    assert harmonization_status(p).current == ["altitude"]
+    assert harmonization_status_from_disk(p).current == ["altitude"]
 
     # "Remove the source variable": _do_remove never touches
     # processed_variables, so the stale output stays registered exactly like
@@ -223,4 +223,4 @@ def test_readding_a_removed_variable_onto_an_older_file_makes_it_pending(
     # The add landed (on_add/_do_add swallow and toast their own failures).
     assert p.raw_variables["altitude"].path == new_src
     assert "altitude" not in p.processed_variables
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]

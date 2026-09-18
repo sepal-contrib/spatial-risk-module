@@ -1,4 +1,4 @@
-"""End-to-end: what harmonization writes is what ``harmonization_status`` skips.
+"""End-to-end: what harmonization writes is what the disk status check skips.
 
 Every other test on this branch stubs one side of that mirror — the status
 predicate against fabricated outputs, or the bulk methods against MagicMock
@@ -111,7 +111,7 @@ def test_a_second_run_reharmonizes_nothing(tmp_path, monkeypatch):
     assert sorted(first["processed"]) == KEYS
 
     # add_as_processed must have registered every output under the raw key —
-    # the mapping harmonization_status.output_key mirrors — and each at its own
+    # the mapping harmonization.output_key mirrors — and each at its own
     # path, or the shared-output guard would hold them pending forever.
     outputs = {k: p.processed_variables[k].path for k in KEYS}
     assert all(path.exists() for path in outputs.values())

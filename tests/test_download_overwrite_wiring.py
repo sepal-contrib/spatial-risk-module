@@ -8,6 +8,7 @@ that the choice reaches the export as ``overwrite``.
 import threading
 
 import ipyvuetify as vw
+import pytest
 import reacton
 import solara
 
@@ -103,9 +104,10 @@ def _mount(monkeypatch, project_reactive):
 
     monkeypatch.setattr(variables_tile, "SourceVariableList", _StubList)
     monkeypatch.setattr(variables_tile, "VariableModal", _StubModal)
-    box, _rc = reacton.render(
+    box, rc = reacton.render(
         variables_tile.VariablesTile(project=project_reactive), handle_error=False
     )
+    _OPEN_CONTEXTS.append(rc)
     return box, captured
 
 
@@ -200,5 +202,26 @@ def test_download_all_asks_once_for_every_layer_in_the_way(monkeypatch, tmp_path
 
     _click(box, t("tiles.variables.confirm_overwrite_redownload"))
     assert done.wait(timeout=10)
-    assert calls[0]["keys"] is None  # the bulk download, unrestricted
+    # Bulk sends its own key list (it skips rows already downloading),
+    # so "unrestricted" means every pending layer, not None.
+    assert set(calls[0]["keys"]) == {"slope_2020", "altitude_2020"}
     assert calls[0]["overwrite"] is True
+
+
+_OPEN_CONTEXTS = []
+
+
+@pytest.fixture(autouse=True)
+def _close_mounted_tiles():
+    """Close every tile this module mounts.
+
+    A render context left open keeps its component's hook record alive. A
+    later test that renders the same component behind a different set of
+    stubs — ``use_notifications`` replaced by a plain lambda, which calls one
+    ``use_memo`` fewer — then trips reacton's hook-count check. The error
+    lands in that later test, far from the one that leaked the context, and
+    moves with collection order.
+    """
+    yield
+    while _OPEN_CONTEXTS:
+        _OPEN_CONTEXTS.pop().close()

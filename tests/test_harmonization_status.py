@@ -16,7 +16,7 @@ from rasterio.transform import from_origin
 
 from spatialrisk.harmonization import (
     HarmonizationStatus,
-    harmonization_status,
+    harmonization_status_from_disk,
     is_current,
     output_key,
 )
@@ -95,7 +95,7 @@ def test_new_variable_is_pending(tmp_path):
     """No registered output at all — nothing to skip."""
     src = _write(tmp_path / "src.tif")
     p = _project({"altitude": _var("altitude", src)}, {})
-    assert harmonization_status(p) == HarmonizationStatus(
+    assert harmonization_status_from_disk(p) == HarmonizationStatus(
         pending=["altitude"], current=[]
     )
 
@@ -110,7 +110,7 @@ def test_aligned_and_fresh_output_is_current(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", out)},
     )
-    status = harmonization_status(p)
+    status = harmonization_status_from_disk(p)
     assert status.pending == []
     assert status.current == ["altitude"]
     assert status.total == 1
@@ -126,7 +126,7 @@ def test_grid_mismatch_is_pending(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_shape_mismatch_is_pending(tmp_path):
@@ -144,7 +144,7 @@ def test_shape_mismatch_is_pending(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_crs_mismatch_is_pending(tmp_path):
@@ -157,7 +157,7 @@ def test_crs_mismatch_is_pending(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_output_older_than_source_is_pending(tmp_path):
@@ -170,7 +170,7 @@ def test_output_older_than_source_is_pending(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_changed_raster_type_is_pending(tmp_path):
@@ -183,7 +183,7 @@ def test_changed_raster_type_is_pending(tmp_path):
         {"altitude": _var("altitude", src, raster_type=RasterType.categorical)},
         {"altitude": _var("altitude", out, raster_type=RasterType.continuous)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_changed_rasterization_method_is_pending(tmp_path):
@@ -206,7 +206,7 @@ def test_changed_rasterization_method_is_pending(tmp_path):
         # categorical, so the registered output is the wrong product.
         {"roads": _var("roads", out, raster_type=RasterType.continuous)},
     )
-    assert harmonization_status(p).pending == ["roads"]
+    assert harmonization_status_from_disk(p).pending == ["roads"]
 
 
 def test_vectors_sharing_one_output_file_are_both_pending(tmp_path):
@@ -236,7 +236,7 @@ def test_vectors_sharing_one_output_file_are_both_pending(tmp_path):
             ),
         },
     )
-    status = harmonization_status(p)
+    status = harmonization_status_from_disk(p)
     assert status.current == []
     assert sorted(status.pending) == ["roads_2000", "roads_2020"]
 
@@ -248,7 +248,7 @@ def test_missing_output_file_is_pending(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", tmp_path / "gone.tif")},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_unreadable_output_is_pending(tmp_path):
@@ -262,7 +262,7 @@ def test_unreadable_output_is_pending(tmp_path):
         {"altitude": _var("altitude", src)},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_missing_source_file_is_pending(tmp_path):
@@ -272,7 +272,7 @@ def test_missing_source_file_is_pending(tmp_path):
         {"altitude": _var("altitude", tmp_path / "gone.tif")},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_gee_var_without_local_path_is_pending(tmp_path):
@@ -282,7 +282,7 @@ def test_gee_var_without_local_path_is_pending(tmp_path):
         {"altitude": _var("altitude", None)},
         {"altitude": _var("altitude", out)},
     )
-    assert harmonization_status(p).pending == ["altitude"]
+    assert harmonization_status_from_disk(p).pending == ["altitude"]
 
 
 def test_temporal_layers_are_tracked_per_year(tmp_path):
@@ -299,7 +299,7 @@ def test_temporal_layers_are_tracked_per_year(tmp_path):
         },
         {"forest_2000": _var("forest", out_a, year=2000)},
     )
-    status = harmonization_status(p)
+    status = harmonization_status_from_disk(p)
     assert status.current == ["forest_2000"]
     assert status.pending == ["forest_2020"]
 
@@ -312,7 +312,7 @@ def test_inactive_vector_is_neither_pending_nor_current(tmp_path):
         {"roads": _var("roads", src, data_type=DataType.vector, active=False)},
         {},
     )
-    status = harmonization_status(p)
+    status = harmonization_status_from_disk(p)
     assert status.pending == []
     assert status.current == []
     assert status.total == 0
@@ -326,14 +326,14 @@ def test_active_vector_is_a_candidate(tmp_path):
         {"roads": _var("roads", src, data_type=DataType.vector, active=True)},
         {},
     )
-    assert harmonization_status(p).pending == ["roads"]
+    assert harmonization_status_from_disk(p).pending == ["roads"]
 
 
 def test_no_base_raster_reports_everything_pending(tmp_path):
     """No grid to compare against; run_processing raises before it matters."""
     src = _write(tmp_path / "src.tif")
     p = _project({"altitude": _var("altitude", src)}, {}, base=False)
-    status = harmonization_status(p)
+    status = harmonization_status_from_disk(p)
     assert status.pending == ["altitude"]
     assert status.current == []
 
@@ -342,3 +342,24 @@ def test_is_current_returns_false_without_a_registered_output(tmp_path):
     """No registered output means nothing to trust — and no file is opened."""
     src = _write(tmp_path / "src.tif")
     assert is_current(_var("altitude", src), None, GEOBOX) is False
+
+
+def test_keys_restricts_the_scan_to_the_listed_raw_keys(tmp_path):
+    """The tile re-checks only its unstamped layers; the rest are not even read."""
+    src = _write(tmp_path / "src.tif")
+    p = _project(
+        {"altitude": _var("altitude", src), "slope": _var("slope", src)},
+        {},
+    )
+    status = harmonization_status_from_disk(p, keys=["slope"])
+    assert status.pending == ["slope"]
+    assert status.total == 1
+
+
+def test_empty_keys_scans_nothing(tmp_path):
+    """An empty restriction must mean 'no layers', not 'every layer'."""
+    src = _write(tmp_path / "src.tif")
+    p = _project({"altitude": _var("altitude", src)}, {})
+    assert harmonization_status_from_disk(p, keys=[]) == HarmonizationStatus(
+        pending=[], current=[]
+    )

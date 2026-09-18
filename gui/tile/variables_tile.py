@@ -1,7 +1,7 @@
 """Step 2 — Variables tile."""
 
-import asyncio
 import logging
+import threading
 
 import ee
 import solara
@@ -10,6 +10,7 @@ from pysepal.solara.notifications import use_notifications
 from gui.i18n import t
 from gui.scripts import process_actions
 from gui.scripts.file_prompts import DeletePrompt, delete_prompt, overwrite_prompt
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import raw_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.notify_bridge import (
@@ -18,7 +19,7 @@ from gui.scripts.notify_bridge import (
     tracked_job,
 )
 from gui.scripts.project_ui_helpers import format_size
-from gui.scripts.solara_threads import publish_if_current, to_thread_in_context
+from gui.scripts.solara_threads import publish_if_current, spawn_in_context
 from gui.scripts.variable_identity import is_base_raster
 from gui.scripts.variable_map import add_raster_var_on_map
 from gui.store.project_writers import writing
@@ -44,6 +45,156 @@ LocalVectorVar.model_rebuild()
 
 # Keys of source variables currently displayed on the map (drives the toggle state).
 vars_on_map = solara.reactive(set())
+
+# Guards the two read-modify-write updates to ``vars_on_map`` — the worker's
+# add (below) and ``_drop_from_map``'s discard — which now run concurrently
+# on independent worker threads (one per toggle) and, for the discard side,
+# also from the kernel thread via the remove/edit paths. A plain read of
+# ``.value`` or a wholesale ``vars_on_map.set(set())`` reset needs no lock.
+vars_on_map_lock = threading.Lock()
+
+# Raw-variable keys whose download is running. A per-row download claims its
+# key; "download all" claims every pending key not already claimed. Keeps a
+# second click on a row from starting a second copy of the same download
+# while different rows download in parallel.
+download_inflight = InflightKeys(key="download_inflight")
+
+# Source-variable keys whose map toggle is running. A re-click on a loading
+# layer is ignored rather than queued: the first worker's outcome is what the
+# user will see, and the button reflects it as soon as the worker releases.
+vars_inflight = InflightKeys(key="vars_inflight")
+
+
+def _toggle_var_on_map(key, p, map_, legend_port, notifier):
+    """Background worker: add or remove one source variable's map layer.
+
+    The blocking adds (GEE session calls, tile-server/raster reads) run here,
+    and so does every piece of bookkeeping that follows them — the on-map set
+    and the legend. A shared ``use_task`` used to do this after an ``await``,
+    and toggling a second layer cancelled the first coroutine there: its
+    layer still landed on the map, but the toggle stayed off and no legend
+    was published.
+
+    Concurrency contract: several of these run at once, one per toggle, on
+    independent worker threads. The only shared state this worker mutates is
+    ``vars_on_map`` (added to under ``vars_on_map_lock``, via ``_drop_from_map``
+    for the remove branch) and the legend registry, which ``legend_port``
+    already serializes internally.
+    """
+    try:
+        var = p.raw_variables.get(key) if p is not None else None
+        if var is None or not is_mappable(var):
+            return
+        if key in vars_on_map.value:
+            _drop_from_map(key, map_, legend_port)
+            return
+
+        images = getattr(var, "gee_images", None)
+        layer_key = _map_layer_key(key)
+        label = raw_layer_label(key)
+        generation = legend_port.generation() if legend_port is not None else None
+        legend = None
+        if images or type(var).__name__ == "GEEVar":
+            # An asset-id GEEVar has no image before download; the worker
+            # resolves it (see _add_gee_layer).
+            vis, render_kind = _add_gee_layer(
+                map_, images[0] if images else None, var, label, layer_key
+            )
+            legend = _var_legend(key, var, vis=vis, render_kind=render_kind)
+        elif type(var).__name__ == "LocalVectorVar":
+            add_vector_on_map(map_, str(var.path), label, layer_key)
+        else:  # LocalRasterVar — reuse the palette it had as a GEE layer
+            add_raster_var_on_map(
+                map_,
+                str(var.path),
+                var=var,
+                layer_name=label,
+                key=layer_key,
+                fit_bounds=False,
+            )
+            legend = _var_legend(key, var)
+
+        # A project switch during the add means this layer is stale — take it
+        # back off rather than publish a legend for it.
+        if legend_port is not None and legend_port.generation() != generation:
+            map_.remove_layer(layer_key, none_ok=True)
+            return
+
+        with vars_on_map_lock:
+            vars_on_map.set(set(vars_on_map.value) | {key})
+        if legend is not None and legend_port is not None:
+            legend_port.register(legend)
+    except Exception as exc:
+        logger.exception("map toggle failed for %s", key)
+        notifier.error(
+            t("tiles.variables.error_toggle_map", key=key, exc=exc),
+            timeout=ERROR_TOAST_TIMEOUT,
+        )
+    finally:
+        vars_inflight.release(key)
+
+
+def _run_download(keys, bulk, p, project_reactive, notifier, overwrite=False):
+    """Background worker: materialize ``keys`` and republish the project.
+
+    ``bulk`` only picks the notification title (the "all" phrasing vs. the
+    single-layer one). The republish runs on this thread, after the work,
+    so a download started for another row cannot skip it — a shared
+    ``use_task`` used to, when re-invoked (its cancel lands after the
+    ``await`` and the continuation never runs).
+    """
+    try:
+        # Inside the try: anything that raises before the job opens — a title
+        # lookup, the writing() mark — must still reach the release below, or
+        # the key stays claimed for the session (the row's download button
+        # spins forever and can never be clicked again).
+        def _var_name(k):
+            return getattr(p.raw_variables.get(k), "name", None) or k
+
+        title = (
+            t("notifications.task_download_all")
+            if bulk
+            else t("notifications.task_download_one", name=_var_name(keys[0]))
+        )
+        with writing(p.project_name):
+            try:
+                with tracked_job(
+                    notifier,
+                    title,
+                    error_format=lambda exc: t(
+                        "tiles.variables.error_download", exc=exc
+                    ),
+                ) as task:
+                    on_progress = layer_progress_reporter(
+                        task,
+                        format_title=lambda k, i, n: t(
+                            "notifications.task_download_layer",
+                            i=i + 1,
+                            n=n,
+                            name=_var_name(k),
+                        ),
+                        format_detail=lambda k, done, total: t(
+                            "notifications.task_download_tiles",
+                            name=_var_name(k),
+                            done=done,
+                            total=total,
+                        ),
+                    )
+                    process_actions.materialize_raw_layers(
+                        p, list(keys), on_progress=on_progress, overwrite=overwrite
+                    )
+                    p.save()
+            except Exception:
+                logger.exception("download failed")  # toast raised by tracked_job
+            # Publish even after a failure: layers materialized before the
+            # error are real and must show as local.
+            publish_if_current(project_reactive, p)
+    except Exception:
+        # tracked_job already toasted anything raised inside it; a failure
+        # outside it only reaches the log, but the keys are still freed.
+        logger.exception("download worker failed")
+    finally:
+        download_inflight.release(*keys)
 
 
 def _map_layer_key(key: str) -> str:
@@ -378,10 +529,11 @@ def _drop_from_map(key: str, map_, legend_port=None):
         map_.remove_layer(_map_layer_key(key), none_ok=True)
     if legend_port is not None:
         legend_port.unregister(_map_layer_key(key))
-    if key in vars_on_map.value:
-        remaining = set(vars_on_map.value)
-        remaining.discard(key)
-        vars_on_map.set(remaining)
+    with vars_on_map_lock:
+        if key in vars_on_map.value:
+            remaining = set(vars_on_map.value)
+            remaining.discard(key)
+            vars_on_map.set(remaining)
 
 
 @solara.component
@@ -398,178 +550,32 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     """
     modal_open = solara.use_reactive(False)
     editing_key, set_editing_key = solara.use_state(None)
-    pending_toggle = solara.use_reactive(None)
-    # Key of the variable being downloaded, or None for a bulk download.
-    pending_download = solara.use_reactive(None)
-    # Whether the running download may replace files already on disk — set from
-    # the overwrite dialog, read by the task below.
-    download_overwrite = solara.use_reactive(False)
     # (key, OverwritePrompt) while that dialog is open; None the rest of the time.
     pending_overwrite, set_pending_overwrite = solara.use_state(None)
     notifications = use_notifications()
+    downloading = download_inflight.value  # subscribes the tile
 
-    @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
-    async def download_task():
-        """Materialize GEE-backed variables to local files (all, or one key).
-
-        Runs on a worker thread (prefer_threaded) so the UI stays responsive;
-        progress is driven by download_task.pending.
-        """
-        p = project.value
-        if p is None:
+    def on_toggle_map(key: str):
+        """One worker per toggle; a re-click while it runs is a no-op."""
+        if map_ is None:
             return
-        key = pending_download.value
-        keys = [key] if key is not None else None
-        var = p.raw_variables.get(key) if key is not None else None
-        title = (
-            t("notifications.task_download_one", name=getattr(var, "name", key))
-            if key is not None
-            else t("notifications.task_download_all")
-        )
-
-        def _var_name(k):
-            return getattr(p.raw_variables.get(k), "name", None) or k
-
-        def _tracked_download():
-            # Entered on the pool thread so the per-layer log lines feed this
-            # tracker; to_thread_in_context supplies the kernel context the
-            # tracker's bus updates need to reach the browser.
-            with tracked_job(
-                notifications,
-                title,
-                error_format=lambda exc: t("tiles.variables.error_download", exc=exc),
-            ) as task:
-                on_progress = layer_progress_reporter(
-                    task,
-                    format_title=lambda k, i, n: t(
-                        "notifications.task_download_layer",
-                        i=i + 1,
-                        n=n,
-                        name=_var_name(k),
-                    ),
-                    format_detail=lambda k, done, total: t(
-                        "notifications.task_download_tiles",
-                        name=_var_name(k),
-                        done=done,
-                        total=total,
-                    ),
-                )
-                process_actions.materialize_raw_layers(
-                    p,
-                    keys,
-                    on_progress=on_progress,
-                    overwrite=download_overwrite.value,
-                )
-                p.save()
-
-        with writing(p.project_name):
-            try:
-                await to_thread_in_context(_tracked_download)
-            except Exception:
-                logger.exception("download failed")  # toast raised by tracked_job
-            publish_if_current(project, p)
-
-    def _start_download(key, overwrite: bool):
-        pending_download.set(key)
-        download_overwrite.set(overwrite)
-        download_task()
-
-    def on_download(key=None):
-        """Download one variable (key) or all pending GEE variables (None).
-
-        A layer whose file is already on disk would silently be reused, which is
-        right for the layer you fetched yesterday and wrong for a stale or
-        half-written one — so when that is the case the user chooses first.
-        """
-        prompt = overwrite_prompt(project.value, [key] if key is not None else None)
-        if prompt is None:
-            _start_download(key, False)
-            return
-        set_pending_overwrite((key, prompt))
-
-    @solara.lab.use_task(dependencies=None, raise_error=False)
-    async def _apply_map_toggle():
-        """Add or remove a variable's layer on the map.
-
-        Every layer-add is offloaded to a worker thread. GEE-backed layers use
-        the GEE interface's blocking API (via ``_add_gee_layer``) so the session
-        calls run on the interface's own event loop; the async map API crashes
-        with "bound to a different event loop" when awaited on Solara's loop.
-        Local raster/vector layers use the blocking ``add_raster_var_on_map`` /
-        ``add_vector_on_map`` helpers the same way. Downloaded rasters keep the
-        palette they had as a GEE layer (see ``add_raster_var_on_map``) instead of
-        rendering grayscale.
-        """
-        key = pending_toggle.value
-        if key is None or map_ is None:
-            return
-        p = project.value
-        var = p.raw_variables.get(key) if p is not None else None
-        if var is None or not is_mappable(var):
+        cur = project.value
+        if cur is None or not vars_inflight.claim(key):
             return
         try:
-            if key in vars_on_map.value:
-                _drop_from_map(key, map_, legend_port)
-                return
-
-            images = getattr(var, "gee_images", None)
-            layer_key = _map_layer_key(key)
-            label = raw_layer_label(key)
-            generation = legend_port.generation() if legend_port is not None else None
-            legend = None
-            if images or type(var).__name__ == "GEEVar":
-                # An asset-id GEEVar has no image before download; the worker
-                # resolves it (see _add_gee_layer).
-                vis, render_kind = await asyncio.to_thread(
-                    _add_gee_layer,
-                    map_,
-                    images[0] if images else None,
-                    var,
-                    label,
-                    layer_key,
-                )
-                legend = _var_legend(key, var, vis=vis, render_kind=render_kind)
-            elif type(var).__name__ == "LocalVectorVar":
-                await asyncio.to_thread(
-                    add_vector_on_map, map_, str(var.path), label, layer_key
-                )
-            else:  # LocalRasterVar — reuse the palette it had as a GEE layer
-                await asyncio.to_thread(
-                    add_raster_var_on_map,
-                    map_,
-                    str(var.path),
-                    var=var,
-                    layer_name=label,
-                    key=layer_key,
-                    fit_bounds=False,
-                )
-                legend = _var_legend(key, var)
-
-            # A project switch during the await means this layer is stale
-            # (see the InferenceTile add branch for the same guard, kept
-            # outside `finally` there because a `return` inside `finally`
-            # would discard an in-flight exception) — take it back off
-            # rather than publish a legend for it.
-            if legend_port is not None and legend_port.generation() != generation:
-                map_.remove_layer(layer_key, none_ok=True)
-                return
-
-            vars_on_map.set(set(vars_on_map.value) | {key})
-            if legend is not None and legend_port is not None:
-                legend_port.register(legend)
+            spawn_in_context(
+                _toggle_var_on_map, (key, cur, map_, legend_port, notifications)
+            )
         except Exception as exc:
-            logger.exception("map toggle failed for %s", key)
+            # The worker's finally is what releases the claim, so a thread
+            # that never starts would hold this key for the rest of the
+            # session.
+            vars_inflight.release(key)
+            logger.exception("could not start the map-toggle worker")
             notifications.error(
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
                 timeout=ERROR_TOAST_TIMEOUT,
             )
-
-    def on_toggle_map(key: str):
-        """Trigger the async toggle task for one source variable."""
-        if map_ is None:
-            return
-        pending_toggle.set(key)
-        _apply_map_toggle()
 
     pending_add, set_pending_add = solara.use_state(None)
 
@@ -732,6 +738,49 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         else []
     )
 
+    def _start_download(key, overwrite: bool):
+        """Claim the keys and hand them to one worker (see ``_run_download``).
+
+        ``overwrite`` is the answer to the dialog below: replace the files
+        already on disk, or keep them and skip those layers.
+        """
+        cur = project.value
+        if cur is None:
+            return
+        if key is not None:
+            keys = [key]
+        else:
+            keys = [k for k in pending_geevars if k not in download_inflight]
+        if not keys or not download_inflight.claim(*keys):
+            return
+        try:
+            spawn_in_context(
+                _run_download,
+                (keys, key is None, cur, project, notifications, overwrite),
+            )
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread that
+            # never starts would hold these keys for the rest of the session.
+            download_inflight.release(*keys)
+            logger.exception("could not start the download worker")
+            notifications.error(
+                t("tiles.variables.error_download", exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+
+    def on_download(key=None):
+        """Download one variable (key) or every pending GEE variable (None).
+
+        A layer whose file is already on disk would silently be reused, which is
+        right for the layer you fetched yesterday and wrong for a stale or
+        half-written one — so when that is the case the user chooses first.
+        """
+        prompt = overwrite_prompt(project.value, [key] if key is not None else None)
+        if prompt is None:
+            _start_download(key, False)
+            return
+        set_pending_overwrite((key, prompt))
+
     with solara.Column(style="gap: 16px;"):
         with solara.Row(style="gap:4px;align-items:center;"):
             solara.Text(t("tiles.variables.description"))
@@ -755,22 +804,22 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             on_toggle_map=on_toggle_map if map_ is not None else None,
             vars_on_map=vars_on_map,
             on_download=on_download,
-            download_pending=download_task.pending,
-            downloading_key=pending_download.value if download_task.pending else None,
+            downloading_keys=downloading,
         )
 
         # Download-all button, below the list
+        idle_pending = [k for k in pending_geevars if k not in downloading]
         solara.Button(
-            t("tiles.variables.download_button", count=len(pending_geevars)),
+            t("tiles.variables.download_button", count=len(idle_pending)),
             icon_name="mdi-cloud-download-outline",
             color="primary",
             small=True,
             block=True,
             on_click=lambda: on_download(None),
-            loading=download_task.pending and pending_download.value is None,
-            disabled=download_task.pending or not pending_geevars,
+            loading=bool(downloading),
+            disabled=not idle_pending,
         )
-        if download_task.pending:
+        if downloading:
             solara.ProgressLinear(True)
 
     editing_entry = (

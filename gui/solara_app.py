@@ -239,7 +239,7 @@ def ProjectPanel(on_close=None):
     async def delete_task():
         """Delete the staged project's folder, off the render thread.
 
-        Mirrors variables_tile.download_task: async body, blocking call handed to
+        Mirrors process_tile.process_task: async body, blocking call handed to
         asyncio.to_thread, target passed via a reactive. A 3.2 GB rmtree on a
         network-backed SEPAL home takes seconds — blocking here would freeze the UI.
 

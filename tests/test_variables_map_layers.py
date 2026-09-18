@@ -114,13 +114,14 @@ def test_gee_layer_add_uses_sync_api_off_the_solara_loop():
     touches eeclient session locks bound to the GEE interface's private loop and
     crashes with "bound to a different event loop".
     """
-    from gui.tile import variables_tile
-    from gui.tile.variables_tile import _add_gee_layer
+    from gui.tile.variables_tile import _add_gee_layer, _toggle_var_on_map
 
-    toggle_src = inspect.getsource(variables_tile.VariablesTile)
+    # The toggle now runs entirely on a worker thread (one per click, via
+    # spawn_in_context) rather than via asyncio.to_thread from an awaited
+    # component-scoped task, so look for the call in the worker itself.
+    toggle_src = inspect.getsource(_toggle_var_on_map)
     assert "add_ee_layer_async(" not in toggle_src  # not called on Solara's loop
     assert "_add_gee_layer" in toggle_src
-    assert "to_thread" in toggle_src
 
     add_src = inspect.getsource(_add_gee_layer)
     assert "add_ee_layer_async(" not in add_src  # uses the blocking API, not async
@@ -174,10 +175,12 @@ def test_source_toggle_labels_layers_as_raw():
     key — otherwise a raw variable and its harmonized counterpart render
     under identical names.
     """
-    from gui.tile import variables_tile
+    from gui.tile.variables_tile import _toggle_var_on_map
 
-    src = inspect.getsource(variables_tile.VariablesTile)
+    # The labeling logic now lives in the module-level worker (see the
+    # to_thread-removal note above).
+    src = inspect.getsource(_toggle_var_on_map)
     assert "raw_layer_label(key)" in src
     assert "layer_name=key," not in src  # bare key must be gone
-    assert "add_vector_on_map, map_, str(var.path), key," not in src
-    assert "_add_gee_layer, map_, images[0], var, key, layer_key" not in src
+    assert "add_vector_on_map(map_, str(var.path), key," not in src
+    assert "_add_gee_layer(map_, images[0], var, key, layer_key" not in src

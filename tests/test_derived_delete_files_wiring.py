@@ -102,9 +102,10 @@ def _mount(monkeypatch, tile, project_reactive, **props):
     ):
         if hasattr(module, name):
             monkeypatch.setattr(module, name, _StubList)
-    box, _rc = reacton.render(
+    box, rc = reacton.render(
         tile(project=project_reactive, **props), handle_error=False
     )
+    _OPEN_CONTEXTS.append(rc)
     return box, captured
 
 
@@ -170,3 +171,22 @@ def test_the_listed_path_is_shown_relative_to_the_project(monkeypatch, tmp_path)
         "".join(str(c) for c in (w.children or [])) for w in _find(box, vw.Html)
     )
     assert str(Path("data") / "dist_edge_forest_2020.tif") in rendered
+
+
+_OPEN_CONTEXTS = []
+
+
+@pytest.fixture(autouse=True)
+def _close_mounted_tiles():
+    """Close every tile this module mounts.
+
+    A render context left open keeps its component's hook record alive. A
+    later test that renders the same component behind a different set of
+    stubs — ``use_notifications`` replaced by a plain lambda, which calls one
+    ``use_memo`` fewer — then trips reacton's hook-count check. The error
+    lands in that later test, far from the one that leaked the context, and
+    moves with collection order.
+    """
+    yield
+    while _OPEN_CONTEXTS:
+        _OPEN_CONTEXTS.pop().close()

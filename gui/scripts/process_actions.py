@@ -6,10 +6,11 @@ edge/dist post-processing.
 """
 
 import logging
+from collections import namedtuple
 from pathlib import Path
 from typing import List
 
-from spatialrisk.harmonization import harmonization_status
+from spatialrisk.harmonization import harmonization_status_from_disk
 
 logger = logging.getLogger("spatial_risk")
 
@@ -138,11 +139,57 @@ def base_raster_resolution(var) -> "float | None":
     return float(xres)
 
 
-def set_base_raster(project, base_key: str, epsg: str, resolution: float):
-    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base."""
+def validate_projection(epsg: str, resolution: str):
+    """Check a reference CRS and pixel size before any raster work starts.
+
+    Returns ``(blocking_error, warning)`` as sentinel keys, or ``None`` for
+    either. Kept free of ``t()`` so the module stays Solara-free and the rules
+    stay unit-testable; the caller maps the sentinels to messages.
+
+    ``pyproj`` is imported lazily like every other geo dependency in this
+    module, and is already present via rasterio/rioxarray.
+    """
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    text = (epsg or "").strip()
+    if not text:
+        return "need_epsg", None
+    # The field's placeholder invites a bare code and `auto_utm_epsg` already
+    # normalises its own output this way, as does `LocalRasterVar.reproject`.
+    # pyproj does not reliably parse a bare digit string, so prefix it here and
+    # keep the three call sites agreeing on what a valid entry looks like.
+    normalised = text if ":" in text else f"EPSG:{text}"
+    try:
+        crs = CRS.from_user_input(normalised)
+    except (CRSError, ValueError, TypeError):
+        return "bad_epsg", None
+
+    try:
+        metres = float(str(resolution).strip())
+    except (TypeError, ValueError):
+        return "bad_resolution", None
+    if metres <= 0:
+        return "bad_resolution", None
+
+    # Resolution is metres throughout (auto_utm_epsg returns UTM;
+    # base_raster_resolution documents "(m)"), so a geographic CRS silently
+    # reinterprets the number as degrees. Worth saying; not worth blocking.
+    return None, ("geographic_crs" if crs.is_geographic else None)
+
+
+def set_base_raster(
+    project, base_key: str, epsg: str, resolution: float, auto_save: bool = True
+):
+    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base.
+
+    ``auto_save=False`` leaves the project unsaved so a background caller can
+    check the project is still the open one before writing it to disk — see the
+    reference worker in ``process_tile``.
+    """
     base = project.raw_variables[base_key]
     reprojected = base.reproject(target_epsg=epsg, resolution=resolution)
-    reprojected.use_as_base_raster()
+    reprojected.use_as_base_raster(auto_save=auto_save)
     return reprojected
 
 
@@ -154,10 +201,12 @@ def run_processing(project, keys=None) -> dict:
     ``keys`` are reported as skipped whatever their status.
 
     Incremental by design: with N layers already aligned, adding one variable
-    used to cost N+1 reprojections. ``harmonization_status`` decides what is
-    still pending — see ``spatialrisk/harmonization.py`` for the three
-    conditions. Re-deriving an aligned layer is a no-op in output terms, so
-    skipping it is safe; a changed reference raster invalidates every layer's
+    used to cost N+1 reprojections. ``harmonization_status_from_disk`` decides
+    what is still pending — see ``spatialrisk/harmonization.py`` for the three
+    conditions. The disk check, not the in-memory one the tile displays: this
+    is about to write files, so it verifies rather than trusting a stamp.
+    Re-deriving an aligned layer is a no-op in output terms, so skipping it
+    is safe; a changed reference raster invalidates every layer's
     grid and they all re-run automatically.
 
     To force one layer through again, remove its harmonized output from the
@@ -180,7 +229,7 @@ def run_processing(project, keys=None) -> dict:
     else:
         materialize_raw_layers(project, list(keys))
 
-    status = harmonization_status(project)
+    status = harmonization_status_from_disk(project)
     pending = list(status.pending)
     skipped = list(status.current)
     if keys is not None:
@@ -364,6 +413,36 @@ def postprocess_output_name(project, pp_key: str, step: str):
     if var is None:
         return None
     return f"{var.name}_{step}"
+
+
+#: What a submitted derived-layer entry will produce: the ``name`` the list
+#: displays and the ``key`` it will be registered under.
+DerivedOutput = namedtuple("DerivedOutput", "name key")
+
+
+def derived_output(project, entry) -> "DerivedOutput | None":
+    """Name and registry key the dialog entry will produce, or None if invalid.
+
+    The two differ for edge/dist: ``add_as_processed`` stores a year-bearing
+    variable under ``{name}_{year}`` and ``_create_post_var`` inherits the
+    source layer's year, so ``forest`` (2010) -> dist displays as
+    ``forest_dist`` but registers as ``forest_dist_2010``. Keying a job on the
+    name alone would therefore treat that layer as never registered, and would
+    wrongly conflate two same-named sources from different years.
+
+    Change layers carry no year, so their name *is* their key.
+    """
+    op = entry["op"]
+    if op in ("loss", "gain"):
+        name = change_output_name(project, op, entry["start_key"], entry["end_key"])
+        return None if name is None else DerivedOutput(name, name)
+
+    pp_key = entry["pp_key"]
+    name = postprocess_output_name(project, pp_key, op)
+    if name is None:
+        return None
+    year = getattr(project.processed_variables[pp_key], "year", None)
+    return DerivedOutput(name, f"{name}_{year}" if year else name)
 
 
 def generate_change_var(project, op: str, start_key: str, end_key: str):

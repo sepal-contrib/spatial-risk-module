@@ -101,6 +101,7 @@
       "derived_col_source": "Source",
       "derived_col_status": "Status",
       "derived_source_unknown": "unknown",
+      "derived_unknown_error": "Unknown error",
       "harmonization_title": "Variables",
       "harmonization_col_status": "Status"
     },
