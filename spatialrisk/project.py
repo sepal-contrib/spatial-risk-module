@@ -604,6 +604,29 @@ class Project(BaseModel):
         del self.allocations[key]
         return True
 
+    def delete_variable_files(self, key: str) -> List[Path]:
+        """Delete the on-disk files of the variable registered under *key*.
+
+        Files only — the registry entry, the reference raster and the map layer
+        are the caller's business (the tiles already handle them). Returns the
+        paths actually removed, which is empty whenever
+        :func:`~spatialrisk.variables.file_cleanup.plan_variable_files` refuses:
+        a file outside the project folder, or one another variable still uses.
+        Ask it first if you want to tell the user *why* before deleting.
+        """
+        from spatialrisk.variables.file_cleanup import plan_variable_files
+
+        plan = plan_variable_files(self, key)
+        removed = [path for path in plan.files if self._safe_unlink(path)]
+        if removed:
+            logger.info(
+                "Deleted %d file(s) of variable '%s': %s",
+                len(removed),
+                key,
+                ", ".join(p.name for p in removed),
+            )
+        return removed
+
     def _project_dir(self) -> Path:
         """Folder holding this project's files (manifest, rasters, model artifacts)."""
         return downloads_folder / self.project_name

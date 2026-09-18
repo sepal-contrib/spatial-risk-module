@@ -20,13 +20,41 @@ def _is_geevar(var) -> bool:
     return type(var).__name__ == "GEEVar"
 
 
-def materialize_raw_layers(project, keys=None, on_progress=None) -> List[str]:
+def existing_download_targets(project, keys=None) -> List[tuple]:
+    """(key, path) for every pending GEEVar whose target file is already there.
+
+    What the Variables tile needs to decide whether to ask before downloading:
+    with ``overwrite=False`` each of these files would be reused as-is, which is
+    right when it is the layer you already fetched and wrong when it is a stale
+    or half-written one. ``keys`` restricts the check the same way
+    ``materialize_raw_layers`` restricts the download (None = all pending).
+    """
+    targets = []
+    for key, var in (project.raw_variables if project is not None else {}).items():
+        if not _is_geevar(var) or (keys is not None and key not in keys):
+            continue
+        try:
+            path = var.expected_local_path
+        except Exception:  # pragma: no cover - a var with no project/name yet
+            logger.debug("no expected path for %s", key, exc_info=True)
+            continue
+        if path.exists():
+            targets.append((key, path))
+    return targets
+
+
+def materialize_raw_layers(
+    project, keys=None, on_progress=None, overwrite: bool = False
+) -> List[str]:
     """Download raw GEEVars to local vars, replacing them in raw_variables.
 
     Raster GEEVars -> to_local_raster(); vector GEEVars -> to_local_vector().
     Idempotent: already-local variables are skipped. ``keys`` restricts the
     download to those raw-variable keys (None = all pending). Returns the list
     of keys that were materialized.
+
+    ``overwrite`` re-exports layers whose file is already on disk; the default
+    reuses them (see ``existing_download_targets`` for the files that affects).
 
     ``on_progress(layer_key, layer_idx, n_layers, tiles_done, tiles_total)``
     reports download progress: once with zero tile counts as each layer starts,
@@ -64,9 +92,9 @@ def materialize_raw_layers(project, keys=None, on_progress=None) -> List[str]:
         )
         with geedim_tile_progress(tile_cb):
             if var.data_type == DataType.vector:
-                local = var.to_local_vector()
+                local = var.to_local_vector(overwrite=overwrite)
             else:
-                local = var.to_local_raster()
+                local = var.to_local_raster(overwrite=overwrite)
         # Single-image GEEVars return one var; lists are flattened defensively.
         locals_ = local if isinstance(local, list) else [local]
         for lv in locals_:
@@ -288,13 +316,18 @@ def processing_output_keys(project) -> List[str]:
     return [k for k in project.processed_variables if k not in postprocess]
 
 
-def remove_processed_variable(project, key: str, map_=None, legend_port=None) -> bool:
+def remove_processed_variable(
+    project, key: str, map_=None, legend_port=None, delete_file: bool = False
+) -> bool:
     """Unregister a processed variable and drop its map layer and legend.
 
     Serves both lists that render ``processed_variables`` — Harmonization
     outputs and Derived layers — so removal behaves identically in either tile.
-    Like the source-variable remove this only unregisters: the raster stays on
-    disk, so re-running harmonization or the derived op simply re-registers it.
+    By default this only unregisters: the raster stays on disk, so re-running
+    harmonization or the derived op simply re-registers it. ``delete_file``
+    (the dialog's opt-in) also removes the raster, through
+    ``Project.delete_variable_files`` — which refuses anything outside the
+    project folder or still used by another variable.
     ``legend_port`` is threaded through rather than imported (this module is
     Solara-free); None disables legend withdrawal.
 
@@ -304,8 +337,16 @@ def remove_processed_variable(project, key: str, map_=None, legend_port=None) ->
 
     if project is None or key not in project.processed_variables:
         return False
-    del project.processed_variables[key]
-    drop_derived_from_map(key, map_, legend_port)
+    try:
+        # Before the del: the file plan is resolved from the registry entry.
+        if delete_file:
+            project.delete_variable_files(key)
+    finally:
+        # A file we could not unlink is not a reason to keep a layer the user
+        # asked to drop: the entry goes either way, and the error still reaches
+        # the caller (the tiles toast it).
+        del project.processed_variables[key]
+        drop_derived_from_map(key, map_, legend_port)
     return True
 
 

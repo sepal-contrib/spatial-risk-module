@@ -9,6 +9,7 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
+from gui.scripts.file_prompts import DeletePrompt, delete_prompt
 from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
 from gui.scripts.solara_threads import (
@@ -29,6 +30,7 @@ from spatialrisk.harmonization import (
     harmonization_status,
     harmonization_status_from_disk,
 )
+from spatialrisk.variables.file_cleanup import FilePlan
 
 logger = logging.getLogger("spatial_risk")
 
@@ -255,6 +257,9 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         project, map_, notifications, legend_port=legend_port
     )
     pending_remove, set_pending_remove = solara.use_state(None)
+    # Reset for every removal: deleting the raster is a decision about this one
+    # output, never a mode left switched on by the previous removal.
+    delete_files, set_delete_files = solara.use_state(False)
     reference_open = solara.use_reactive(False)
     # Raw key the next run is restricted to (per-row harmonize button), or
     # None for a full run — the same shape as pending_download in Step 2.
@@ -266,10 +271,27 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # project, a different base) must never be shown against the current rows.
     last_status = solara.use_ref((None, None))
 
-    def _do_remove(key: str):
-        """Unregister a harmonized output (the raster stays on disk)."""
+    def _ask_remove(key: str):
+        set_delete_files(False)
+        set_pending_remove(key)
+
+    def _do_remove(key: str, also_delete: bool = False):
+        """Unregister a harmonized output; optionally delete its raster too."""
         p = project.value
-        if process_actions.remove_processed_variable(p, key, map_, legend_port):
+        try:
+            removed = process_actions.remove_processed_variable(
+                p, key, map_, legend_port, delete_file=also_delete
+            )
+        except Exception as exc:
+            # The entry is gone either way (remove_processed_variable unlinks
+            # under a finally) — republish and report the file that stayed.
+            logger.exception("deleting the files of %s failed", key)
+            notifications.error(
+                t("tiles.variables.error_delete_files", exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+            removed = True
+        if removed:
             project.set(p.model_copy())
 
     p = project.value
@@ -605,7 +627,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             or "reference" in reference_inflight,
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
-            on_remove=set_pending_remove,
+            on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
         )
 
         # Only the still-resolving case needs a line of its own: until the
@@ -679,11 +701,24 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         ],
     )
 
+    _files = (
+        delete_prompt(p, pending_remove)
+        if (p is not None and pending_remove)
+        else DeletePrompt(plan=FilePlan())
+    )
     ConfirmDialog(
         open=pending_remove is not None,
         on_cancel=lambda: set_pending_remove(None),
-        on_confirm=lambda: (_do_remove(pending_remove), set_pending_remove(None)),
+        on_confirm=lambda: (
+            _do_remove(pending_remove, delete_files),
+            set_pending_remove(None),
+        ),
         title=t("tiles.process.confirm_remove_title"),
         message=t("tiles.process.confirm_remove_message", name=pending_remove or ""),
         confirm_label=t("common.remove"),
+        checkbox_label=_files.checkbox_label,
+        checkbox_value=delete_files,
+        on_checkbox=set_delete_files,
+        details=_files.details,
+        note=_files.note,
     )

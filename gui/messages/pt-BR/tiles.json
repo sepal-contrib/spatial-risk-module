@@ -25,7 +25,18 @@
       "error_base_raster_reset": "O raster de referência foi redefinido porque a sua camada de origem '{name}' mudou — defina-o novamente na etapa Harmonização.",
       "error_save_variable": "Não foi possível salvar a variável: {exc}",
       "error_base_raster_removed": "O raster de referência foi redefinido porque a sua camada de origem '{name}' foi removida — defina-o novamente na etapa Harmonização.",
-      "error_toggle_map": "Não foi possível exibir '{key}' no mapa: {exc}"
+      "error_toggle_map": "Não foi possível exibir '{key}' no mapa: {exc}",
+      "confirm_overwrite_title": "Algumas camadas já foram baixadas",
+      "confirm_overwrite_title_one": "Esta camada já foi baixada",
+      "confirm_overwrite_message": "{count} das {total} camadas já têm um arquivo neste projeto:",
+      "confirm_overwrite_message_one": "Já existe um arquivo de '{name}' neste projeto:",
+      "confirm_overwrite_note": "Baixar novamente os substitui. Mantê-los baixa apenas as outras {remaining} camadas.",
+      "confirm_overwrite_note_one_left": "Baixar novamente os substitui. Mantê-los baixa apenas a camada restante.",
+      "confirm_overwrite_note_one": "Baixar novamente a substitui.",
+      "confirm_overwrite_keep": "Manter existentes",
+      "confirm_overwrite_redownload": "Baixar novamente",
+      "notify_files_deleted": "{count} arquivo(s) excluído(s) do disco ({size}).",
+      "error_delete_files": "Não foi possível excluir os arquivos: {exc}"
     },
     "process": {
       "header": "### Harmonização",

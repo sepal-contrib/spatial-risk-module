@@ -15,7 +15,7 @@ class GEEVar:  # name matters: _is_geevar checks type(var).__name__ == "GEEVar"
 
     data_type = "raster"  # not DataType.vector -> takes the to_local_raster path
 
-    def to_local_raster(self):
+    def to_local_raster(self, overwrite=False):
         """Pretend-download returning a registered-able local var."""
         return _Local()
 
@@ -54,7 +54,7 @@ def test_on_progress_receives_geedim_tile_ticks():
     import io
 
     class _TiledGEEVar(GEEVar):
-        def to_local_raster(self):
+        def to_local_raster(self, overwrite=False):
             # mimic geedim's map_tiles driving its bar during the download
             import geedim.utils as gd_utils
 

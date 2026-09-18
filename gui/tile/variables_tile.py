@@ -9,6 +9,7 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts import process_actions
+from gui.scripts.file_prompts import DeletePrompt, delete_prompt, overwrite_prompt
 from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import raw_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
@@ -17,6 +18,7 @@ from gui.scripts.notify_bridge import (
     layer_progress_reporter,
     tracked_job,
 )
+from gui.scripts.project_ui_helpers import format_size
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context
 from gui.scripts.variable_identity import is_base_raster
 from gui.scripts.variable_map import add_raster_var_on_map
@@ -30,6 +32,7 @@ from gui.widget.variable_modal import VariableModal
 # resolves the Optional["Project"] forward reference using this module's
 # namespace, so removing the import would break model construction.
 from spatialrisk.project import Project  # noqa: F401
+from spatialrisk.variables.file_cleanup import FilePlan, plan_variable_files
 from spatialrisk.variables.gee_var import GEEVar
 from spatialrisk.variables.local_raster_var import LocalRasterVar
 from spatialrisk.variables.local_vector_var import LocalVectorVar
@@ -131,7 +134,7 @@ def _toggle_var_on_map(key, p, map_, legend_port, notifier):
         vars_inflight.release(key)
 
 
-def _run_download(keys, bulk, p, project_reactive, notifier):
+def _run_download(keys, bulk, p, project_reactive, notifier, overwrite=False):
     """Background worker: materialize ``keys`` and republish the project.
 
     ``bulk`` only picks the notification title (the "all" phrasing vs. the
@@ -178,7 +181,7 @@ def _run_download(keys, bulk, p, project_reactive, notifier):
                         ),
                     )
                     process_actions.materialize_raw_layers(
-                        p, list(keys), on_progress=on_progress
+                        p, list(keys), on_progress=on_progress, overwrite=overwrite
                     )
                     p.save()
             except Exception:
@@ -547,6 +550,8 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     """
     modal_open = solara.use_reactive(False)
     editing_key, set_editing_key = solara.use_state(None)
+    # (key, OverwritePrompt) while that dialog is open; None the rest of the time.
+    pending_overwrite, set_pending_overwrite = solara.use_state(None)
     notifications = use_notifications()
     downloading = download_inflight.value  # subscribes the tile
 
@@ -681,11 +686,41 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             )
 
     pending_remove, set_pending_remove = solara.use_state(None)
+    # Ticked afresh for every removal: deleting files is a decision about this
+    # one variable, never a mode the previous removal leaves switched on.
+    delete_files, set_delete_files = solara.use_state(False)
 
-    def _do_remove(key: str):
+    def _ask_remove(key: str):
+        set_delete_files(False)
+        set_pending_remove(key)
+
+    def _do_remove(key: str, also_delete: bool = False):
         p = project.value
         if p is None:
             return
+        # Files first: the plan is resolved from the registry entry, which the
+        # pop below is about to take away.
+        if also_delete:
+            try:
+                # Sized before the unlink — afterwards there is nothing to stat.
+                freed = plan_variable_files(p, key).total_bytes
+                removed_files = p.delete_variable_files(key)
+                if removed_files:
+                    notifications.success(
+                        t(
+                            "tiles.variables.notify_files_deleted",
+                            count=len(removed_files),
+                            size=format_size(freed),
+                        )
+                    )
+            except Exception as exc:
+                # The registry entry still goes: a file we could not unlink is
+                # not a reason to keep a variable the user asked to remove.
+                logger.exception("deleting the files of %s failed", key)
+                notifications.error(
+                    t("tiles.variables.error_delete_files", exc=exc),
+                    timeout=ERROR_TOAST_TIMEOUT,
+                )
         removed = p.raw_variables.pop(key, None)
         if is_base_raster(p, removed):
             p.base_raster = None
@@ -703,10 +738,11 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         else []
     )
 
-    def on_download(key=None):
-        """Download one variable (key) or every pending GEE variable (None).
+    def _start_download(key, overwrite: bool):
+        """Claim the keys and hand them to one worker (see ``_run_download``).
 
-        One worker per click. Bulk skips keys a row download already owns.
+        ``overwrite`` is the answer to the dialog below: replace the files
+        already on disk, or keep them and skip those layers.
         """
         cur = project.value
         if cur is None:
@@ -719,7 +755,8 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             return
         try:
             spawn_in_context(
-                _run_download, (keys, key is None, cur, project, notifications)
+                _run_download,
+                (keys, key is None, cur, project, notifications, overwrite),
             )
         except Exception as exc:
             # The worker's finally is what releases the claim, so a thread that
@@ -730,6 +767,19 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                 t("tiles.variables.error_download", exc=exc),
                 timeout=ERROR_TOAST_TIMEOUT,
             )
+
+    def on_download(key=None):
+        """Download one variable (key) or every pending GEE variable (None).
+
+        A layer whose file is already on disk would silently be reused, which is
+        right for the layer you fetched yesterday and wrong for a stale or
+        half-written one — so when that is the case the user chooses first.
+        """
+        prompt = overwrite_prompt(project.value, [key] if key is not None else None)
+        if prompt is None:
+            _start_download(key, False)
+            return
+        set_pending_overwrite((key, prompt))
 
     with solara.Column(style="gap: 16px;"):
         with solara.Row(style="gap:4px;align-items:center;"):
@@ -749,7 +799,7 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         # Source variable list (ProductTable renders its own collapsible header)
         SourceVariableList(
             project=project,
-            on_remove=set_pending_remove,
+            on_remove=_ask_remove,  # opens the dialog; the tick decides the files
             on_edit=on_edit_open,
             on_toggle_map=on_toggle_map if map_ is not None else None,
             vars_on_map=vars_on_map,
@@ -796,13 +846,28 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     )
     if _pending_is_base:
         _confirm_msg += " " + t("tiles.variables.confirm_remove_base_warning")
+    # What the variable holds on disk: the offer to delete it too, or the one
+    # line saying why it is being kept.
+    _files = (
+        delete_prompt(p, pending_remove)
+        if (p is not None and pending_remove)
+        else DeletePrompt(plan=FilePlan())
+    )
     ConfirmDialog(
         open=pending_remove is not None,
         on_cancel=lambda: set_pending_remove(None),
-        on_confirm=lambda: (_do_remove(pending_remove), set_pending_remove(None)),
+        on_confirm=lambda: (
+            _do_remove(pending_remove, delete_files),
+            set_pending_remove(None),
+        ),
         title=t("tiles.variables.confirm_remove_title"),
         message=_confirm_msg,
         confirm_label=t("common.remove"),
+        checkbox_label=_files.checkbox_label,
+        checkbox_value=delete_files,
+        on_checkbox=set_delete_files,
+        details=_files.details,
+        note=_files.note,
     )
 
     # Duplicate-add confirmation — warns when the replaced variable was already
@@ -821,4 +886,27 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         title=t("tiles.variables.confirm_replace_title"),
         message=_replace_msg,
         confirm_label=t("common.replace"),
+    )
+
+    # Overwrite confirmation — the files this download would land on already
+    # exist. "Keep existing" is what used to happen silently.
+    _ow_key, _ow = pending_overwrite if pending_overwrite else (None, None)
+    ConfirmDialog(
+        open=pending_overwrite is not None,
+        on_cancel=lambda: set_pending_overwrite(None),
+        on_confirm=lambda: (
+            _start_download(_ow_key, True),
+            set_pending_overwrite(None),
+        ),
+        title=_ow.title if _ow else "",
+        message=_ow.message if _ow else "",
+        note=_ow.note if _ow else None,
+        details=_ow.details if _ow else (),
+        confirm_label=t("tiles.variables.confirm_overwrite_redownload"),
+        confirm_color="primary",
+        secondary_label=t("tiles.variables.confirm_overwrite_keep"),
+        on_secondary=lambda: (
+            _start_download(_ow_key, False),
+            set_pending_overwrite(None),
+        ),
     )
