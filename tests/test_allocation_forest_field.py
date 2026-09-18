@@ -158,3 +158,25 @@ def test_form_payload_carries_the_forest_file(tmp_path):
 
     src = inspect.getsource(allocation_form.AllocationFormDialog)
     assert "forest_file=" in src
+
+
+def test_rate_table_select_carries_the_in_field_help_icon(tmp_path):
+    """Same idiom as the Train dialog's model select: icon + click listener."""
+    box, _rc = _render(_project(tmp_path))
+    sel = _select(box, t("toolbox.allocation.field_defrate"))
+    assert sel.prepend_inner_icon == "mdi-information-outline"
+    assert "field-info-icon" in (sel.class_ or "")
+    assert "click:prepend-inner" in sel._event_handlers_map
+
+
+def test_rate_table_help_popup_explains_the_forest_field(tmp_path):
+    """The popup is what tells the user why the forest field comes and goes."""
+    box, _rc = _render(_project(tmp_path))
+    dialogs = _find(box, vw.Dialog)
+    assert any(
+        t("toolbox.allocation.field_forest").split(" (")[0] in str(d.children)
+        for d in dialogs
+    )
+    assert t("toolbox.allocation.field_forest").split(" (")[0] in t(
+        "toolbox.allocation.defrate_info_md"
+    )

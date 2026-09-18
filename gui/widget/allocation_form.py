@@ -29,6 +29,7 @@ from gui.widget.artifact_name_field import use_artifact_name
 from gui.widget.borders_picker import BordersPicker
 from gui.widget.creation_dialog import CreationDialog
 from gui.widget.details_fields import ro_field
+from gui.widget.help import InfoPopup
 from gui.widget.text_style import MUTED, TIGHT_FIELD, FieldHint
 
 logger = logging.getLogger("spatial_risk")
@@ -141,6 +142,7 @@ def AllocationFormDialog(
     defrate_mode, set_defrate_mode = solara.use_state(_DEFRATE_AUTO)
     defrate_override, set_defrate_override = solara.use_state("")
     forest, set_forest = solara.use_state("")
+    defrate_info_open, set_defrate_info_open = solara.use_state(False)
     borders, set_borders = solara.use_state(None)
     mask, set_mask = solara.use_state("")
     juris_ha, set_juris_ha = solara.use_state("")
@@ -301,7 +303,11 @@ def AllocationFormDialog(
             custom_table and bool(defrate_override)
         )
         with solara.Div(classes=[TIGHT_FIELD] if defrate_hint_will_render else []):
-            rv.Select(
+            # Same in-field help icon as the Train dialog's model select
+            # (prepend-inner + .field-info-icon, see model_form_dialog): the
+            # popup explains what the table is, how Automatic resolves it
+            # and why the forest field below appears only when computing.
+            defrate_select = rv.Select(
                 label=t("toolbox.allocation.field_defrate"),
                 items=[
                     {
@@ -319,7 +325,21 @@ def AllocationFormDialog(
                 on_v_model=lambda v: set_defrate_mode(v or _DEFRATE_AUTO),
                 dense=True,
                 outlined=True,
+                prepend_inner_icon="mdi-information-outline",
+                class_="field-info-icon",
             )
+        # rv.use_event is a hook — call it unconditionally.
+        rv.use_event(
+            defrate_select,
+            "click:prepend-inner",
+            lambda *_: set_defrate_info_open(True),
+        )
+        InfoPopup(
+            t("toolbox.allocation.field_defrate"),
+            t("toolbox.allocation.defrate_info_md"),
+            defrate_info_open,
+            set_defrate_info_open,
+        )
         if custom_table:
             with solara.Div(classes=[TIGHT_FIELD]):
                 FileInputComponent(
@@ -359,6 +379,8 @@ def AllocationFormDialog(
                     dense=True,
                     outlined=True,
                     clearable=True,
+                    hint=t("toolbox.allocation.field_forest_hint"),
+                    persistent_hint=bool(forest),
                 )
             if not forest:
                 FieldHint(
