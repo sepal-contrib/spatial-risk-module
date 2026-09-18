@@ -85,7 +85,7 @@ def test_far_prediction_computes_via_resolve_layers(tmp_path, monkeypatch):
     out = tmp_path / "defrate_cat_icar_forecast.csv"
     calls = {}
 
-    def fake_resolve_layers(project, pred):
+    def fake_resolve_layers(project, pred, forest_file=None):
         return {
             "defor_file": "/d.tif",
             "forest_file": "/f.tif",
@@ -121,7 +121,7 @@ def test_missing_time_interval_is_an_explicit_error(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runner,
         "_resolve_layers",
-        lambda project, pred: {
+        lambda project, pred, forest_file=None: {
             "defor_file": "/d.tif",
             "forest_file": "/f.tif",
             "riskmap_file": "/r.tif",

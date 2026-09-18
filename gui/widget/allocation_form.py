@@ -19,7 +19,9 @@ from gui.scripts.allocation_runner import (
     AllocationForm,
     mask_items,
     preview_defrate_source,
+    suggested_forest_file,
     validate_form,
+    will_compute,
 )
 from gui.scripts.artifact_names import suggest_name
 from gui.tile.evaluation_helpers import map_items
@@ -138,6 +140,7 @@ def AllocationFormDialog(
     pred_key, set_pred_key = solara.use_state(None)
     defrate_mode, set_defrate_mode = solara.use_state(_DEFRATE_AUTO)
     defrate_override, set_defrate_override = solara.use_state("")
+    forest, set_forest = solara.use_state("")
     borders, set_borders = solara.use_state(None)
     mask, set_mask = solara.use_state("")
     juris_ha, set_juris_ha = solara.use_state("")
@@ -170,6 +173,7 @@ def AllocationFormDialog(
             set_defrate_mode(_DEFRATE_AUTO)
             set_defrate_override("")
         set_borders(entry.borders)
+        set_forest(getattr(entry, "forest_file", None) or "")
         set_mask(entry.mask_file or "")
         set_juris_ha(
             "" if entry.defor_juris_ha is None else f"{entry.defor_juris_ha:.12g}"
@@ -192,6 +196,27 @@ def AllocationFormDialog(
 
     custom_table = defrate_mode == _DEFRATE_CUSTOM
 
+    def seed_forest():
+        """Re-seed the forest-at-start layer whenever the risk map changes.
+
+        A prefill entry for this same prediction keeps its own choice (the
+        prefill effect above runs first and sets pred_key, which re-fires
+        this effect); otherwise the prediction's recorded mask layer, the
+        model's forest feature or the Hansen layer is suggested. Empty when
+        nothing matches: the select then shows a hint and validate() blocks.
+        """
+        entry = prefill.value if prefill is not None else None
+        if (
+            entry is not None
+            and entry.prediction_key == pred_key
+            and getattr(entry, "forest_file", None)
+        ):
+            set_forest(entry.forest_file)
+            return
+        set_forest(suggested_forest_file(p, pred_key) or "")
+
+    solara.use_effect(seed_forest, [pred_key])
+
     def build_form():
         return AllocationForm(
             name=(name_value or "").strip(),
@@ -201,6 +226,7 @@ def AllocationFormDialog(
             ),
             borders=borders,
             mask_file=str(mask) if mask else None,
+            forest_file=str(forest) if forest else None,
             defor_juris_ha=_as_float(juris_ha),
             years_forecast=_as_float(years),
             density_extent=(
@@ -222,6 +248,7 @@ def AllocationFormDialog(
         set_pred_key(None)
         set_defrate_mode(_DEFRATE_AUTO)
         set_defrate_override("")
+        set_forest("")
         set_borders(None)
         set_mask("")
         set_juris_ha("")
@@ -310,6 +337,37 @@ def AllocationFormDialog(
                 pred_key=pred_key,
                 override=defrate_override if custom_table else "",
             )
+
+        # Forest at the start of the prediction's period: only a table that
+        # is about to be *computed* needs it, so the select shows for exactly
+        # that case. Seeded by seed_forest above; the choices are the same
+        # processed rasters the forest mask offers.
+        if (
+            pred_key
+            and not custom_table
+            and will_compute(preview_defrate_source(p, pred_key))
+        ):
+            forest_choices = mask_items(p)
+            with solara.Div(classes=[TIGHT_FIELD] if not forest else []):
+                rv.Select(
+                    label=t("toolbox.allocation.field_forest"),
+                    items=forest_choices,
+                    item_text="text",
+                    item_value="value",
+                    v_model=forest or None,
+                    on_v_model=lambda v: set_forest(v or ""),
+                    dense=True,
+                    outlined=True,
+                    clearable=True,
+                )
+            if not forest:
+                FieldHint(
+                    children=[
+                        solara.Text(
+                            t("toolbox.allocation.field_forest_none"), style=_HINT
+                        )
+                    ]
+                )
 
         with solara.Div().key(f"borders-{borders_seed}"):
             BordersPicker(
@@ -437,6 +495,11 @@ def _details_defrate(record):
     path = src.get("path")
     if provenance == "user" and path:
         return f"{label} — {Path(path).name}"
+    forest = src.get("forest_file")
+    if provenance == "computed" and forest:
+        return (
+            f"{label} ({t('toolbox.allocation.defrate_forest')}: {Path(forest).name})"
+        )
     return label
 
 

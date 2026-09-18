@@ -68,3 +68,21 @@ def test_resolve_layers_keeps_first_match_semantics():
     project, pred = _project(["forest_gfc_tc75", "forest_gfc_tc30"])
     layers = ev.resolve_layers(project, pred)
     assert layers["forest_file"] == "/data/forest_gfc_tc75.tif"
+
+
+def test_resolve_layers_uses_an_explicit_forest_file_over_the_scan():
+    """A caller who knows the forest layer (the allocation form) names it.
+
+    Datasets built on a non-Hansen forest layer ("geobosques") have nothing
+    for the prefix scan to find, so the explicit path must short-circuit it.
+    """
+    project, pred = _project(["altitude", "geobosques"])
+    layers = ev.resolve_layers(project, pred, forest_file="/data/geobosques.tif")
+    assert layers["forest_file"] == "/data/geobosques.tif"
+
+
+def test_resolve_layers_explicit_forest_file_wins_over_a_hansen_feature():
+    """The explicit choice is authoritative even when the scan would succeed."""
+    project, pred = _project(["forest_gfc_tc30"])
+    layers = ev.resolve_layers(project, pred, forest_file="/data/other.tif")
+    assert layers["forest_file"] == "/data/other.tif"

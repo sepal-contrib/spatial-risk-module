@@ -50,6 +50,9 @@ class DefrateSource:
     path: Optional[Path]
     provenance: str  # "persisted" | "mw-sibling" | "computed" | "user" | "evaluation"
     caveat: Optional[str] = None
+    #: Forest-at-period-start raster a "computed" table was built from; None
+    #: for every other provenance (their tables came ready-made).
+    forest_file: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         """Serializable form, stored on the AllocationRun record."""
@@ -57,14 +60,24 @@ class DefrateSource:
             "path": str(self.path) if self.path else None,
             "provenance": self.provenance,
             "caveat": self.caveat,
+            "forest_file": self.forest_file,
         }
 
 
-def _resolve_layers(project, pred):
+def will_compute(source: DefrateSource) -> bool:
+    """True when the run would compute its rate table (and so needs a forest file)."""
+    return (
+        source.provenance == "computed"
+        and source.path is not None
+        and not source.path.exists()
+    )
+
+
+def _resolve_layers(project, pred, forest_file=None):
     """Indirection so tests can stub the evaluation resolver."""
     from spatialrisk.evaluation import resolve_layers
 
-    return resolve_layers(project, pred)
+    return resolve_layers(project, pred, forest_file=forest_file)
 
 
 def _defrate_per_cat(**kwargs):
@@ -80,6 +93,7 @@ def resolve_defrate_table(
     *,
     user_path: Optional[Path] = None,
     compute: bool = True,
+    forest_file: Optional[str] = None,
 ) -> DefrateSource:
     """Find (or compute) the per-category rate table for a registered prediction.
 
@@ -87,6 +101,10 @@ def resolve_defrate_table(
     run that included it → the table persisted on the Prediction → the MW
     sibling-path convention → computed from the prediction's dataset. An MW or
     JNR prediction whose table is missing raises rather than recomputing it.
+
+    ``forest_file`` is the forest-at-period-start raster for the computed
+    branch only (see ``suggested_forest_file``); without it the library falls
+    back to the Hansen naming convention.
 
     The import branch comes before every family check on purpose: an import
     named ``mw_...`` or ``jnr_...`` must never be routed by ``_family`` into a
@@ -139,7 +157,7 @@ def resolve_defrate_table(
             f"No rate table available for '{pred_key}' and computing is disabled."
         )
 
-    layers = _resolve_layers(project, pred)
+    layers = _resolve_layers(project, pred, forest_file=forest_file)
     if not layers.get("time_interval"):
         raise AllocationResolveError(
             "Cannot determine the period length from the dataset's target name "
@@ -155,7 +173,11 @@ def resolve_defrate_table(
         tab_file_defrate=out,
         verbose=False,
     )
-    return DefrateSource(path=out, provenance="computed")
+    return DefrateSource(
+        path=out,
+        provenance="computed",
+        forest_file=str(layers["forest_file"]) if layers.get("forest_file") else None,
+    )
 
 
 def _defrate_from_evaluation(project, pred_key: str, pred) -> DefrateSource:
@@ -243,6 +265,53 @@ def preview_defrate_source(
 _MASK_SUFFIXES = {".tif", ".tiff", ".vrt"}
 
 
+#: Dataset-feature prefix of the Hansen forest layer (bare or "_tc30"-suffixed).
+_HANSEN_FOREST_PREFIX = "forest_gfc"
+
+
+def suggested_forest_file(project, pred_key: Optional[str]) -> Optional[str]:
+    """Forest-at-period-start raster to seed the form with, or None.
+
+    In order: the mask layer the Predict dialog recorded on the prediction
+    (``run_params.mask_layer``, a processed-variable key); the forest feature
+    a JNR/MW model snapshot names (``forest_var``, a dataset feature name);
+    the first Hansen-named dataset feature (the library's own fallback). A
+    source that no longer resolves is skipped, never raised on: the form
+    offers the full processed-raster list either way.
+    """
+    pred = (getattr(project, "predictions", None) or {}).get(pred_key)
+    if pred is None:
+        return None
+
+    mask_key = (getattr(pred, "run_params", None) or {}).get("mask_layer")
+    if mask_key:
+        var = (getattr(project, "processed_variables", None) or {}).get(mask_key)
+        path = getattr(var, "path", None)
+        if path:
+            return str(path)
+
+    dataset = None
+    get_dataset = getattr(project, "get_dataset", None)
+    if callable(get_dataset):
+        dataset = get_dataset(pred.dataset_name)
+    features = list(getattr(dataset, "features", None) or [])
+
+    forest_var = (getattr(pred, "model_snapshot", None) or {}).get("forest_var")
+    if forest_var:
+        for feature in features:
+            if getattr(feature, "name", None) == forest_var and feature.path:
+                return str(feature.path)
+
+    for feature in features:
+        name = getattr(feature, "name", "") or ""
+        if name == _HANSEN_FOREST_PREFIX or name.startswith(
+            f"{_HANSEN_FOREST_PREFIX}_"
+        ):
+            if feature.path:
+                return str(feature.path)
+    return None
+
+
 def mask_items(project) -> List[dict]:
     """Mask choices for the form: the project's processed raster variables.
 
@@ -312,6 +381,9 @@ class AllocationForm:
     years_forecast: float
     #: None (no raster) | "project" (cropped extent) | "aoi" (whole risk map).
     density_extent: Optional[str] = None
+    #: Forest-at-period-start raster for a computed rate table; ignored when
+    #: the table resolves any other way. None = the library's Hansen fallback.
+    forest_file: Optional[str] = None
 
 
 def _allocate(**kwargs):
@@ -522,9 +594,19 @@ def validate_form(project, form: AllocationForm) -> Optional[str]:
     for label, value in (
         ("rate table", form.user_defrate_path),
         ("mask", form.mask_file),
+        ("forest-at-start", form.forest_file),
     ):
         if value and not Path(value).exists():
             return f"The selected {label} file does not exist: {value}"
+    if not form.forest_file and will_compute(
+        preview_defrate_source(
+            project, form.prediction_key, user_path=form.user_defrate_path
+        )
+    ):
+        return (
+            "Choose the forest layer at the start of the prediction's period: "
+            "the rate table will be computed from it."
+        )
     return None
 
 
@@ -566,7 +648,10 @@ def run_allocation(
         )
     riskmap_file = pred.path
     source = resolve_defrate_table(
-        project, form.prediction_key, user_path=form.user_defrate_path
+        project,
+        form.prediction_key,
+        user_path=form.user_defrate_path,
+        forest_file=form.forest_file,
     )
 
     # Resolution runs before the core creates out_dir. A failure here — the
