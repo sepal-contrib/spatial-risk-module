@@ -179,9 +179,16 @@ def _run_download(keys, bulk, p, project_reactive, notifier, overwrite=False):
                             done=done,
                             total=total,
                         ),
+                        format_wait=lambda k: t(
+                            "notifications.task_download_queued", name=_var_name(k)
+                        ),
                     )
                     process_actions.materialize_raw_layers(
-                        p, list(keys), on_progress=on_progress, overwrite=overwrite
+                        p,
+                        list(keys),
+                        on_progress=on_progress,
+                        overwrite=overwrite,
+                        on_wait=on_progress.on_wait,
                     )
                     p.save()
             except Exception:

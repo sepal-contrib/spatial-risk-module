@@ -1,9 +1,22 @@
 """Download Earth Engine images to local GeoTIFFs with geedim."""
 
+import threading
 from typing import Any, Optional, Union
 
 import ee
 import geedim as gd  # noqa
+
+from spatialrisk.gee.progress import notify_download_wait
+
+# geedim runs every download through ``geedim.utils.AsyncRunner``: a
+# process-wide singleton wrapping ONE ``asyncio.Runner`` (one event loop).
+# ``AsyncRunner.run`` only checks whether the *calling* thread already has a
+# running loop, so two plain worker threads (the GUI starts one per download
+# action) both call ``run_until_complete`` on that shared loop and the second
+# dies with "This event loop is already running". Downloads therefore take
+# turns here; tiles within one download still fetch concurrently. A download
+# that has to wait says so once (``notify_download_wait``) before blocking.
+_geedim_lock = threading.Lock()
 
 
 def _export_bounds(region: Any) -> Any:
@@ -118,19 +131,20 @@ def download_ee_image(
             image = image.clip(region)
         image = image.unmask(unmask_value, sameFootprint=False)
 
-    img = image.gd.prepareForExport(
-        crs=crs,
-        region=_export_bounds(region),
-        scale=scale,
-        resampling=resampling,
-        dtype=dtype,
-    )
-
-    if nodata_value is None:
-        img.gd.toGeoTIFF(file=filename, overwrite=overwrite, nodata=True, **kwargs)
-    elif nodata_value is not None:
-        img.gd.toGeoTIFF(
-            file=filename, overwrite=overwrite, nodata=nodata_value, **kwargs
+    if not _geedim_lock.acquire(blocking=False):
+        notify_download_wait()
+        _geedim_lock.acquire()
+    try:
+        img = image.gd.prepareForExport(
+            crs=crs,
+            region=_export_bounds(region),
+            scale=scale,
+            resampling=resampling,
+            dtype=dtype,
         )
+        nodata = True if nodata_value is None else nodata_value
+        img.gd.toGeoTIFF(file=filename, overwrite=overwrite, nodata=nodata, **kwargs)
+    finally:
+        _geedim_lock.release()
 
     print(f"File {filename}, downloaded")

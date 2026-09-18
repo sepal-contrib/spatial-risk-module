@@ -44,7 +44,7 @@ def existing_download_targets(project, keys=None) -> List[tuple]:
 
 
 def materialize_raw_layers(
-    project, keys=None, on_progress=None, overwrite: bool = False
+    project, keys=None, on_progress=None, overwrite: bool = False, on_wait=None
 ) -> List[str]:
     """Download raw GEEVars to local vars, replacing them in raw_variables.
 
@@ -60,8 +60,13 @@ def materialize_raw_layers(
     reports download progress: once with zero tile counts as each layer starts,
     then per completed geedim tile. Vector and already-on-disk layers produce
     only the start event (they have no tile bar).
+
+    ``on_wait(layer_key, layer_idx, n_layers)`` fires once when a raster
+    layer's export has to queue behind another download's (geedim runs one at
+    a time, see ``download_ee_image``); it never fires when the layer starts
+    at once.
     """
-    from spatialrisk.gee.progress import geedim_tile_progress
+    from spatialrisk.gee.progress import geedim_download_wait, geedim_tile_progress
     from spatialrisk.log_utils import log_progress
     from spatialrisk.variables.models import DataType
 
@@ -90,7 +95,12 @@ def materialize_raw_layers(
             if on_progress is not None
             else lambda done, total: None
         )
-        with geedim_tile_progress(tile_cb):
+        wait_cb = (
+            (lambda _k=key, _i=idx: on_wait(_k, _i, n_layers))
+            if on_wait is not None
+            else lambda: None
+        )
+        with geedim_tile_progress(tile_cb), geedim_download_wait(wait_cb):
             if var.data_type == DataType.vector:
                 local = var.to_local_vector(overwrite=overwrite)
             else:

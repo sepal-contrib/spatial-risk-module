@@ -369,3 +369,29 @@ def test_cancellation_is_not_reported_as_a_failure():
     task = next(t for t in bus.tasks.value if t.title == "Cancelled job")
     assert task.status == TaskStatus.CANCELLED
     assert [t for t in bus.toasts.value if t.type == ToastType.ERROR] == []
+
+
+def test_layer_reporter_wait_publishes_indeterminate_detail():
+    """A queued layer shows its waiting message on an indeterminate ring."""
+    _logger, bus, notifier = _fresh()
+    with notifier.track("Downloading layer 'rivers'") as task:
+        report = notify_bridge.layer_progress_reporter(
+            task, format_wait=lambda k: f"{k} — waiting for another download"
+        )
+        report("rivers", 0, 1, 0, 0)
+        report.on_wait("rivers", 0, 1)
+        t = bus.tasks.value[0]
+        assert t.progress is None
+        assert t.progress_detail == "rivers — waiting for another download"
+        # the first tile tick replaces the waiting message
+        report("rivers", 0, 1, 1, 4)
+        assert bus.tasks.value[0].progress_detail == "rivers — tile 1/4"
+
+
+def test_layer_reporter_wait_without_format_is_a_noop():
+    """Callers that don't localize a wait message get a safe no-op hook."""
+    _logger, bus, notifier = _fresh()
+    with notifier.track("Downloading layer 'rivers'") as task:
+        report = notify_bridge.layer_progress_reporter(task)
+        report.on_wait("rivers", 0, 1)
+        assert bus.tasks.value[0].progress_detail is None

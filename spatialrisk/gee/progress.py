@@ -13,6 +13,11 @@ registered the subclass behaves exactly like tqdm. Callbacks live in a
 ``threading.local`` keyed to the thread that *creates* the bar — geedim's
 ``AsyncRunner.run`` drives its event loop on the calling thread, so a download
 job only ever sees its own callback and concurrent jobs cannot cross-talk.
+
+``geedim_download_wait`` is the same thread-local pattern for a second event:
+``download_ee_image`` serializes downloads on one lock (geedim's runner owns a
+single event loop), and a download that finds the lock taken calls
+``notify_download_wait`` once before blocking, so the UI can say it is queued.
 """
 
 import threading
@@ -92,3 +97,29 @@ def geedim_tile_progress(callback):
         yield
     finally:
         _local.callback = previous
+
+
+@contextmanager
+def geedim_download_wait(callback):
+    """Route "queued behind another download" notices on this thread to ``callback()``.
+
+    ``download_ee_image`` fires it at most once per call, right before it
+    blocks on the lock; a download that gets the lock straight away never
+    fires it. Nesting restores the previous callback on exit.
+    """
+    previous = getattr(_local, "on_wait", None)
+    _local.on_wait = callback
+    try:
+        yield
+    finally:
+        _local.on_wait = previous
+
+
+def notify_download_wait() -> None:
+    """Tell this thread's ``geedim_download_wait`` callback, if any, that we queue."""
+    cb = getattr(_local, "on_wait", None)
+    if cb is not None:
+        try:
+            cb()
+        except Exception:  # a display hiccup must never kill a download
+            pass

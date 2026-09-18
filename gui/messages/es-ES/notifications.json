@@ -11,6 +11,7 @@
     "task_download_one": "Descargando la capa '{name}'",
     "task_download_layer": "Descargando la capa {i}/{n}: '{name}'",
     "task_download_tiles": "'{name}' — tesela {done}/{total}",
+    "task_download_queued": "'{name}' — en cola, esperando a que termine otra descarga",
     "task_change": "Generando la capa de cambio ({op})",
     "task_postprocess": "Aplicando {step} a '{name}'",
     "task_processing_one": "Armonizando {name}"

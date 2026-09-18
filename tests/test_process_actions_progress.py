@@ -82,3 +82,30 @@ def test_on_progress_receives_geedim_tile_ticks():
         ("rivers", 0, 1, 2, 3),
         ("rivers", 0, 1, 3, 3),
     ]
+
+
+def test_on_wait_receives_the_queued_layer_identity():
+    """A download queued behind another's geedim call reports which layer waits."""
+    from spatialrisk.gee import progress
+
+    class _QueuedGEEVar(GEEVar):
+        def to_local_raster(self, overwrite=False):
+            progress.notify_download_wait()  # what download_ee_image does when queued
+            return _Local()
+
+    _QueuedGEEVar.__name__ = "GEEVar"
+
+    project = _Project({"rivers": _QueuedGEEVar()})
+    waits = []
+    process_actions.materialize_raw_layers(
+        project, on_progress=lambda *a: None, on_wait=lambda *a: waits.append(a)
+    )
+    assert waits == [("rivers", 0, 1)]
+
+
+def test_on_wait_without_a_queue_never_fires():
+    """A download that gets geedim immediately reports no wait."""
+    project = _Project({"rivers": GEEVar()})
+    waits = []
+    process_actions.materialize_raw_layers(project, on_wait=lambda *a: waits.append(a))
+    assert waits == []
