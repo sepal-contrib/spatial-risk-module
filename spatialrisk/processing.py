@@ -1,9 +1,12 @@
+"""Raster processing helpers: warps, rasterization, distances and change layers."""
+
 from typing import TYPE_CHECKING, List
+
 import numpy as np
-from osgeo import gdal
 import rasterio
 import rioxarray
 import xarray as xr
+from osgeo import gdal
 
 from spatialrisk.gdal_env import configure_gdal_tmpdir
 from spatialrisk.variables.models import RasterType
@@ -21,14 +24,17 @@ def reproject_raster_gdal_warp(
     resampling_method: str = "near",
 ) -> None:
     """
-    Reprojects a raster file to a specified EPSG code using GDAL and saves it with DEFLATE compression.
+    Reproject a raster to a given EPSG code with GDAL, saved with DEFLATE compression.
 
     Parameters:
     input_file (str): The path to the input raster file.
     output_file (str): The path where the reprojected raster file will be saved.
-    target_epsg (str): The EPSG code of the target coordinate reference system (e.g., 'EPSG:4326').
-    resolution (int | float): Target resolution in the units of the target CRS. Default is 30.
-    resampling_method (str): Resampling algorithm ('near', 'bilinear', 'cubic', etc.). Default is 'near'.
+    target_epsg (str): The EPSG code of the target coordinate reference system
+        (e.g., 'EPSG:4326').
+    resolution (int | float): Target resolution in the units of the target CRS.
+        Default is 30.
+    resampling_method (str): Resampling algorithm ('near', 'bilinear', 'cubic',
+        etc.). Default is 'near'.
 
     Returns:
     None
@@ -86,7 +92,8 @@ def xr_rasterize(
     """
     Rasterizes a vector shapefile into a raster array.
 
-    This function provides unified functionality for both binary and unique ID rasterization.
+    This function provides unified functionality for both binary and unique ID
+    rasterization.
 
     Parameters
     ----------
@@ -110,12 +117,11 @@ def xr_rasterize(
         A set of keyword arguments to ``rasterio.features.rasterize``.
         Can include: 'all_touched', 'merge_alg', 'dtype'.
 
-    Returns
+    Returns:
     -------
     da_rasterized : xarray.DataArray
         The rasterized vector data.
     """
-
     import geopandas as gpd
     import rasterio
     from odc.geo import xr
@@ -151,7 +157,8 @@ def xr_rasterize(
             raise ValueError(
                 f"Cannot rasterize with mode='unique': {num_features} features found, "
                 f"but unique mode only supports up to 255 unique values. "
-                f"Consider using mode='binary' instead to create a simple presence/absence raster."
+                f"Consider using mode='binary' instead to create a simple "
+                f"presence/absence raster."
             )
         dtype = "uint8"
     else:
@@ -183,7 +190,7 @@ def xr_rasterize(
         tiled=True,
     )
 
-    # Explicitly close references – not strictly required but tidy.
+    # Explicitly close references - not strictly required but tidy.
     del im
     del da_rasterized
 
@@ -197,9 +204,10 @@ def distance_to_edge_gdal_no_mask(
     input_nodata=True,
     verbose=False,
 ):
-    """Computes the shortest distance to given pixel values in a raster,
-    while preserving the original nodata mask in the output."""
+    """Compute the shortest distance to given pixel values in a raster.
 
+    The original nodata mask is preserved in the output.
+    """
     # ComputeProximity() needs a writable scratch dir for its Float32 working
     # band (the destination is UInt32). Cheap and idempotent, so re-assert it
     # here in case this helper is used without the app's import-time setup.
@@ -411,8 +419,8 @@ def make_forest_loss_var(
     whether to add_as_raw().
     """
     from pathlib import Path
+
     from spatialrisk.variables import LocalRasterVar
-    from spatialrisk.variables.models import RasterType
 
     start_year = start_layer.year
     end_year = end_layer.year
@@ -458,14 +466,13 @@ def get_forest_loss_calculated(
         List of exactly 3 forest raster layers, each with a year attribute.
         Years are automatically extracted from the layers.
 
-    Returns
+    Returns:
     -------
     List[LocalRasterVar]
         Three LocalRasterVar objects for the generated forest loss rasters
     """
     # Import here to avoid circular dependency
     from spatialrisk.variables import LocalRasterVar
-    from pathlib import Path
 
     # Validate input - must have exactly 3 layers
     if len(forest_layers) != 3:
@@ -534,15 +541,15 @@ def display_raster(
         Maximum dimension for display (default: 1024). Rasters larger than this
         will be downsampled for faster visualization.
 
-    Returns
+    Returns:
     -------
     tuple or None
         If return_fig=True, returns (fig, ax) tuple. Otherwise returns None.
     """
     import matplotlib.pyplot as plt
+    import numpy as np
     import rasterio
     from rasterio.enums import Resampling
-    import numpy as np
 
     # Open the raster file using rasterio
     with rasterio.open(path) as src:
@@ -614,13 +621,13 @@ def display_raster(
             else:
                 cmap = plt.cm.get_cmap("nipy_spectral", n_categories)
 
-            im = ax.imshow(raster_data, cmap=cmap, interpolation="nearest")
+            ax.imshow(raster_data, cmap=cmap, interpolation="nearest")
             ax.set_title(
                 f"{name}\n(Categorical - {n_categories} classes)", fontsize=10, pad=5
             )
         else:
             # Continuous raster: use continuous colormap
-            im = ax.imshow(raster_data, cmap="viridis")
+            ax.imshow(raster_data, cmap="viridis")
 
             # Add statistics to title
             if np.ma.is_masked(raster_data):
