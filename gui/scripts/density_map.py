@@ -15,8 +15,10 @@ from typing import Tuple
 
 logger = logging.getLogger("spatial_risk")
 
-#: Perceptually ordered ramp for "hectares lost per pixel per year".
-DENSITY_CMAP_NAME = "YlOrRd"
+#: Ramp for "hectares lost per pixel per year": green (little or no loss)
+#: through yellow to red (most loss). matplotlib's RdYlGn runs red→green, so
+#: the reversed variant puts green at the low end.
+DENSITY_CMAP_NAME = "RdYlGn_r"
 
 #: Nodata of the density raster, mirrored from spatialrisk.allocation so this
 #: module stays importable without pulling in the numeric core.

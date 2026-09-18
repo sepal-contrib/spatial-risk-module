@@ -603,11 +603,26 @@ def _defrate_per_cat(**kwargs):
     return rmj.deforrate.defrate_per_cat(**kwargs)
 
 
-def resolve_layers(project, pred):
-    """Recover the two binary layers + time interval from the prediction's dataset."""
+def resolve_layers(project, pred, forest_file=None):
+    """Recover the two binary layers + time interval from the prediction's dataset.
+
+    ``forest_file`` names the forest-at-period-start raster explicitly (the
+    allocation form seeds it from the prediction's recorded mask layer and
+    lets the user pick any processed raster). Without it, the Hansen naming
+    convention below is the only way to find that layer, which fails for
+    datasets built on any other forest map.
+    """
     ds = project.get_dataset(pred.dataset_name)
     if ds is None:
         raise ValueError(f"Dataset '{pred.dataset_name}' not found in project.")
+    if forest_file:
+        return {
+            "defor_file": ds.target.path,
+            "forest_file": forest_file,
+            "riskmap_file": pred.path,
+            "time_interval": interval_from_target(ds.target.name),
+            "period": pred.dataset_name,
+        }
     # Hansen layers created in the GUI carry their parameters in the variable
     # name ("forest_gfc_tc30" for a 30% tree-cover threshold), so an exact match
     # misses every layer added since that feature shipped. The resolver that
