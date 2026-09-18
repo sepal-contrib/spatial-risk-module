@@ -578,8 +578,10 @@ def test_toggling_a_second_row_keeps_the_first_rows_bookkeeping(monkeypatch):
             time.sleep(0.01)
         gate_a.set()
         deadline = time.time() + 5.0
-        while (
-            time.time() < deadline and "rowA" not in inference_tile.preds_on_map.value
+        # The worker marks the row on-map in its ``finally`` and registers the
+        # legend only after that, so wait for both signals, not just the first.
+        while time.time() < deadline and (
+            "rowA" not in inference_tile.preds_on_map.value or len(registered) < 2
         ):
             time.sleep(0.01)
         assert "rowA" in inference_tile.preds_on_map.value

@@ -19,6 +19,41 @@ imported before any test module, whereas fixtures run only after the test
 module — and its component imports — have already been evaluated.
 """
 
+import sys
+
+import pytest
+
 from gui.i18n import t
 
 t("common.cancel")
+
+
+# Module-level InflightKeys, one per tile that runs per-item workers. A test
+# that claims a key through a stubbed worker and fails before its own teardown
+# leaves the key claimed for every later test in the process — the button it
+# gates ("Harmonize all" on ``reference_inflight``, a row spinner elsewhere)
+# then stays dead, as a failure in an unrelated test that moves with collection
+# order. The tile modules' own autouse fixtures drain their key on the happy
+# path; this one is the backstop, and it only touches modules a test already
+# imported so pure-library tests never pull the GUI in.
+_INFLIGHT_KEYS = (
+    ("gui.tile.derived_map", "derived_toggle_inflight"),
+    ("gui.tile.inference_tile", "preds_inflight"),
+    ("gui.tile.postprocess_tile", "derived_inflight"),
+    ("gui.tile.process_tile", "reference_inflight"),
+    ("gui.tile.sampling_tile", "samples_pending"),
+    ("gui.tile.variables_tile", "download_inflight"),
+    ("gui.tile.variables_tile", "vars_inflight"),
+)
+
+
+@pytest.fixture(autouse=True)
+def _drain_inflight_keys():
+    """Release every module-level in-flight claim a test left behind."""
+    yield
+    for module_name, attr in _INFLIGHT_KEYS:
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue
+        keys = getattr(module, attr)
+        keys.release(*keys.value)
