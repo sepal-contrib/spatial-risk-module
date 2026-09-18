@@ -81,6 +81,10 @@ def reproject_raster_gdal_warp(
     dataset = None
 
 
+# Rows per band when rasterizing a vector onto the base grid (see xr_rasterize).
+RASTERIZE_BAND_ROWS = 2048
+
+
 def xr_rasterize(
     shapefile_path: str = None,
     geobox=None,
@@ -124,7 +128,7 @@ def xr_rasterize(
     """
     import geopandas as gpd
     import rasterio
-    from odc.geo import xr
+    from shapely.geometry import box
 
     # Read the shapefile
     gdf = gpd.read_file(filename=shapefile_path, engine="fiona")
@@ -135,13 +139,13 @@ def xr_rasterize(
     # Handle different modes
     if mode == "binary":
         # Binary mode: rasterize into a boolean array with 1s and 0s
-        shapes = gdf_reproj.geometry
+        shapes = list(gdf_reproj.geometry)
         values = [1] * len(gdf_reproj)  # All features set to 1
         shapes_and_values = list(zip(shapes, values))
 
     elif mode == "unique":
         # Unique ID mode: rasterize using unique integer IDs for each feature
-        shapes = gdf_reproj.geometry
+        shapes = list(gdf_reproj.geometry)
         # Create unique integer IDs starting from 1
         values = list(range(1, len(gdf_reproj) + 1))
         shapes_and_values = list(zip(shapes, values))
@@ -168,31 +172,59 @@ def xr_rasterize(
     # Allow user to override dtype via kwargs
     dtype = rasterio_kwargs.pop("dtype", dtype)
 
-    # Rasterize shapes into a numpy array
-    im = rasterio.features.rasterize(
-        shapes=shapes_and_values if mode == "unique" else shapes,
-        out_shape=geobox.shape,
-        transform=geobox.transform,
-        dtype=dtype,
-        **rasterio_kwargs,
-    )
+    # Burn and write one band of rows at a time. Rasterizing the whole grid
+    # into one array, wrapping it and handing it to ``rio.to_raster`` held the
+    # output several times over: measured 2026-09-18 on the Bolivia grid
+    # (44661 x 49363 uint8, 2.2 GB) at 8.4 GB peak, which with the raster
+    # warps of the same harmonize-all run killed the kernel on a 16 GB
+    # machine. Peru is larger. A band of RASTERIZE_BAND_ROWS full-width rows
+    # is ~90 MB at that width, and the spatial index keeps each band's burn
+    # to the features that touch it, so a sparse layer costs no more than a
+    # dense one per band. Output layout is unchanged (256x256 DEFLATE tiles,
+    # predictor 2, BigTIFF) and the result is identical to the whole-grid
+    # burn: rasterize() is per-pixel, so splitting rows does not move a seam.
+    from rasterio.windows import Window, bounds
+    from rasterio.windows import transform as window_transform
 
-    # Convert numpy array to a full xarray.DataArray
-    # and set array name if supplied
-    da_rasterized = xr.wrap_xr(im=im, gbox=geobox)
+    items = shapes_and_values if mode == "unique" else shapes
+    geoms = gdf_reproj.geometry
+    sindex = geoms.sindex if len(geoms) else None
+    height, width = geobox.shape
 
-    da_rasterized.rio.to_raster(
+    with rasterio.open(
         output_path,
+        "w",
         driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=dtype,
+        crs=geobox.crs.to_wkt(),
+        transform=geobox.transform,
         compress="DEFLATE",
         predictor=2,
         bigtiff="YES",
         tiled=True,
-    )
-
-    # Explicitly close references - not strictly required but tidy.
-    del im
-    del da_rasterized
+        blockxsize=256,
+        blockysize=256,
+    ) as dst:
+        for row_off in range(0, height, RASTERIZE_BAND_ROWS):
+            rows = min(RASTERIZE_BAND_ROWS, height - row_off)
+            window = Window(0, row_off, width, rows)
+            band = np.zeros((rows, width), dtype=dtype)
+            if sindex is not None:
+                hits = sindex.query(box(*bounds(window, geobox.transform)))
+                if len(hits):
+                    hits = np.sort(hits)  # burn order as in the whole-grid call
+                    band = rasterio.features.rasterize(
+                        shapes=[items[i] for i in hits],
+                        out_shape=(rows, width),
+                        transform=window_transform(window, geobox.transform),
+                        dtype=dtype,
+                        **rasterio_kwargs,
+                    )
+            dst.write(band, 1, window=window)
+            del band
 
 
 def distance_to_edge_gdal_no_mask(
