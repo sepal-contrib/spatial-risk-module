@@ -669,6 +669,9 @@ def test_asset_export_temp_file_is_removed_when_the_export_raises(
         Path(filename).write_text("{}")
         raise TimeoutError("export timed out")
 
+    # init_ee reads ~/.config/earthengine/credentials and raises when they
+    # carry no project: keep the test independent of the machine's EE setup.
+    monkeypatch.setattr("pysepal.scripts.utils.init_ee", lambda: None)
     monkeypatch.setattr(runner, "_ee_export_vector", fake_export)
     monkeypatch.setattr(runner, "_build_asset_fc", lambda asset: object())
 
@@ -814,6 +817,7 @@ def test_asset_export_target_is_geojson_not_gpkg(tmp_path, monkeypatch):
         seen["selectors"] = selectors
         _square_gdf().to_file(filename, driver="GeoJSON")
 
+    monkeypatch.setattr("pysepal.scripts.utils.init_ee", lambda: None)
     monkeypatch.setattr(runner, "_ee_export_vector", fake_export)
     monkeypatch.setattr(runner, "_build_asset_fc", lambda asset: object())
 
