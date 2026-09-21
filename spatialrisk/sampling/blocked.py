@@ -36,8 +36,27 @@ WHY PASS 2 IS STRIPE-OUTERMOST, CLASSES-INNERMOST
 -------------------------------------------------
 Classes share the stripe that has just been decoded, so the whole scan costs
 two physical reads of the raster rather than ``1 + n_classes``.
+
+WHY A THREAD POOL OVER STRIPES, NOT GDAL DECODE THREADS
+-------------------------------------------------------
+The time per stripe is numpy work (validity, histogram, rank expansion), not
+tile decoding: on the 2.2 Gpx Bolivia raster ``GDAL_NUM_THREADS`` 1 -> 8 moved
+a full run only 36.7 -> 31.6 s, while a pool of worker threads that each own
+a dataset handle took pass 1 from 14.6 s to 2.7 s on 8 workers (and 5.2 s ->
+2.0 s on a SEPAL c8). GDAL releases the GIL during ``read`` and numpy releases
+it for the bulk of the array work, so plain threads scale.
+
+Every stripe's contribution is independent: pass 1 records **per-stripe**
+counts, and their prefix sums give each stripe the global rank offset it
+would have seen in the serial walk. Pass 2 can therefore visit stripes in
+any order (and only the ones that hold a wanted rank) and still assemble the
+result in stripe order, which keeps the output bit-identical to the serial
+scan -- the identity matrix in ``tests/test_sampling_blocked.py`` and the
+worker-count matrix in ``tests/test_sampling_pool.py`` are the proof.
 """
-from typing import Dict, Iterator, List, Optional, Tuple
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -92,9 +111,21 @@ class RasterScan:
     strategies need without anyone having to read a band.
 
     Use as a context manager; ``iter_stripes()`` may be called once per pass.
+
+    ``workers`` is the size of the stripe-level thread pool (see the module
+    docstring). ``None`` asks :func:`spatialrisk.gdal_env.plan_sampling` for a
+    count from the machine's cores and free memory (the plan is kept as
+    ``self.plan``); an int is used as given, which is what tests and benchmarks
+    do. With one worker the passes walk the stripes on the calling thread,
+    exactly as before the pool existed.
+
+    ``stripes_read`` counts stripe reads across both passes (tests use it to
+    prove pass 2 skips stripes that hold no wanted rank).
     """
 
-    def __init__(self, raster_path, mask_path=None, *, rows_per_stripe=None):
+    def __init__(
+        self, raster_path, mask_path=None, *, rows_per_stripe=None, workers=None
+    ):
         """Open the raster (and mask) and plan the stripe windows.
 
         Raises ValueError if the mask is not co-registered with the raster, and
@@ -104,8 +135,16 @@ class RasterScan:
         import rasterio
         from rasterio.windows import Window
 
+        self._raster_path = raster_path
+        self._mask_path = mask_path
         self._src = rasterio.open(raster_path)
         self._msrc = None
+        self._worker_handles: List[object] = []
+        self._handles_lock = threading.Lock()
+        self.stripes_read = 0
+        self.stripe_counts: Optional[List[Dict]] = None
+        self.stripe_valid: Optional[List[int]] = None
+        self.plan = None
         try:
             if mask_path is not None:
                 self._msrc = rasterio.open(mask_path)
@@ -118,7 +157,21 @@ class RasterScan:
                         f"{self._src.shape}; raster and mask must be "
                         "co-registered."
                     )
-            self.rows_per_stripe = self._stripe_height(rows_per_stripe)
+            if workers is None:
+                from spatialrisk.gdal_env import plan_sampling
+
+                self.plan = plan_sampling(
+                    width=self.width,
+                    tile_rows=int(self._src.block_shapes[0][0]) or 1,
+                    itemsize=int(self.dtype.itemsize),
+                    with_mask=self._msrc is not None,
+                    rows_per_stripe=rows_per_stripe,
+                )
+                self.workers = int(self.plan.workers)
+                self.rows_per_stripe = int(self.plan.rows_per_stripe)
+            else:
+                self.workers = max(1, int(workers))
+                self.rows_per_stripe = self._stripe_height(rows_per_stripe)
             self.windows: List[Window] = [
                 Window(0, r, self.width, min(self.rows_per_stripe, self.height - r))
                 for r in range(0, self.height, self.rows_per_stripe)
@@ -189,14 +242,97 @@ class RasterScan:
         """
         mask_nodata = self._msrc.nodata if self._msrc is not None else None
         for window in self.windows:
+            self.stripes_read += 1
             arr = self._src.read(1, window=window)
             mask_arr = (
                 self._msrc.read(1, window=window) if self._msrc is not None else None
             )
             yield window, arr, valid_block(arr, self.nodata, mask_arr, mask_nodata)
 
+    # -- the stripe pool --------------------------------------------------- #
+    def _thread_handles(self, local):
+        """This worker thread's own dataset handles, opened on first use.
+
+        GDAL dataset handles are not safe to share between threads, so each
+        pool thread opens the raster (and mask) once and keeps them in
+        thread-local storage; :meth:`close` closes them all.
+        """
+        if not hasattr(local, "src"):
+            import rasterio
+
+            local.src = rasterio.open(self._raster_path)
+            local.msrc = (
+                rasterio.open(self._mask_path) if self._mask_path is not None else None
+            )
+            with self._handles_lock:
+                self._worker_handles.append(local.src)
+                if local.msrc is not None:
+                    self._worker_handles.append(local.msrc)
+        return local.src, local.msrc
+
+    def map_stripes(
+        self, fn: Callable, indices: Optional[Sequence[int]] = None
+    ) -> List:
+        """Apply ``fn(index, window, band_values, validity)`` to stripes, in order.
+
+        ``indices`` selects which stripes are read (all of them by default).
+        Returns the per-stripe results **in stripe order** whatever order the
+        pool processed them in, which is what keeps every collector's output
+        identical to a serial walk. One worker walks the stripes on the
+        calling thread through :meth:`iter_stripes`; more spread them over a
+        thread pool where each thread owns a dataset handle. Results are
+        expected to be small (counts, or the points found in a stripe), so
+        holding all of them is fine; only ``workers`` stripes are decoded at
+        once.
+        """
+        if indices is None:
+            indices = range(len(self.windows))
+        indices = list(indices)
+        if not indices:
+            return []
+        mask_nodata = self._msrc.nodata if self._msrc is not None else None
+        nodata = self.nodata
+
+        if self.workers <= 1:
+            out = []
+            wanted = set(indices)
+            for i, window in enumerate(self.windows):
+                if i not in wanted:
+                    continue
+                self.stripes_read += 1
+                arr = self._src.read(1, window=window)
+                mask_arr = (
+                    self._msrc.read(1, window=window)
+                    if self._msrc is not None
+                    else None
+                )
+                out.append(
+                    fn(i, window, arr, valid_block(arr, nodata, mask_arr, mask_nodata))
+                )
+            return out
+
+        local = threading.local()
+
+        def one(i):
+            src, msrc = self._thread_handles(local)
+            window = self.windows[i]
+            arr = src.read(1, window=window)
+            mask_arr = msrc.read(1, window=window) if msrc is not None else None
+            with self._handles_lock:
+                self.stripes_read += 1
+            return fn(i, window, arr, valid_block(arr, nodata, mask_arr, mask_nodata))
+
+        with ThreadPoolExecutor(
+            max_workers=min(self.workers, len(indices)), thread_name_prefix="stripe"
+        ) as pool:
+            return list(pool.map(one, indices))
+
     def close(self):
-        """Close the raster and the mask, ignoring datasets never opened."""
+        """Close the raster, the mask and every worker thread's handles."""
+        with self._handles_lock:
+            handles, self._worker_handles = self._worker_handles, []
+        for ds in handles:
+            ds.close()
         for attr in ("_msrc", "_src"):
             src = getattr(self, attr, None)
             if src is not None:
@@ -243,10 +379,9 @@ def count_valid(scan: RasterScan) -> int:
     stripe (~0.3 s per 25 Mpx stripe). The result is a Python ``int`` because a
     2.22 Gpx raster overflows signed int32.
     """
-    n_valid = 0
-    for _window, _arr, valid in scan.iter_stripes():
-        n_valid += int(valid.sum())
-    return n_valid
+    per_stripe = scan.map_stripes(lambda _i, _w, _arr, valid: int(valid.sum()))
+    scan.stripe_valid = per_stripe
+    return sum(per_stripe)
 
 
 def count_values(scan: RasterScan) -> Tuple[Dict, int]:
@@ -261,16 +396,22 @@ def count_values(scan: RasterScan) -> Tuple[Dict, int]:
     compacted valid values. ``n_valid`` is a Python ``int`` because a
     2.22 Gpx raster overflows signed int32.
     """
-    raw_counts: Dict = {}
-    n_valid = 0
-    for _window, arr, valid in scan.iter_stripes():
+
+    def one(_i, _window, arr, valid):
         vals = arr[valid]
-        n_valid += int(vals.size)
-        if vals.size:
-            uniq, counts = _value_counts(vals)
-            for value, count in zip(uniq.tolist(), counts.tolist()):
-                raw_counts[value] = raw_counts.get(value, 0) + int(count)
-    return raw_counts, n_valid
+        if not vals.size:
+            return {}
+        uniq, counts = _value_counts(vals)
+        return {v: int(c) for v, c in zip(uniq.tolist(), counts.tolist())}
+
+    per_stripe = scan.map_stripes(one)
+    scan.stripe_counts = per_stripe
+    scan.stripe_valid = [sum(c.values()) for c in per_stripe]
+    raw_counts: Dict = {}
+    for counts in per_stripe:
+        for value, count in counts.items():
+            raw_counts[value] = raw_counts.get(value, 0) + count
+    return raw_counts, sum(scan.stripe_valid)
 
 
 def class_tables(raw_counts: Dict) -> Tuple[Dict[int, int], Dict[int, int]]:
@@ -329,6 +470,65 @@ def _join(parts, scan: RasterScan):
     return tuple(np.concatenate(p) for p in parts)
 
 
+def _pick_in_stripe(sel, ranks, start, row_off, col_off, arr):
+    """Coordinates of the ranks that fall inside one stripe, given its offset.
+
+    ``ranks`` are the wanted global ranks of one class, ``start`` the rank of
+    the stripe's first matching pixel. Returns ``None`` when no rank lands in
+    the stripe, else ``(rows, cols, values)`` in ascending rank order.
+
+    Two details here are load-bearing:
+
+    * the rank window is **half-open with ``side="left"`` on both bounds**. A
+      right-inclusive upper bound hands a rank that lands exactly on a stripe
+      boundary to the previous stripe, which is off by one pixel;
+    * only the row span that actually contains wanted ranks is expanded with
+      ``np.nonzero``: over a 512-row stripe of a 49 000 px-wide raster the full
+      expansion would be ~300 MB of int64 for, typically, a few hundred points.
+    """
+    n_here = int(sel.sum())
+    if n_here == 0:
+        return None
+    lo = int(np.searchsorted(ranks, start, side="left"))
+    hi = int(np.searchsorted(ranks, start + n_here, side="left"))
+    if hi <= lo:
+        return None
+    local = ranks[lo:hi] - start
+    per_row = sel.sum(axis=1)
+    cumulative = np.cumsum(per_row)
+    r_lo = int(np.searchsorted(cumulative, local[0], side="right"))
+    r_hi = int(np.searchsorted(cumulative, local[-1], side="right")) + 1
+    base = int(cumulative[r_lo - 1]) if r_lo else 0
+    band = sel[r_lo:r_hi]
+    band_rows, band_cols = np.nonzero(band)
+    take = local - base
+    picked_rows = band_rows[take] + r_lo
+    picked_cols = band_cols[take]
+    return (
+        picked_rows + row_off,
+        picked_cols + col_off,
+        arr[picked_rows, picked_cols],
+    )
+
+
+def _stripe_matches(scan: RasterScan, key) -> Optional[List[int]]:
+    """Per-stripe count of the pixels ``key`` enumerates, from the pass-1 record.
+
+    ``None`` (every valid pixel) comes from ``count_valid``/``count_values``;
+    a class key counts the raw values that are *exactly* equal to it, which
+    is the population ``arr == key`` selects (see :func:`class_tables`).
+    Returns ``None`` when no pass 1 ran on this scan.
+    """
+    if key is None:
+        return scan.stripe_valid
+    if scan.stripe_counts is None:
+        return None
+    return [
+        sum(count for value, count in counts.items() if value == key)
+        for counts in scan.stripe_counts
+    ]
+
+
 def collect_ranks(scan: RasterScan, wanted: Dict) -> Dict:
     """Pass 2: turn chosen global ranks back into pixel coordinates.
 
@@ -338,67 +538,105 @@ def collect_ranks(scan: RasterScan, wanted: Dict) -> Dict:
     ``{key: (rows, cols, values)}`` in the order the ranks were given, so the
     caller only has to undo its own sort.
 
-    Two details here are load-bearing:
+    When pass 1 ran on this scan, its per-stripe counts say where each rank
+    lives: the prefix sums are every stripe's rank offset, so only the stripes
+    that hold a wanted rank are read, in any order, through the stripe pool.
+    Without those counts (a caller that skipped pass 1) the stripes are walked
+    in order on the calling thread, accumulating the offsets as it goes, and
+    the walk stops at the last wanted rank. Both paths pick the same pixels.
 
-    * the rank window is **half-open with ``side="left"`` on both bounds**. A
-      right-inclusive upper bound hands a rank that lands exactly on a stripe
-      boundary to the previous stripe, which is off by one pixel;
-    * ``seen`` is a Python ``int``, since a country-scale raster's pixel count
-      does not fit in signed int32.
-
-    Only the row span that actually contains wanted ranks is expanded with
-    ``np.nonzero``: over a 512-row stripe of a 49 000 px-wide raster the full
-    expansion would be ~300 MB of int64 for, typically, a few hundred points.
+    ``seen``/offsets are Python ``int``s, since a country-scale raster's pixel
+    count does not fit in signed int32.
     """
     if not wanted:
         return {}
-    seen = {key: 0 for key in wanted}
-    done = {key: ranks.size == 0 for key, ranks in wanted.items()}
-    rows: Dict = {key: [] for key in wanted}
-    cols: Dict = {key: [] for key in wanted}
-    vals: Dict = {key: [] for key in wanted}
+    keys = [key for key, ranks in wanted.items() if ranks.size]
+    if not keys:
+        return {key: empty_result(scan) for key in wanted}
+
+    matches = {key: _stripe_matches(scan, key) for key in keys}
+    if all(m is not None for m in matches.values()):
+        return _collect_ranks_planned(scan, wanted, keys, matches)
+    return _collect_ranks_walk(scan, wanted, keys)
+
+
+def _collect_ranks_planned(scan: RasterScan, wanted: Dict, keys, matches) -> Dict:
+    """Pass 2 over exactly the stripes that hold a wanted rank, via the pool."""
+    # The prefix sum of a key's per-stripe matches is the rank of each stripe's
+    # first matching pixel -- the offset the serial walk would have reached.
+    jobs: Dict[int, List] = {}  # stripe index -> [(key, start)]
+    for key in keys:
+        ranks = wanted[key]
+        counts = matches[key]
+        start = 0
+        for i, n_here in enumerate(counts):
+            if n_here:
+                lo = int(np.searchsorted(ranks, start, side="left"))
+                hi = int(np.searchsorted(ranks, start + n_here, side="left"))
+                if hi > lo:
+                    jobs.setdefault(i, []).append((key, start))
+            start += n_here
+
+    def one(i, window, arr, valid):
+        row_off, col_off = int(window.row_off), int(window.col_off)
+        found = {}
+        for key, start in jobs[i]:
+            sel = valid if key is None else (valid & (arr == key))
+            got = _pick_in_stripe(sel, wanted[key], start, row_off, col_off, arr)
+            if got is not None:
+                found[key] = got
+        return found
+
+    per_stripe = scan.map_stripes(one, sorted(jobs))
+    rows: Dict = {key: [] for key in keys}
+    cols: Dict = {key: [] for key in keys}
+    vals: Dict = {key: [] for key in keys}
+    for found in per_stripe:
+        for key, (r, c, v) in found.items():
+            rows[key].append(r)
+            cols[key].append(c)
+            vals[key].append(v)
+    out = {key: _join((rows[key], cols[key], vals[key]), scan) for key in keys}
+    for key in wanted:
+        out.setdefault(key, empty_result(scan))
+    return out
+
+
+def _collect_ranks_walk(scan: RasterScan, wanted: Dict, keys) -> Dict:
+    """Pass 2 as a serial walk that discovers the offsets as it goes."""
+    seen = {key: 0 for key in keys}
+    done = {key: False for key in keys}
+    rows: Dict = {key: [] for key in keys}
+    cols: Dict = {key: [] for key in keys}
+    vals: Dict = {key: [] for key in keys}
 
     for window, arr, valid in scan.iter_stripes():
         row_off, col_off = int(window.row_off), int(window.col_off)
-        for key, ranks in wanted.items():
+        for key in keys:
             if done[key]:
                 continue
+            ranks = wanted[key]
             sel = valid if key is None else (valid & (arr == key))
             n_here = int(sel.sum())
-            if n_here == 0:
-                continue
             start = seen[key]
-            lo = int(np.searchsorted(ranks, start, side="left"))
-            hi = int(np.searchsorted(ranks, start + n_here, side="left"))
             seen[key] = start + n_here
-            if hi >= ranks.size:
+            if n_here and start + n_here > int(ranks[-1]):
                 done[key] = True
-            if hi <= lo:
-                continue
-            local = ranks[lo:hi] - start
-            # Narrow to the contiguous band of stripe rows holding those
-            # ranks before expanding, so nonzero() stays proportional to the
-            # points wanted instead of to the stripe.
-            per_row = sel.sum(axis=1)
-            cumulative = np.cumsum(per_row)
-            r_lo = int(np.searchsorted(cumulative, local[0], side="right"))
-            r_hi = int(np.searchsorted(cumulative, local[-1], side="right")) + 1
-            base = int(cumulative[r_lo - 1]) if r_lo else 0
-            band = sel[r_lo:r_hi]
-            band_rows, band_cols = np.nonzero(band)
-            take = local - base
-            picked_rows = band_rows[take] + r_lo
-            picked_cols = band_cols[take]
-            rows[key].append(picked_rows + row_off)
-            cols[key].append(picked_cols + col_off)
-            vals[key].append(arr[picked_rows, picked_cols])
+            got = _pick_in_stripe(sel, ranks, start, row_off, col_off, arr)
+            if got is not None:
+                rows[key].append(got[0])
+                cols[key].append(got[1])
+                vals[key].append(got[2])
         if all(done.values()):
             # Every rank is accounted for; stop before the generator reads the
             # next stripe (this is what keeps a small sample from scanning the
             # whole raster twice).
             break
 
-    return {key: _join((rows[key], cols[key], vals[key]), scan) for key in wanted}
+    out = {key: _join((rows[key], cols[key], vals[key]), scan) for key in keys}
+    for key in wanted:
+        out.setdefault(key, empty_result(scan))
+    return out
 
 
 def restore_order(order: np.ndarray, collected):
@@ -424,16 +662,27 @@ def collect_all(scan: RasterScan):
     no way to return a billion points cheaply — which is why task E1 rejects
     an unbounded request at the service boundary instead.
     """
+
+    def one(_i, window, arr, valid):
+        rr, cc = np.nonzero(valid)
+        if rr.size == 0:
+            return None
+        return rr + int(window.row_off), cc + int(window.col_off), arr[rr, cc]
+
+    return _join_stripes(scan.map_stripes(one), scan)
+
+
+def _join_stripes(per_stripe, scan: RasterScan):
+    """Concatenate per-stripe ``(rows, cols, values)`` pieces (``None`` = empty)."""
     rows: List[np.ndarray] = []
     cols: List[np.ndarray] = []
     vals: List[np.ndarray] = []
-    for window, arr, valid in scan.iter_stripes():
-        rr, cc = np.nonzero(valid)
-        if rr.size == 0:
+    for piece in per_stripe:
+        if piece is None:
             continue
-        rows.append(rr + int(window.row_off))
-        cols.append(cc + int(window.col_off))
-        vals.append(arr[rr, cc])
+        rows.append(piece[0])
+        cols.append(piece[1])
+        vals.append(piece[2])
     return _join((rows, cols, vals), scan)
 
 
@@ -452,22 +701,25 @@ def collect_grid(scan: RasterScan, step_row: int, step_col: int):
     ``meshgrid(..., indexing="ij").ravel()`` order exactly.
     """
     grid_cols = np.arange(0, scan.width, step_col)
-    rows: List[np.ndarray] = []
-    cols: List[np.ndarray] = []
-    vals: List[np.ndarray] = []
-    for window, arr, valid in scan.iter_stripes():
+
+    def one(_i, window, arr, valid):
         row_off, stripe_rows = int(window.row_off), int(window.height)
         # first grid row at or after the top of this stripe (ceil division)
         first = -(-row_off // step_row) * step_row
         if first >= row_off + stripe_rows:
-            continue
+            return None
         grid_rows = np.arange(first, row_off + stripe_rows, step_row)
         local_rows = grid_rows - row_off
         on_grid = valid[np.ix_(local_rows, grid_cols)]
         i, j = np.nonzero(on_grid)
         if i.size == 0:
-            continue
-        rows.append(grid_rows[i])
-        cols.append(grid_cols[j])
-        vals.append(arr[local_rows[i], grid_cols[j]])
-    return _join((rows, cols, vals), scan)
+            return None
+        return grid_rows[i], grid_cols[j], arr[local_rows[i], grid_cols[j]]
+
+    # Stripes with no grid row are skipped before any read (large spacings).
+    hits = [
+        k
+        for k, w in enumerate(scan.windows)
+        if -(-int(w.row_off) // step_row) * step_row < int(w.row_off) + int(w.height)
+    ]
+    return _join_stripes(scan.map_stripes(one, hits), scan)

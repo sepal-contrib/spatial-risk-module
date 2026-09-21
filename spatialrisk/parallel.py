@@ -94,3 +94,74 @@ def single_thread_math():
     """
     with threadpool_limits(limits=1):
         yield
+
+
+# --------------------------------------------------------------------------- #
+# memory a job may still take
+# --------------------------------------------------------------------------- #
+def parse_cgroup_bytes(text: str):
+    """Parse a cgroup memory file: ``max`` (v2) or the v1 no-limit sentinel -> None."""
+    text = text.strip()
+    if not text or text == "max":
+        return None
+    value = int(text)
+    # cgroup v1 reports "unlimited" as a huge page-aligned number (2**63 - 4096).
+    if value >= (1 << 62):
+        return None
+    return value
+
+
+def _read_cgroup_bytes(path: str):
+    try:
+        with open(path, encoding="ascii") as fh:
+            return parse_cgroup_bytes(fh.read())
+    except (OSError, ValueError):
+        return None
+
+
+def cgroup_memory() -> dict:
+    """The container's memory limit and current usage, whichever cgroup version.
+
+    ``limit`` is None when the cgroup sets no limit (SEPAL's sandbox reports
+    ``memory.max = max``, so the host reading is the one that counts there).
+    """
+    limit = _read_cgroup_bytes("/sys/fs/cgroup/memory.max")
+    if limit is not None or os.path.exists("/sys/fs/cgroup/memory.current"):
+        return {
+            "version": 2,
+            "limit": limit,
+            "usage": _read_cgroup_bytes("/sys/fs/cgroup/memory.current"),
+        }
+    limit = _read_cgroup_bytes("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    if limit is not None:
+        return {
+            "version": 1,
+            "limit": limit,
+            "usage": _read_cgroup_bytes("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
+        }
+    return {"version": None, "limit": None, "usage": None}
+
+
+def host_memory() -> dict:
+    """Total and available bytes as psutil sees the host."""
+    import psutil
+
+    vm = psutil.virtual_memory()
+    return {"total": int(vm.total), "available": int(vm.available)}
+
+
+def free_memory_bytes():
+    """Bytes a job may still allocate, and which reading bounded it.
+
+    In a container the cgroup limit is the wall the OOM killer enforces, and
+    it can be far below what psutil reports for the host; outside one only the
+    host reading exists. The tighter of the two wins.
+    """
+    cg = cgroup_memory()
+    free = host_memory()["available"]
+    source = "psutil.available"
+    if cg.get("limit") is not None:
+        cg_free = cg["limit"] - (cg.get("usage") or 0)
+        if cg_free < free:
+            free, source = cg_free, f"cgroup v{cg['version']} limit - usage"
+    return max(0, int(free)), source

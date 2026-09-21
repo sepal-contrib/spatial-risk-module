@@ -808,12 +808,16 @@ _PROBE = textwrap.dedent(
                     return int(line.split()[1])
         raise RuntimeError("VmHWM not available")
 
-    mode, rpath, mpath = sys.argv[1], sys.argv[2], sys.argv[3]
+    mode, rpath, mpath, workers = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
     base = _hwm_kib()
-    fn = tb._reference_generate_points if mode == "ref" else generate_points
+    kwargs = dict(strategy="stratified", n_samples=20000, allocation="deforisk", seed=1)
+    if mode == "ref":
+        fn = tb._reference_generate_points
+    else:
+        fn = generate_points
+        kwargs["workers"] = int(workers) if workers != "auto" else None
     t0 = time.perf_counter()
-    gdf = fn(rpath, mpath, strategy="stratified", n_samples=20000,
-             allocation="deforisk", seed=1)
+    gdf = fn(rpath, mpath, **kwargs)
     dt = time.perf_counter() - t0
     peak = _hwm_kib()
     print(base, peak, dt, len(gdf))
@@ -821,11 +825,15 @@ _PROBE = textwrap.dedent(
 )
 
 
-def _probe(mode, rpath, mpath):
-    """Run one generate_points in a fresh process; return (peak_KiB, seconds)."""
+def _probe(mode, rpath, mpath, workers="auto"):
+    """Run one generate_points in a fresh process; return (peak_KiB, seconds).
+
+    ``workers`` sizes the stripe pool of the blocked path (``"auto"`` = the
+    resource policy); the reference path ignores it.
+    """
     code = _PROBE.format(tests=str(Path(__file__).parent))
     out = subprocess.run(
-        [sys.executable, "-c", code, mode, str(rpath), str(mpath)],
+        [sys.executable, "-c", code, mode, str(rpath), str(mpath), str(workers)],
         capture_output=True,
         text=True,
         check=True,
@@ -845,10 +853,15 @@ def big_raster(tmp_path_factory):
 
 
 def test_peak_memory_is_bounded_by_a_stripe_not_the_raster(big_raster):
-    """Working set must stop scaling with the raster (21.6 B/px before E2)."""
+    """Working set must stop scaling with the raster (21.6 B/px before E2).
+
+    Measured on the serial walk (one worker): the stripe pool multiplies the
+    working set by the worker count on purpose, and its own bound is checked
+    in ``tests/test_sampling_pool.py``.
+    """
     rpath, mpath = big_raster
     ref_kib, _ = _probe("ref", rpath, mpath)
-    new_kib, _ = _probe("new", rpath, mpath)
+    new_kib, _ = _probe("new", rpath, mpath, workers=1)
     assert new_kib < ref_kib / 3, f"ref={ref_kib} KiB new={new_kib} KiB"
 
 
