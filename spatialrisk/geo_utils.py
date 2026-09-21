@@ -4,6 +4,7 @@ import warnings
 from pathlib import Path
 from typing import Literal
 
+import dask
 import fiona
 import geopandas as gpd
 import numpy as np
@@ -12,6 +13,8 @@ import rioxarray
 from odc.geo import xr
 from rasterio.errors import NotGeoreferencedWarning
 from shapely.geometry import shape
+
+from spatialrisk.parallel import worker_threads
 
 # Chunk spec for every lazy raster read in the package. rioxarray turns
 # ``chunks="auto"`` (and ``True``) into a dimension-order tuple internally,
@@ -265,12 +268,27 @@ def reproject_shapefile(
 # and a stream of NotGeoreferencedWarnings from the temporary block datasets.
 DST_CHUNK = 2048
 
+# Source tile size (pixels) for the warp, matched to DST_CHUNK. Left at
+# rioxarray's "auto" a uint8 source is read in 128 MiB (~11.6k x 11.6k) tiles,
+# and every destination tile copies the concatenation of every source tile it
+# overlaps -- up to four of them per worker thread. Measured 2026-09-18 on the
+# Bolivia project (45k x 49k source, 12k x 12k destination crop, 16 threads):
+# 6.8 GB peak with "auto", 1.0 GB with 2048.
+SRC_CHUNK = DST_CHUNK
+
+# GDAL block cache during a warp, in bytes. The default is 5 % of physical RAM
+# and, on a single-pass read-then-write, buys nothing but that much extra RSS
+# (measured: a 24k x 24k warp's peak dropped 1.9 GB -> 1.1 GB at the same wall
+# clock). Same reasoning as ``parallel.SCAN_CACHEMAX_BYTES``.
+WARP_CACHEMAX_BYTES = 64 * 1024 * 1024
+
 
 def xr_reproject(
     raster_path: str = None,
     geobox=None,
     resampling_method="nearest",
     output_path: str = None,
+    cast_dtype: str = None,
     **rasterio_kwargs,
 ):
     """Reproject a raster onto a target geobox and write it as a GeoTIFF.
@@ -287,6 +305,14 @@ def xr_reproject(
         (e.g. 'nearest', 'bilinear').
     output_path : str, optional
         File path for the reprojected GeoTIFF.
+    cast_dtype : str, optional
+        Cast the source to this dtype *before* warping. Left as ``None`` the
+        source dtype is preserved, which is what every caller wants unless the
+        warp's own fill value matters to it: ``odc`` fills outside the source
+        footprint with ``resolve_fill_value``, which is 0 for an integer array
+        but NaN for a float one. Casting to a float dtype therefore makes the
+        fill distinguishable from a genuine 0. The cast rides the existing dask
+        graph, so it costs no extra pass or temporary file.
     **rasterio_kwargs :
         Unused; kept for signature compatibility.
 
@@ -295,13 +321,16 @@ def xr_reproject(
     None
         The result is written to ``output_path``.
     """
-    # Read the raster
+    # Read the raster lazily, tiled to match the destination tiling (see
+    # SRC_CHUNK). Nothing is decoded until the store below pulls a tile.
     raster_array = rioxarray.open_rasterio(
         raster_path,
-        chunks=RASTER_CHUNKS,
+        chunks={"band": 1, "x": SRC_CHUNK, "y": SRC_CHUNK},
         cache=False,
         lock=False,
     )
+    if cast_dtype is not None:
+        raster_array = raster_array.astype(cast_dtype)
 
     # Convert numpy array to a full xarray.DataArray
     # and set array name if supplied
@@ -326,7 +355,31 @@ def xr_reproject(
     # guarantees is georeferenced). Suppressed only around the warp, and only
     # for that one category, so a genuinely non-georeferenced input still fails
     # loudly in the read above.
-    with warnings.catch_warnings():
+    #
+    # Three things keep this warp's memory independent of the output size, all
+    # measured 2026-09-18 on the Bolivia project (harmonize-all at country
+    # scale killed the kernel on a 16 GB machine):
+    #
+    # * ``lock=True``. rioxarray's default ``lock=None`` takes the *non-dask*
+    #   branch of its writer, which evaluates the whole dask graph into one
+    #   numpy array before the first ``write``: the entire output layer in
+    #   RAM, with the concatenation copies on top (a float32 layer at Peru
+    #   scale is >10 GB before those). With a lock the writer goes through
+    #   ``dask.array.store`` and each destination tile is written as soon as
+    #   it is warped, so the resident set is a handful of tiles.
+    # * The worker pool. dask's threaded scheduler defaults to one thread per
+    #   core, and every worker holds its own source window and destination
+    #   tile. ``worker_threads`` is the shared half-the-cores policy the
+    #   sampling and evaluation scans already follow.
+    # * The GDAL block cache, capped as on the scan paths (WARP_CACHEMAX_BYTES).
+    #
+    # Full-size uint8 layer, 8 workers, this machine: 10.2 GB peak before,
+    # see tests/test_xr_reproject_streaming.py for the guard.
+    with (
+        warnings.catch_warnings(),
+        rasterio.Env(GDAL_CACHEMAX=WARP_CACHEMAX_BYTES),
+        dask.config.set(scheduler="threads", num_workers=worker_threads()),
+    ):
         warnings.simplefilter("ignore", NotGeoreferencedWarning)
         da_reprojected.rio.to_raster(
             output_path,
@@ -335,6 +388,7 @@ def xr_reproject(
             predictor=predictor,
             bigtiff="YES",
             tiled=True,
+            lock=True,
         )
 
     # Explicitly close references - not strictly required but tidy.

@@ -65,23 +65,35 @@ ACTIONS_COL_WIDTH = "112px"
 # "cancelled" stays a literal grey: it is deliberately neutral, not a theme tone.
 STATUS_COLORS = {
     "running": "info",
+    "tiling": "info",
     "ready": "success",
     "completed": "success",
     "failed": "error",
     "cancelled": "grey",
+    # Step 3 per-variable harmonization states (gui/widget/variable_list.py).
+    "harmonized": "success",
+    "pending": "warning",
+    "not_downloaded": "warning",
+    "checking": "grey",
 }
 STATUS_ICONS = {
     "running": "mdi-loading mdi-spin",
+    "tiling": "mdi-loading mdi-spin",
     "ready": "mdi-check-circle",
     "completed": "mdi-check-circle",
     "failed": "mdi-alert-circle",
     "cancelled": "mdi-cancel",
+    "harmonized": "mdi-check-circle",
+    "pending": "mdi-clock-outline",
+    "not_downloaded": "mdi-cloud-outline",
+    "checking": "mdi-help-circle-outline",
 }
 
 _ACTION_ICONS = {
     "edit": "mdi-pencil-outline",
     "delete": "mdi-delete-outline",
     "download": "mdi-cloud-download-outline",
+    "harmonize": "mdi-hammer",
     "cancel": "mdi-stop-circle",
     "open": "mdi-information-outline",
     "dismiss": "mdi-close",
@@ -106,7 +118,7 @@ def action_color(kind: str, is_on: bool = False, override=None):
         return override
     if kind == "map_toggle":
         return "primary" if is_on else None
-    if kind in ("download", "open"):
+    if kind in ("download", "harmonize", "open"):
         return "primary"
     return None
 

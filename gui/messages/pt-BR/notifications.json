@@ -11,8 +11,10 @@
     "task_download_one": "Baixando a camada '{name}'",
     "task_download_layer": "Baixando a camada {i}/{n}: '{name}'",
     "task_download_tiles": "'{name}' — bloco {done}/{total}",
+    "task_download_queued": "'{name}' — na fila, aguardando o término de outro download",
     "task_change": "Gerando a camada de mudança {op}",
-    "task_postprocess": "Aplicando {step} a '{name}'"
+    "task_postprocess": "Aplicando {step} a '{name}'",
+    "task_processing_one": "Harmonizando {name}"
   },
   "dialog": {
     "confirm_default_title": "Excluir?",

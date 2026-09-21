@@ -1,22 +1,27 @@
+"""Local-filesystem vector Variable: rasterization onto a base raster's grid."""
+
 import warnings
 from pathlib import Path
 from typing import Optional
 
 import ee
 from pydantic import Field, field_validator
+
+from spatialrisk.harmonization import geobox_signature
 from spatialrisk.processing import xr_rasterize
 from spatialrisk.utilities.file_helpers import copy_and_rename_file
-from spatialrisk.variables.models import DataType, RasterType, RasterizationMethod
-from spatialrisk.variables.variable import Variable
 from spatialrisk.variables.local_raster_var import LocalRasterVar
+from spatialrisk.variables.models import DataType, RasterizationMethod, RasterType
+from spatialrisk.variables.variable import Variable
 
 
 class LocalVectorVar(Variable):
     """
     Local filesystem-based vector variable.
+
     - Handles vector data (.shp, .geojson, etc.)
     - Can be rasterized to create LocalRasterVar
-    - Use add_as_raw() or add_as_processed() to register to project
+    - Use add_as_raw() or add_as_processed() to register to project.
     """
 
     path: Path
@@ -46,22 +51,24 @@ class LocalVectorVar(Variable):
         Parameters
         ----------
         auto_save : bool, optional
-            If True (default), automatically saves the project after adding the variable.
+            If True (default), automatically saves the project after adding
+            the variable.
 
-        Returns
+        Returns:
         -------
         LocalVectorVar
             Returns self for method chaining.
 
-        Raises
+        Raises:
         ------
         ValueError
             If the variable is not associated with a project.
         """
         if self.project is None:
             raise ValueError(
-                "Cannot add to project: this variable is not associated with a project. "
-                "Please set the 'project' parameter when creating the variable."
+                "Cannot add to project: this variable is not associated with "
+                "a project. Please set the 'project' parameter when creating "
+                "the variable."
             )
 
         # Use name + year for storage key
@@ -84,22 +91,24 @@ class LocalVectorVar(Variable):
         Parameters
         ----------
         auto_save : bool, optional
-            If True (default), automatically saves the project after adding the variable.
+            If True (default), automatically saves the project after adding
+            the variable.
 
-        Returns
+        Returns:
         -------
         LocalVectorVar
             Returns self for method chaining.
 
-        Raises
+        Raises:
         ------
         ValueError
             If the variable is not associated with a project.
         """
         if self.project is None:
             raise ValueError(
-                "Cannot add to project: this variable is not associated with a project. "
-                "Please set the 'project' parameter when creating the variable."
+                "Cannot add to project: this variable is not associated with "
+                "a project. Please set the 'project' parameter when creating "
+                "the variable."
             )
 
         # Use name + year for storage key
@@ -130,17 +139,19 @@ class LocalVectorVar(Variable):
         base : LocalRasterVar
             A LocalRasterVar to use as spatial reference.
         rasterization_method : RasterizationMethod, optional
-            How to rasterize the vector data. If not provided, uses self.rasterization_method.
+            How to rasterize the vector data. If not provided, uses
+            self.rasterization_method.
             Must be provided either here or when creating the LocalVectorVar.
         **kwargs
             Additional keyword arguments to pass to xr_rasterize.
 
-        Returns
+        Returns:
         -------
         LocalRasterVar
             A new LocalRasterVar instance.
         """
-        # Check if base is a raster using data_type instead of isinstance to handle module reloads
+        # Check if base is a raster using data_type instead of isinstance so
+        # module reloads don't break it
         if not hasattr(base, "data_type") or base.data_type != DataType.raster:
             raise ValueError(
                 "base must be a LocalRasterVar instance (raster data type)"
@@ -150,7 +161,8 @@ class LocalVectorVar(Variable):
         _rasterization_method = rasterization_method or self.rasterization_method
         if _rasterization_method is None:
             raise ValueError(
-                "rasterization_method must be provided either as parameter or set in LocalVectorVar"
+                "rasterization_method must be provided either as parameter "
+                "or set in LocalVectorVar"
             )
 
         # Get geobox from base raster
@@ -158,7 +170,12 @@ class LocalVectorVar(Variable):
 
         # Determine output path using project folders
         output_folder = self.project.folders.data_raw_folder
-        output_path = output_folder / f"{self.name}.tif"
+        # Year in the filename, mirroring LocalRasterVar.reproject_and_match:
+        # add_as_processed registers under `{name}_{year}`, so without it two
+        # years of one vector share a file and the later run overwrites the
+        # earlier. Static vectors keep the unsuffixed path they already have.
+        year_suffix = f"_{self.year}" if self.year else ""
+        output_path = output_folder / f"{self.name}{year_suffix}.tif"
 
         # Map RasterizationMethod to mode parameter
         mode_mapping = {
@@ -194,18 +211,21 @@ class LocalVectorVar(Variable):
                 "rasterized"
             ],  # Track that this came from vector rasterization
             tags=self.tags.copy() if self.tags else [],
+            # xr_rasterize burns onto this exact geobox, so the base's grid is
+            # the output's grid — stamp it here rather than reopening the file.
+            grid_signature=geobox_signature(geobox),
         )
 
     def to_gee_var(self) -> ee.FeatureCollection:
         """
         Convert this local vector to a Google Earth Engine FeatureCollection.
 
-        Returns
+        Returns:
         -------
         ee.FeatureCollection
             An Earth Engine FeatureCollection.
 
-        Raises
+        Raises:
         ------
         FileNotFoundError
             If the local file does not exist.
@@ -214,7 +234,9 @@ class LocalVectorVar(Variable):
             raise FileNotFoundError(f"Local file not found: {self.path}")
 
         import json
+
         import geopandas as gpd
+
         gdf = gpd.read_file(str(self.path))
         return ee.FeatureCollection(json.loads(gdf.to_json()))
 

@@ -3,6 +3,12 @@
 tippecanoe reads GeoJSON, not GPKG, so we reproject to WGS84 and export a
 temporary GeoJSON first. Kept thin and mockable so the eager-conversion step in
 ``Sample.generate`` can be tested without the binary.
+
+The archive is assembled on **local disk** and moved into place afterwards.
+tippecanoe's PMTiles writer seeks and rewrites constantly, and on SEPAL the
+sample folder (``~/module_results``) and ``/tmp`` are both NFS: a 10 000-point
+sample took 57-70 s to tile there and 1.0 s on the container's local disk
+(c8 sandbox, 2026-09-21). The final copy is one sequential write.
 """
 import logging
 import shutil
@@ -12,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from spatialrisk.gdal_env import scratch_dir
+from spatialrisk.gdal_env import local_scratch_dir
 
 logger = logging.getLogger("spatial_risk")
 
@@ -61,15 +67,20 @@ def gpkg_to_pmtiles(
         gdf = gdf.to_crs(epsg=4326)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    # Pinned: tempfile's candidate list ends with the CWD, which on SEPAL is the
-    # read-only module mount, so an unavailable system temp dir would fail here.
-    with tempfile.TemporaryDirectory(dir=scratch_dir()) as td:
+    # Everything tippecanoe touches -- its input, its temp tiles (-t) and the
+    # archive it assembles (-o) -- stays on local disk; see the module docstring.
+    # Pinned dir: tempfile's candidate list ends with the CWD, which on SEPAL is
+    # the read-only module mount.
+    with tempfile.TemporaryDirectory(dir=local_scratch_dir()) as td:
         geojson = Path(td) / "points.geojson"
         gdf.to_file(geojson, driver="GeoJSON")
+        built = Path(td) / out_path.name
         cmd = [
             tippecanoe,
             "-o",
-            str(out_path),
+            str(built),
+            "-t",
+            td,
             "-l",
             layer,
             "-Z",
@@ -82,5 +93,14 @@ def gpkg_to_pmtiles(
             str(geojson),
         ]
         subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # Copy next to the destination, then rename: readers never see a
+        # half-written archive, and a failure leaves no ``.part`` behind.
+        partial = out_path.with_name(out_path.name + ".part")
+        try:
+            shutil.copyfile(built, partial)
+            partial.replace(out_path)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
     logger.info("PMTiles written: %s", out_path)
     return out_path

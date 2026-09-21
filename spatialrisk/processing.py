@@ -1,9 +1,12 @@
+"""Raster processing helpers: warps, rasterization, distances and change layers."""
+
 from typing import TYPE_CHECKING, List
+
 import numpy as np
-from osgeo import gdal
 import rasterio
 import rioxarray
 import xarray as xr
+from osgeo import gdal
 
 from spatialrisk.gdal_env import configure_gdal_tmpdir
 from spatialrisk.variables.models import RasterType
@@ -21,14 +24,17 @@ def reproject_raster_gdal_warp(
     resampling_method: str = "near",
 ) -> None:
     """
-    Reprojects a raster file to a specified EPSG code using GDAL and saves it with DEFLATE compression.
+    Reproject a raster to a given EPSG code with GDAL, saved with DEFLATE compression.
 
     Parameters:
     input_file (str): The path to the input raster file.
     output_file (str): The path where the reprojected raster file will be saved.
-    target_epsg (str): The EPSG code of the target coordinate reference system (e.g., 'EPSG:4326').
-    resolution (int | float): Target resolution in the units of the target CRS. Default is 30.
-    resampling_method (str): Resampling algorithm ('near', 'bilinear', 'cubic', etc.). Default is 'near'.
+    target_epsg (str): The EPSG code of the target coordinate reference system
+        (e.g., 'EPSG:4326').
+    resolution (int | float): Target resolution in the units of the target CRS.
+        Default is 30.
+    resampling_method (str): Resampling algorithm ('near', 'bilinear', 'cubic',
+        etc.). Default is 'near'.
 
     Returns:
     None
@@ -75,6 +81,10 @@ def reproject_raster_gdal_warp(
     dataset = None
 
 
+# Rows per band when rasterizing a vector onto the base grid (see xr_rasterize).
+RASTERIZE_BAND_ROWS = 2048
+
+
 def xr_rasterize(
     shapefile_path: str = None,
     geobox=None,
@@ -86,7 +96,8 @@ def xr_rasterize(
     """
     Rasterizes a vector shapefile into a raster array.
 
-    This function provides unified functionality for both binary and unique ID rasterization.
+    This function provides unified functionality for both binary and unique ID
+    rasterization.
 
     Parameters
     ----------
@@ -110,15 +121,14 @@ def xr_rasterize(
         A set of keyword arguments to ``rasterio.features.rasterize``.
         Can include: 'all_touched', 'merge_alg', 'dtype'.
 
-    Returns
+    Returns:
     -------
     da_rasterized : xarray.DataArray
         The rasterized vector data.
     """
-
     import geopandas as gpd
     import rasterio
-    from odc.geo import xr
+    from shapely.geometry import box
 
     # Read the shapefile
     gdf = gpd.read_file(filename=shapefile_path, engine="fiona")
@@ -129,13 +139,13 @@ def xr_rasterize(
     # Handle different modes
     if mode == "binary":
         # Binary mode: rasterize into a boolean array with 1s and 0s
-        shapes = gdf_reproj.geometry
+        shapes = list(gdf_reproj.geometry)
         values = [1] * len(gdf_reproj)  # All features set to 1
         shapes_and_values = list(zip(shapes, values))
 
     elif mode == "unique":
         # Unique ID mode: rasterize using unique integer IDs for each feature
-        shapes = gdf_reproj.geometry
+        shapes = list(gdf_reproj.geometry)
         # Create unique integer IDs starting from 1
         values = list(range(1, len(gdf_reproj) + 1))
         shapes_and_values = list(zip(shapes, values))
@@ -151,7 +161,8 @@ def xr_rasterize(
             raise ValueError(
                 f"Cannot rasterize with mode='unique': {num_features} features found, "
                 f"but unique mode only supports up to 255 unique values. "
-                f"Consider using mode='binary' instead to create a simple presence/absence raster."
+                f"Consider using mode='binary' instead to create a simple "
+                f"presence/absence raster."
             )
         dtype = "uint8"
     else:
@@ -161,31 +172,59 @@ def xr_rasterize(
     # Allow user to override dtype via kwargs
     dtype = rasterio_kwargs.pop("dtype", dtype)
 
-    # Rasterize shapes into a numpy array
-    im = rasterio.features.rasterize(
-        shapes=shapes_and_values if mode == "unique" else shapes,
-        out_shape=geobox.shape,
-        transform=geobox.transform,
-        dtype=dtype,
-        **rasterio_kwargs,
-    )
+    # Burn and write one band of rows at a time. Rasterizing the whole grid
+    # into one array, wrapping it and handing it to ``rio.to_raster`` held the
+    # output several times over: measured 2026-09-18 on the Bolivia grid
+    # (44661 x 49363 uint8, 2.2 GB) at 8.4 GB peak, which with the raster
+    # warps of the same harmonize-all run killed the kernel on a 16 GB
+    # machine. Peru is larger. A band of RASTERIZE_BAND_ROWS full-width rows
+    # is ~90 MB at that width, and the spatial index keeps each band's burn
+    # to the features that touch it, so a sparse layer costs no more than a
+    # dense one per band. Output layout is unchanged (256x256 DEFLATE tiles,
+    # predictor 2, BigTIFF) and the result is identical to the whole-grid
+    # burn: rasterize() is per-pixel, so splitting rows does not move a seam.
+    from rasterio.windows import Window, bounds
+    from rasterio.windows import transform as window_transform
 
-    # Convert numpy array to a full xarray.DataArray
-    # and set array name if supplied
-    da_rasterized = xr.wrap_xr(im=im, gbox=geobox)
+    items = shapes_and_values if mode == "unique" else shapes
+    geoms = gdf_reproj.geometry
+    sindex = geoms.sindex if len(geoms) else None
+    height, width = geobox.shape
 
-    da_rasterized.rio.to_raster(
+    with rasterio.open(
         output_path,
+        "w",
         driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=dtype,
+        crs=geobox.crs.to_wkt(),
+        transform=geobox.transform,
         compress="DEFLATE",
         predictor=2,
         bigtiff="YES",
         tiled=True,
-    )
-
-    # Explicitly close references – not strictly required but tidy.
-    del im
-    del da_rasterized
+        blockxsize=256,
+        blockysize=256,
+    ) as dst:
+        for row_off in range(0, height, RASTERIZE_BAND_ROWS):
+            rows = min(RASTERIZE_BAND_ROWS, height - row_off)
+            window = Window(0, row_off, width, rows)
+            band = np.zeros((rows, width), dtype=dtype)
+            if sindex is not None:
+                hits = sindex.query(box(*bounds(window, geobox.transform)))
+                if len(hits):
+                    hits = np.sort(hits)  # burn order as in the whole-grid call
+                    band = rasterio.features.rasterize(
+                        shapes=[items[i] for i in hits],
+                        out_shape=(rows, width),
+                        transform=window_transform(window, geobox.transform),
+                        dtype=dtype,
+                        **rasterio_kwargs,
+                    )
+            dst.write(band, 1, window=window)
+            del band
 
 
 def distance_to_edge_gdal_no_mask(
@@ -197,9 +236,10 @@ def distance_to_edge_gdal_no_mask(
     input_nodata=True,
     verbose=False,
 ):
-    """Computes the shortest distance to given pixel values in a raster,
-    while preserving the original nodata mask in the output."""
+    """Compute the shortest distance to given pixel values in a raster.
 
+    The original nodata mask is preserved in the output.
+    """
     # ComputeProximity() needs a writable scratch dir for its Float32 working
     # band (the destination is UInt32). Cheap and idempotent, so re-assert it
     # here in case this helper is used without the app's import-time setup.
@@ -411,8 +451,8 @@ def make_forest_loss_var(
     whether to add_as_raw().
     """
     from pathlib import Path
+
     from spatialrisk.variables import LocalRasterVar
-    from spatialrisk.variables.models import RasterType
 
     start_year = start_layer.year
     end_year = end_layer.year
@@ -458,14 +498,13 @@ def get_forest_loss_calculated(
         List of exactly 3 forest raster layers, each with a year attribute.
         Years are automatically extracted from the layers.
 
-    Returns
+    Returns:
     -------
     List[LocalRasterVar]
         Three LocalRasterVar objects for the generated forest loss rasters
     """
     # Import here to avoid circular dependency
     from spatialrisk.variables import LocalRasterVar
-    from pathlib import Path
 
     # Validate input - must have exactly 3 layers
     if len(forest_layers) != 3:
@@ -534,15 +573,15 @@ def display_raster(
         Maximum dimension for display (default: 1024). Rasters larger than this
         will be downsampled for faster visualization.
 
-    Returns
+    Returns:
     -------
     tuple or None
         If return_fig=True, returns (fig, ax) tuple. Otherwise returns None.
     """
     import matplotlib.pyplot as plt
+    import numpy as np
     import rasterio
     from rasterio.enums import Resampling
-    import numpy as np
 
     # Open the raster file using rasterio
     with rasterio.open(path) as src:
@@ -614,13 +653,13 @@ def display_raster(
             else:
                 cmap = plt.cm.get_cmap("nipy_spectral", n_categories)
 
-            im = ax.imshow(raster_data, cmap=cmap, interpolation="nearest")
+            ax.imshow(raster_data, cmap=cmap, interpolation="nearest")
             ax.set_title(
                 f"{name}\n(Categorical - {n_categories} classes)", fontsize=10, pad=5
             )
         else:
             # Continuous raster: use continuous colormap
-            im = ax.imshow(raster_data, cmap="viridis")
+            ax.imshow(raster_data, cmap="viridis")
 
             # Add statistics to title
             if np.ma.is_masked(raster_data):

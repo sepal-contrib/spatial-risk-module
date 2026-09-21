@@ -1,7 +1,7 @@
 """Step 7 — Inference tile."""
 
-import asyncio
 import logging
+import threading
 import uuid
 
 import reacton.ipyvuetify as rv
@@ -10,6 +10,7 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import plural, t
 from gui.scripts import artifact_names as _artifact_names
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.product_rows import job_row_key
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
@@ -38,6 +39,16 @@ inference_jobs = solara.reactive([])
 # groups currently shown on the map — works for predictions loaded from disk,
 # not just same-session runs.
 preds_on_map = solara.reactive(set())
+
+# Guards the two read-modify-write updates to ``preds_on_map`` — the worker's
+# add (in ``_toggle_pred_on_map``) and ``_forget_on_map``'s discard — which
+# now run concurrently on independent worker threads (one per toggle). A
+# plain read of ``.value`` or a wholesale ``preds_on_map.set(set())`` reset
+# needs no lock.
+preds_on_map_lock = threading.Lock()
+
+# Prediction row keys whose map toggle is running (see InflightKeys).
+preds_inflight = InflightKeys(key="preds_inflight")
 
 
 def _pred_layer_key(storage_key: str) -> str:
@@ -142,18 +153,20 @@ def _run_import(
     job_id,
     src_path,
     name,
-    palette,
+    value_scale,
     project,
     project_reactive,
     notifier=None,
     task_title=None,
 ):
-    """Copy a local raster into the project as a Prediction (background thread).
+    """Adapt a local raster onto the project grid as a Prediction (background thread).
 
-    The copy can be large, so it runs off the render thread like inference does.
-    On success the placeholder job is updated to the real (model_key, dataset_name)
-    so the per-job map toggle resolves the registered raster, and the project is
-    republished so the outputs list and Step 8 — Evaluation pick it up.
+    The dialog only inspected the file's metadata. The range check and the warp
+    both read every pixel, so they run here, off the render thread, like
+    inference does. On success the placeholder job is updated to the real
+    (model_key, dataset_name) so the per-job map toggle resolves the registered
+    raster, and the project is republished so the outputs list and Step 8 —
+    Evaluation pick it up.
     """
     try:
         with tracked_job(notifier, task_title or f"Importing '{name}'"), writing(
@@ -162,7 +175,7 @@ def _run_import(
             from gui.scripts.prediction_import import import_prediction
 
             pred = import_prediction(
-                project, src_path, name, palette=palette, auto_save=True
+                project, src_path, name, value_scale, auto_save=True
             )
 
             update_job(
@@ -203,8 +216,8 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
     # Form messages
     form_error, set_form_error = solara.use_state(None)
 
-    def _launch_import(name, path, palette, entry=None):
-        """Spawn a background copy for a raster the dialog validated.
+    def _launch_import(name, path, value_scale, entry=None):
+        """Spawn a background adaptation for a raster the dialog validated.
 
         The dialog enforced the required fields and the no-project guard; the
         guard is kept here as a race safety net (surfaced via the tile's form
@@ -236,7 +249,7 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
                 job_id,
                 path,
                 name,
-                palette,
+                value_scale,
                 p,
                 project,
                 notifications,
@@ -303,7 +316,9 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
 
     def on_submit(entry):
         if entry["kind"] == "import":
-            _launch_import(entry["name"], entry["path"], entry["palette"], entry=entry)
+            _launch_import(
+                entry["name"], entry["path"], entry["value_scale"], entry=entry
+            )
         else:
             # mask_layer is absent for the JNR/MW families, which resolve
             # their own layers rather than masking with a project raster;
@@ -322,102 +337,99 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
             prefill.set(None)
 
     def _forget_on_map(row_key):
-        remaining = set(preds_on_map.value)
-        remaining.discard(row_key)
-        preds_on_map.set(remaining)
+        with preds_on_map_lock:
+            remaining = set(preds_on_map.value)
+            remaining.discard(row_key)
+            preds_on_map.set(remaining)
 
-    gen_overviews = solara.use_reactive(False)
-    pending_toggle = solara.use_reactive(None)
+    def _toggle_pred_on_map(row, cur):
+        """Worker: add/remove a prediction row's raster(s) on the map.
 
-    @solara.lab.use_task(dependencies=None, raise_error=False)
-    async def _apply_pred_toggle():
-        """Add/remove a prediction row's raster(s) on the map.
-
-        The layer-add is offloaded to a worker thread (it builds overviews and a
-        localtileserver tile client, both blocking) so Solara's event loop stays
-        responsive. Removal is cheap and stays inline.
+        The layer-adds (overviews, tile client) and the bookkeeping after them
+        run on this one ``spawn_in_context`` thread, so toggling another row
+        cannot cancel this row's continuation (a shared background task used
+        to be cancelled at its ``await`` by a second toggle). Removal is
+        cheap but goes through the same worker for one code path.
         """
-        row = pending_toggle.value
-        if row is None or map_ is None or p is None:
-            return
-        storage_keys = [k for k in row.get("storage_keys", []) if k in p.predictions]
-        if not storage_keys:
-            return
-        row_key = row["key"]
+        row_key = None
         try:
+            row_key = row["key"]
+            storage_keys = [
+                k for k in row.get("storage_keys", []) if k in cur.predictions
+            ]
+            if not storage_keys:
+                return
             if row_key in preds_on_map.value:
                 _drop_pred_layers(row, map_, legend_port)
                 _forget_on_map(row_key)
-            else:
-                from gui.scripts.prediction_map import add_prediction_on_map
+                return
 
-                generation = (
-                    legend_port.generation() if legend_port is not None else None
-                )
-                added_any = False
-                landed = []
-                try:
-                    for sk in storage_keys:
-                        pred = p.predictions[sk]
-                        await asyncio.to_thread(
-                            add_prediction_on_map,
-                            map_,
-                            str(pred.path),
-                            model_key=row["model_key"],
-                            layer_name=sk,
-                            key=_pred_layer_key(sk),
-                            fit_bounds=False,
-                            build_overviews=gen_overviews.value,
-                            display_palette=getattr(pred, "display_palette", None),
-                        )
-                        added_any = True
-                        landed.append((sk, getattr(pred, "display_palette", None)))
-                finally:
-                    # Mark the row on-map if ANY layer landed (even on partial
-                    # failure) so toggle-off can remove all its keys; fire the
-                    # reactive once, not per-iteration. This bookkeeping must
-                    # run even when add_prediction_on_map raises, so it stays
-                    # in `finally` — but the staleness check below must NOT
-                    # live here: a `return` inside `finally` discards any
-                    # exception propagating from the `try` body, which would
-                    # silently swallow a real failure instead of letting it
-                    # reach the outer `except Exception` handler.
-                    if added_any:
+            from gui.scripts.prediction_map import add_prediction_on_map
+
+            generation = legend_port.generation() if legend_port is not None else None
+            added_any = False
+            landed = []
+            try:
+                for sk in storage_keys:
+                    pred = cur.predictions[sk]
+                    add_prediction_on_map(
+                        map_,
+                        str(pred.path),
+                        model_key=row["model_key"],
+                        layer_name=sk,
+                        key=_pred_layer_key(sk),
+                        fit_bounds=False,
+                        display_palette=getattr(pred, "display_palette", None),
+                    )
+                    added_any = True
+                    landed.append((sk, getattr(pred, "display_palette", None)))
+            finally:
+                # Mark the row on-map if ANY layer landed (even on partial
+                # failure) so toggle-off can remove all its keys; fire the
+                # reactive once, not per-iteration. Stays in `finally` so it
+                # runs when add_prediction_on_map raises — but the staleness
+                # check below must NOT: a `return` inside `finally` would
+                # discard the in-flight exception.
+                if added_any:
+                    with preds_on_map_lock:
                         preds_on_map.set(set(preds_on_map.value) | {row_key})
 
-                # Reached only when the add loop above completed without
-                # raising — an in-flight exception skips straight to the
-                # outer `except Exception` below instead. No port to publish
-                # through (e.g. a test render) means there is nothing left to
-                # guard or publish here.
-                if legend_port is not None and legend_port.generation() != generation:
-                    # A project switch during the await clears the map;
-                    # anything that landed afterwards is stale, so take it
-                    # back off instead of publishing a legend for a layer
-                    # nobody wants.
-                    for sk, _palette in landed:
-                        map_.remove_layer(_pred_layer_key(sk), none_ok=True)
-                    _forget_on_map(row_key)
-                elif legend_port is not None and added_any:
-                    multi = len(storage_keys) > 1
-                    legend_port.register(
-                        *[
-                            _pred_legend(
-                                sk, row["model_key"], palette, row["name"], multi
-                            )
-                            for sk, palette in landed
-                        ]
-                    )
+            if legend_port is not None and legend_port.generation() != generation:
+                # A project switch during the add clears the map; anything
+                # that landed afterwards is stale, so take it back off.
+                for sk, _palette in landed:
+                    map_.remove_layer(_pred_layer_key(sk), none_ok=True)
+                _forget_on_map(row_key)
+            elif legend_port is not None and added_any:
+                multi = len(storage_keys) > 1
+                legend_port.register(
+                    *[
+                        _pred_legend(sk, row["model_key"], palette, row["name"], multi)
+                        for sk, palette in landed
+                    ]
+                )
         except Exception as exc:
             logger.exception("prediction map toggle failed for row %s", row.get("key"))
             set_form_error(t("tiles.inference.error_map_toggle", exc=exc))
+        finally:
+            if row_key is not None:
+                preds_inflight.release(row_key)
 
     def on_toggle_map(row):
-        """Trigger the threaded add/remove task for a prediction row."""
-        if map_ is None:
+        """One worker per row toggle; a re-click while it runs is a no-op."""
+        if map_ is None or p is None:
             return
-        pending_toggle.set(row)
-        _apply_pred_toggle()
+        if not preds_inflight.claim(row["key"]):
+            return
+        try:
+            spawn_in_context(_toggle_pred_on_map, (row, p))
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread
+            # that never starts would hold this key for the rest of the
+            # session.
+            preds_inflight.release(row["key"])
+            logger.exception("could not start the map-toggle worker")
+            set_form_error(t("tiles.inference.error_map_toggle", exc=exc))
 
     pending_delete, set_pending_delete = solara.use_state(None)  # row dict or None
     # Row key whose provenance dialog is open, or None. The tile owns it
@@ -468,13 +480,7 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
         if form_error:
             rv.Alert(type_="error", dense=True, children=[form_error])
 
-        # Optional raster optimisation before predictions hit the map.
-        solara.Checkbox(
-            label=t("tiles.inference.generate_overviews_label"),
-            value=gen_overviews.value,
-            on_value=gen_overviews.set,
-        )
-        if _apply_pred_toggle.pending:
+        if preds_inflight.value:
             rv.ProgressLinear(indeterminate=True, color="primary")
 
         # Outputs list
@@ -505,12 +511,21 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
             confirm_label=t("common.delete"),
         )
 
+    # A prediction registers only when its worker finishes, so p.predictions
+    # lags a launch; the dialog rejects the name of a job still in flight.
+    # Runs carry the name as pred_name, imports as their placeholder model_key.
+    running_names = frozenset(
+        j.get("pred_name") or j.get("model_key")
+        for j in inference_jobs.value
+        if j.get("status") == "running"
+    )
     PredictionFormDialog(
         project=project,
         open_=dialog_open,
         on_submit=on_submit,
         sepal_client=sepal_client,
         prefill=prefill,
+        running_names=running_names,
     )
 
     PredictionDetailsDialog(

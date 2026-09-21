@@ -13,10 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 TASK_TILES = [
-    ("gui/tile/variables_tile.py", "download_task"),
     ("gui/tile/process_tile.py", "process_task"),
-    ("gui/tile/postprocess_tile.py", "change_task"),
-    ("gui/tile/postprocess_tile.py", "post_task"),
 ]
 
 
@@ -39,8 +36,10 @@ def test_thread_workers_do_not_publish_the_project_directly():
     """Every spawn_in_context worker writes back through the guard."""
     from gui.tile.evaluation_tile import _run_evaluation
     from gui.tile.inference_tile import _run_import, _run_inference
+    from gui.tile.postprocess_tile import _run_derived_job
     from gui.tile.sampling_tile import _run_sampling
     from gui.tile.train_tile import _run_training
+    from gui.tile.variables_tile import _run_download
 
     for fn in (
         _run_sampling,
@@ -48,6 +47,8 @@ def test_thread_workers_do_not_publish_the_project_directly():
         _run_import,
         _run_inference,
         _run_evaluation,
+        _run_derived_job,
+        _run_download,
     ):
         src = inspect.getsource(fn)
         assert (

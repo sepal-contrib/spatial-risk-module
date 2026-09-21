@@ -17,17 +17,24 @@ def test_process_tile_has_no_process_error_parameter():
 
 
 def test_process_tile_toasts_every_failure_path():
-    """All failure paths in ProcessTile use notifications.error, not process_error."""
+    """Every toast ProcessTile raises is timed, and none uses process_error.
+
+    ``warning`` counts alongside ``error``: a refused reference submit is not a
+    failure but it is still a toast, and an untimed one would vanish at the
+    default timeout — the thing ERROR_TOAST_TIMEOUT exists to prevent.
+    """
     src = inspect.getsource(ProcessTile.f)
     assert "process_error" not in src
     assert (
         'error_format=lambda exc: t("tiles.process.error_processing", exc=exc)' in src
     )
-    assert src.count("notifications.error(") == src.count("ERROR_TOAST_TIMEOUT")
+    toasts = src.count("notifications.error(") + src.count("notifications.warning(")
+    assert toasts == src.count("ERROR_TOAST_TIMEOUT")
     for key in (
         "tiles.process.error_download_first",
         "tiles.process.error_auto_utm",
         "tiles.process.error_set_base",
+        "tiles.process.reference_already_running",
     ):
         assert key in src
 

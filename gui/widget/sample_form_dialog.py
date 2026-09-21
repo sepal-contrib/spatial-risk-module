@@ -103,6 +103,14 @@ def SampleFormDialog(
             return t("tiles.sampling.error_invalid_mask")
         if use_spacing and (spacing_m is None or spacing_m <= 0):
             return t("tiles.sampling.error_invalid_spacing")
+        # Every non-spacing mode (random, stratified, and systematic's own
+        # "by count" sub-mode) needs a concrete positive count. Clearing the
+        # field used to fall through to n_samples=None, which downstream
+        # (random.py/stratified.py) means "every valid pixel" — on a
+        # country-scale raster that is hundreds of GiB. Only systematic +
+        # spacing_m is allowed to carry the intentional None.
+        if not use_spacing and (n_samples is None or n_samples <= 0):
+            return t("tiles.sampling.error_invalid_n_samples")
         return None
 
     def will_replace():

@@ -7,19 +7,23 @@ sample and a dataset, then extracts features at the sample points.
 """
 
 import logging
+import threading
 import uuid
 
 import solara
 from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import tracked_job
+from gui.scripts.product_rows import ACTIVE_SAMPLING_STATUSES
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.help import InfoButton
 from gui.widget.sample_form_dialog import SampleDetailsDialog, SampleFormDialog
 from gui.widget.sample_set_list import SampleSetList
+from spatialrisk.gdal_env import sampling_gdal_env
 
 logger = logging.getLogger("spatial_risk")
 
@@ -27,7 +31,26 @@ logger = logging.getLogger("spatial_risk")
 # Module-level reactives shared across re-renders.
 sampling_jobs = solara.reactive([])
 samples_on_map = solara.reactive(set())
-samples_pending = solara.reactive(frozenset())
+# Guards every read-modify-write of samples_on_map: toggle workers run
+# concurrently (one thread per sample) and the remove handler runs on the
+# kernel thread, so an unlocked `set(value | {key})` can drop a key.
+samples_on_map_lock = threading.Lock()
+samples_pending = InflightKeys(key="samples_pending")
+
+_sampling_slot = threading.Semaphore(1)
+"""Single-slot queue: at most one sampling job reads its raster at a time.
+
+Sampling is memory-heavy -- a single job can peak in the tens of GiB on a
+country-scale raster (see Track E baseline). `spawn_in_context` starts one
+real thread per sample name, so distinct sample names used to run their reads
+concurrently in this process, multiplying peak memory. Acquiring this
+semaphore around the read (`sample.generate()`) forces jobs to queue: a job
+still gets its own thread and its status card still shows "running" the whole
+time (this app has no "queued" status to show instead), but only one job is
+actually inside the raster read at once. This does not reduce how much memory
+sampling needs in total -- it only stops several peaks from stacking up in one
+process; the fix for the size of a single peak lives in `spatialrisk/sampling`.
+"""
 
 
 def _sample_layer_key(name: str) -> str:
@@ -93,14 +116,16 @@ def _toggle_sample_on_map(key, project_reactive, map_, turn_on):
                 from gui.scripts.map_helpers import add_sample_points_on_map
 
                 add_sample_points_on_map(map_, ss.points_path, key, base_key)
-            samples_on_map.set(samples_on_map.value | {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value | {key})
         else:
             _remove_sample_layers(map_, base_key)
-            samples_on_map.set(samples_on_map.value - {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value - {key})
     except Exception:
         logger.exception("sample map toggle failed for %s", key)
     finally:
-        samples_pending.set(samples_pending.value - {key})
+        samples_pending.release(key)
 
 
 def _update_job(job_id, *, skip_if_cancelled=True, **changes):
@@ -128,7 +153,10 @@ def _run_sampling(
 
         p = project_reactive.value
         if p is None:
-            return  # project was closed/deleted while the job was queued
+            # Project closed/deleted while the job was queued: the row must not
+            # stay on "running" forever.
+            _update_job(job_id, status="cancelled", error=None)
+            return
         with tracked_job(
             notifier, task_title or f"Generating sample '{name}'"
         ), writing(p.project_name):
@@ -146,7 +174,28 @@ def _run_sampling(
                 seed=seed,
                 points_path=folder / f"{name}.gpkg",
             )
-            sample.generate()
+            # Serialize the raster read across concurrent sampling jobs (see
+            # `_sampling_slot`) and budget GDAL's own block cache for it --
+            # bounding the numpy arrays in `spatialrisk/sampling` does not
+            # bound process RSS, since GDAL's native cache is separate from
+            # them (see `spatialrisk.gdal_env.sampling_gdal_env`).
+            with _sampling_slot, sampling_gdal_env():
+                sample.draw_points()
+            # The points are on disk: show their counts while the map archive
+            # is built (outside the slot -- tiling is I/O, the next job may
+            # start reading its raster meanwhile).
+            _update_job(
+                job_id,
+                status="tiling",
+                n_total=sample.n_total,
+                class_counts=sample.class_counts,
+            )
+            logger.info(
+                "Sample points ready: %s (%d points); building map tiles",
+                name,
+                sample.n_total,
+            )
+            sample.build_tiles()
             p.add_sample(sample, auto_save=True)
             publish_if_current(project_reactive, p)
             _update_job(
@@ -193,13 +242,16 @@ def SamplingTile(project, map_=None):
     # registers asynchronously inside the worker, so p.samples lags a click).
     existing_names = frozenset(p.samples)
     running_names = frozenset(
-        j["name"] for j in sampling_jobs.value if j["status"] == "running"
+        j["name"]
+        for j in sampling_jobs.value
+        if j["status"] in ACTIVE_SAMPLING_STATUSES
     )
 
     def _do_remove(key):
         if map_ is not None and key in samples_on_map.value:
             _remove_sample_layers(map_, _sample_layer_key(key))
-            samples_on_map.set(samples_on_map.value - {key})
+            with samples_on_map_lock:
+                samples_on_map.set(samples_on_map.value - {key})
         cur = project.value
         if cur is not None and key in cur.samples:
             cur.delete_sample(key, auto_save=True)
@@ -253,8 +305,6 @@ def SamplingTile(project, map_=None):
     def on_toggle_map(key):
         if map_ is None:
             return
-        if key in samples_pending.value:  # idempotent: ignore re-clicks
-            return
         cur = project.value
         if cur is None:
             return
@@ -268,8 +318,13 @@ def SamplingTile(project, map_=None):
             and getattr(ss, "pmtiles_path", None) is None
         ):
             return
-        samples_pending.set(samples_pending.value | {key})
-        spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+        if not samples_pending.claim(key):  # idempotent: ignore re-clicks
+            return
+        try:
+            spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+        except Exception:
+            samples_pending.release(key)
+            logger.exception("could not start the map-toggle worker")
 
     def on_dismiss(job_id):
         # Failed job rows only — never touches the sample registry.

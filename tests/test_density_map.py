@@ -21,6 +21,20 @@ def test_colormap_is_a_matplotlib_colormap_object():
     assert isinstance(density_colormap(), Colormap)
 
 
+def test_colormap_runs_green_to_yellow_to_red():
+    """Low density is green, mid is yellow, high is red (not a yellow→red ramp).
+
+    Checks hue via channel dominance rather than exact hex values, so a swap
+    to another green-yellow-red ramp keeps passing while a yellow-only low
+    end (the previous YlOrRd) fails.
+    """
+    cmap = density_colormap()
+    low, mid, high = (cmap(x)[:3] for x in (0.0, 0.5, 1.0))
+    assert low[1] > low[0] and low[1] > low[2]  # green dominates at the bottom
+    assert mid[0] > 0.8 and mid[1] > 0.8 and mid[2] < 0.8  # yellow in the middle
+    assert high[0] > high[1] and high[0] > high[2]  # red dominates at the top
+
+
 def test_value_range_ignores_nodata(tmp_path):
     """vmin/vmax come from the valid pixels, not the -9999 fill."""
     from osgeo import gdal

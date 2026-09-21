@@ -1,5 +1,6 @@
 """Tests for the GPKG -> PMTiles conversion helper."""
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -72,7 +73,8 @@ def test_conversion_runs_the_resolved_binary(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kw):
         captured["cmd"] = cmd
-        out.write_bytes(b"PMTILES")
+        # tippecanoe writes the archive where -o points (local scratch)
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"PMTILES")
         return sp.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(pmtiles_convert.subprocess, "run", fake_run)
@@ -90,7 +92,8 @@ def test_builds_expected_command(tmp_path, monkeypatch):
 
     def fake_run(cmd, **kw):
         captured["cmd"] = cmd
-        out.write_bytes(b"PMTILES")  # pretend tippecanoe wrote it
+        # pretend tippecanoe wrote the archive where -o points (local scratch)
+        Path(cmd[cmd.index("-o") + 1]).write_bytes(b"PMTILES")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(
@@ -102,7 +105,9 @@ def test_builds_expected_command(tmp_path, monkeypatch):
     assert result == out
     cmd = captured["cmd"]
     assert cmd[0] == "/usr/bin/tippecanoe"
-    assert "-o" in cmd and str(out) in cmd
+    built = Path(cmd[cmd.index("-o") + 1])
+    assert built.name == out.name and built != out  # assembled in scratch, then moved
+    assert "-t" in cmd
     assert "-l" in cmd and "points" in cmd
     assert "-z" in cmd and "12" in cmd
     assert "-Z" in cmd and "0" in cmd

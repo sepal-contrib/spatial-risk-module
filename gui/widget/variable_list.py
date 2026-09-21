@@ -6,6 +6,7 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.map_helpers import is_mappable
+from gui.scripts.product_rows import derived_rows
 from gui.scripts.variable_identity import is_base_raster
 from gui.widget.product_table import ProductTable
 
@@ -44,15 +45,14 @@ def SourceVariableList(
     on_toggle_map: Optional[Callable[[str], None]] = None,
     vars_on_map=None,
     on_download: Optional[Callable[[str], None]] = None,
-    download_pending: bool = False,
-    downloading_key: Optional[str] = None,
+    downloading_keys: frozenset = frozenset(),
 ):
     """Table of source (raw) variables with download/map/edit/remove actions.
 
     Cloud-backed variables (GEEVar) show a "cloud" chip and, when
-    ``on_download`` is given, a per-row download button. ``downloading_key`` is
-    the key currently downloading (None while a bulk download runs); every
-    download button is disabled while ``download_pending``.
+    ``on_download`` is given, a per-row download button. ``downloading_keys``
+    are the keys whose download is running: their button spins and is
+    disabled; every other row stays clickable (downloads run in parallel).
     """
     p = project.value
     raw_variables = (p.raw_variables if p is not None else {}) or {}
@@ -61,9 +61,10 @@ def SourceVariableList(
     rows = []
     for key, var in raw_variables.items():
         is_base = is_base_raster(p, var)
-        data_type_label = (
-            var.data_type if isinstance(var.data_type, str) else var.data_type.value
-        )
+        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
+        # test is true for its members too and would render the member itself —
+        # which str() spells "DataType.raster".
+        data_type_label = getattr(var.data_type, "value", var.data_type)
         is_cloud = type(var).__name__ == "GEEVar"
 
         status_chip = (
@@ -82,8 +83,8 @@ def SourceVariableList(
                 {
                     "kind": "download",
                     "on_click": lambda *_, k=key: on_download(k),
-                    "loading": download_pending and downloading_key == key,
-                    "disabled": download_pending,
+                    "loading": key in downloading_keys,
+                    "disabled": key in downloading_keys,
                 }
             )
         if on_toggle_map is not None and is_mappable(var):
@@ -154,53 +155,76 @@ def DerivedVariableList(
     on_toggle_map: Optional[Callable[[str], None]] = None,
     derived_on_map=None,
     title: Optional[str] = None,
+    jobs=None,
+    on_dismiss: Optional[Callable[[str], None]] = None,
 ):
-    """Table of derived (processed) variables with map/remove actions.
+    """Derived (processed) variables, plus the layers still being generated.
 
-    ``keys`` restricts the rows to those registry keys (None = all).
+    ``keys`` restricts the product rows to those registry keys (None = all).
     ``derived_on_map`` is the reactive set of keys currently drawn on the map
     (see ``gui/tile/derived_map.py``), which drives the toggle state.
+
+    ``jobs`` is the reactive list of session job dicts for submissions still
+    running — the same overlay the Train/Sampling/Inference tabs use, so a
+    derived layer is a row from the moment its form is submitted instead of
+    appearing out of nowhere minutes later. A job row has no product to act on
+    (and the GDAL pass behind it is not cancellable), so it carries no actions
+    until it fails, when ``on_dismiss`` lets the user clear it.
     """
     p = project.value
     if p is None:
         return
-    variables = {
-        k: v for k, v in p.processed_variables.items() if keys is None or k in keys
-    }
-    if not variables:
+    data = derived_rows(p, jobs.value if jobs is not None else None, keys)
+    if not data:
         return
     on_map = derived_on_map.value if derived_on_map is not None else set()
+    unknown_source = t("widgets.variable_list.derived_source_unknown")
 
     rows = []
-    for key, var in variables.items():
-        source_name = derived_source_key(
-            p,
-            var.name,
-            t("widgets.variable_list.derived_source_unknown"),
-            year=getattr(var, "year", None),
-        )
+    for r in data:
         actions = []
-        if on_toggle_map is not None and is_mappable(var):
-            actions.append(
-                {
-                    "kind": "map_toggle",
-                    "on_click": lambda *_, k=key: on_toggle_map(k),
-                    "is_on": key in on_map,
-                }
+        if r["kind"] == "variable":
+            var = p.processed_variables[r["key"]]
+            source_name = derived_source_key(
+                p, var.name, unknown_source, year=getattr(var, "year", None)
             )
-        if on_remove is not None:
-            actions.append(
-                {"kind": "delete", "on_click": lambda *_, k=key: on_remove(k)}
-            )
+            if on_toggle_map is not None and is_mappable(var):
+                actions.append(
+                    {
+                        "kind": "map_toggle",
+                        "on_click": lambda *_, k=r["key"]: on_toggle_map(k),
+                        "is_on": r["key"] in on_map,
+                    }
+                )
+            if on_remove is not None:
+                actions.append(
+                    {"kind": "delete", "on_click": lambda *_, k=r["key"]: on_remove(k)}
+                )
+        else:
+            # The output has no registry entry yet, so the source is resolved
+            # from the name the job will register under.
+            source_name = derived_source_key(p, r["name"], unknown_source)
+            if r["status"] != "running" and on_dismiss is not None:
+                actions.append(
+                    {
+                        "kind": "dismiss",
+                        "on_click": lambda *_, i=r["job_id"]: on_dismiss(i),
+                    }
+                )
+
+        error = r.get("error")
+        if r["status"] == "failed" and not error:
+            error = t("widgets.variable_list.derived_unknown_error")
         rows.append(
             {
-                "key": key,
+                "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": var.name, "size": "0.9rem"},
+                    {"type": "text", "value": r["name"], "size": "0.9rem"},
                     {"type": "chip", "value": source_name},
-                    {"type": "status", "status": "ready"},
+                    {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
+                "error": error,
             }
         )
 
@@ -216,4 +240,146 @@ def DerivedVariableList(
         ],
         rows=rows,
         empty_text="",
+    )
+
+
+def harmonization_row_status(
+    key: str, var, status, running_keys, is_cloud: bool
+) -> str:
+    """ProductTable status token for one raw variable in the Step 3 list.
+
+    Precedence: a run rewriting this layer beats everything; a cloud-backed
+    layer is "not downloaded" whatever the grid check says (it has no local
+    file to check); a None ``status``, or an entry ``status`` lists as
+    ``unknown``, means the check that decides has not resolved yet.
+    """
+    if key in (running_keys or ()):
+        return "running"
+    if is_cloud:
+        return "not_downloaded"
+    if status is None:
+        return "checking"
+    if key in (getattr(status, "unknown", None) or ()):
+        # Signature-less entry, disk verdict still pending. Without this it
+        # falls through to "harmonized" and claims work that was never checked.
+        # ``getattr`` rather than ``status.unknown`` so the function keeps
+        # working against a status built by older code paths.
+        return "checking"
+    return "pending" if key in status.pending else "harmonized"
+
+
+@solara.component
+def HarmonizationVariableList(
+    project,
+    status,
+    on_harmonize: Callable[[str], None],
+    running_keys=None,
+    harmonize_disabled: bool = False,
+    on_toggle_map: Optional[Callable[[str], None]] = None,
+    derived_on_map=None,
+    on_remove: Optional[Callable[[str], None]] = None,
+):
+    """Every harmonizable source variable with its harmonization status.
+
+    The Step 3 counterpart of ``SourceVariableList``: one row per raw variable
+    Run would touch (rasters and active vectors), a Status column fed by
+    ``harmonization_status`` (``status``; None while it is still being
+    computed off-thread), and a per-row harmonize action that is enabled only
+    on pending rows — the same shape as the per-row download in Step 2.
+
+    ``running_keys`` are the raw keys a run is currently rewriting (spinner on
+    those rows); every harmonize button is disabled while ``harmonize_disabled``.
+    Map toggle and remove act on the harmonized *output*, so they are shown
+    only once one is registered; their callbacks receive the processed key.
+    """
+    from spatialrisk.harmonization import is_harmonizable, output_key
+
+    p = project.value
+    raw_variables = (p.raw_variables if p is not None else {}) or {}
+    processed = (p.processed_variables if p is not None else {}) or {}
+    on_map = derived_on_map.value if derived_on_map is not None else set()
+    running = set(running_keys or ())
+
+    rows = []
+    for key, var in raw_variables.items():
+        if not is_harmonizable(var):
+            continue
+        is_cloud = type(var).__name__ == "GEEVar"
+        row_status = harmonization_row_status(key, var, status, running, is_cloud)
+        out_key = output_key(var)
+        output = processed.get(out_key)
+        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
+        # test is true for its members too and would render the member itself —
+        # which str() spells "DataType.raster".
+        data_type_label = getattr(var.data_type, "value", var.data_type)
+
+        actions = [
+            {
+                "kind": "harmonize",
+                "on_click": lambda *_, k=key: on_harmonize(k),
+                "loading": key in running,
+                "disabled": harmonize_disabled
+                or row_status not in ("pending", "not_downloaded"),
+            }
+        ]
+        if output is not None and on_toggle_map is not None and is_mappable(output):
+            actions.append(
+                {
+                    "kind": "map_toggle",
+                    "on_click": lambda *_, k=out_key: on_toggle_map(k),
+                    "is_on": out_key in on_map,
+                }
+            )
+        if output is not None and on_remove is not None:
+            actions.append(
+                {"kind": "delete", "on_click": lambda *_, k=out_key: on_remove(k)}
+            )
+
+        name_chips = (
+            [
+                {
+                    "value": t("widgets.variable_list.chip_base"),
+                    "color": "info",
+                    "outlined": False,
+                }
+            ]
+            if is_base_raster(p, var)
+            else []
+        )
+        rows.append(
+            {
+                "key": key,
+                "cells": [
+                    {"type": "text", "value": var.name, "chips": name_chips},
+                    {"type": "chip", "value": data_type_label, "color": "primary"},
+                    {
+                        "type": "text",
+                        "value": str(var.year) if getattr(var, "year", None) else "—",
+                        "muted": True,
+                    },
+                    {"type": "status", "status": row_status},
+                ],
+                "actions": actions,
+            }
+        )
+
+    ProductTable(
+        title=t("widgets.variable_list.harmonization_title"),
+        columns=[
+            {
+                "label": t("widgets.variable_list.source_col_name"),
+                "width": "minmax(0,2fr)",
+            },
+            # Lean fixed widths: the panel is ~450px wide and the Name column
+            # takes whatever is left, so every fixed px here is a truncated
+            # name (see list-grid alignment: no max-content columns).
+            {"label": t("widgets.variable_list.source_col_type"), "width": "58px"},
+            {"label": t("widgets.variable_list.source_col_year"), "width": "40px"},
+            {
+                "label": t("widgets.variable_list.harmonization_col_status"),
+                "width": "108px",
+            },
+        ],
+        rows=rows,
+        empty_text=t("widgets.variable_list.source_empty"),
     )

@@ -78,8 +78,10 @@ def DatasetTile(project):
             logger.debug(
                 "Registered dataset '%s' with %d features", key, len(entry["features"])
             )
-            set_editing_key(None)
-            set_initial(None)
+            # Leave editing_key/initial alone: the CreationDialog frame closes
+            # itself right after this returns, and clearing them here re-rendered
+            # the still-open dialog as "New dataset" for its fade-out. on_new /
+            # on_edit set both before every open, so nothing stale survives.
             project.set(p.model_copy())
         except Exception as exc:
             logger.exception("dataset submit failed")

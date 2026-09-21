@@ -11,8 +11,10 @@
     "task_download_one": "Téléchargement de la couche '{name}'",
     "task_download_layer": "Téléchargement de la couche {i}/{n} : '{name}'",
     "task_download_tiles": "'{name}' — tuile {done}/{total}",
+    "task_download_queued": "'{name}' — en file d'attente, en attente de la fin d'un autre téléchargement",
     "task_change": "Génération de la couche de changement {op}",
-    "task_postprocess": "Application de {step} à '{name}'"
+    "task_postprocess": "Application de {step} à '{name}'",
+    "task_processing_one": "Harmonisation de {name}"
   },
   "dialog": {
     "confirm_default_title": "Supprimer ?",

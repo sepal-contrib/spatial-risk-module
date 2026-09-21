@@ -15,15 +15,17 @@ counterpart share a registry key and would otherwise be indistinguishable in
 the layer control.
 """
 
-import asyncio
 import logging
+import threading
 
 import solara
 
 from gui.i18n import t
+from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import processed_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
+from gui.scripts.solara_threads import spawn_in_context
 from gui.scripts.variable_map import add_raster_var_on_map
 
 logger = logging.getLogger("spatial_risk")
@@ -31,6 +33,17 @@ logger = logging.getLogger("spatial_risk")
 # Keys of processed variables currently displayed on the map (drives the toggle
 # state in every DerivedVariableList).
 derived_on_map = solara.reactive(set())
+
+# Guards the two read-modify-write updates to ``derived_on_map`` — the
+# worker's add (below) and ``drop_derived_from_map``'s discard — which now
+# run concurrently on independent worker threads (one per toggle) and, for
+# the discard side, also from the kernel thread via ``process_actions``'
+# delete path. A plain read of ``.value`` or a wholesale
+# ``derived_on_map.set(set())`` reset needs no lock.
+derived_on_map_lock = threading.Lock()
+
+# Processed-variable keys whose map toggle is running (see InflightKeys).
+derived_toggle_inflight = InflightKeys(key="derived_toggle_inflight")
 
 
 def derived_layer_key(key: str) -> str:
@@ -68,17 +81,18 @@ def drop_derived_from_map(key: str, map_, legend_port=None) -> None:
         map_.remove_layer(derived_layer_key(key), none_ok=True)
     if legend_port is not None:
         legend_port.unregister(derived_layer_key(key))
-    if key in derived_on_map.value:
-        remaining = set(derived_on_map.value)
-        remaining.discard(key)
-        derived_on_map.set(remaining)
+    with derived_on_map_lock:
+        if key in derived_on_map.value:
+            remaining = set(derived_on_map.value)
+            remaining.discard(key)
+            derived_on_map.set(remaining)
 
 
 def use_derived_map_toggle(project, map_, notifier, legend_port=None):
     """Hook: an ``on_toggle_map(key)`` callback for processed variables.
 
-    Returns None when there is no map (the caller then renders no toggle). The
-    hooks below are called unconditionally, as reacton requires.
+    Returns None when there is no map (the caller then renders no toggle). No
+    reacton hooks are used here, so the caller may call it conditionally.
 
     Every layer-add is offloaded to a worker thread — the ``TileClient`` /
     geopandas reads block, exactly like the source-variable toggle. ``notifier``
@@ -87,18 +101,19 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
     is a ``LegendPort`` (see ``gui/scripts/legend_registry.py``); None disables
     legend publication.
     """
-    pending_toggle = solara.use_reactive(None)
 
-    @solara.lab.use_task(dependencies=None, raise_error=False)
-    async def _apply_map_toggle():
-        key = pending_toggle.value
-        if key is None or map_ is None:
-            return
-        p = project.value
-        var = p.processed_variables.get(key) if p is not None else None
-        if var is None or not is_mappable(var):
-            return
+    def _toggle_on_map(key, p):
+        """Worker: add or remove one processed variable's layer, then record it.
+
+        Runs on its own ``spawn_in_context`` thread — the blocking adds and the
+        on-map/legend bookkeeping together, so toggling another layer while
+        this one loads cannot skip the bookkeeping (a shared ``use_task`` used
+        to be cancelled at its ``await`` by the second toggle).
+        """
         try:
+            var = p.processed_variables.get(key) if p is not None else None
+            if var is None or not is_mappable(var):
+                return
             if key in derived_on_map.value:
                 drop_derived_from_map(key, map_, legend_port)
                 return
@@ -108,12 +123,9 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
             generation = legend_port.generation() if legend_port is not None else None
             legend = None
             if type(var).__name__ == "LocalVectorVar":
-                await asyncio.to_thread(
-                    add_vector_on_map, map_, str(var.path), label, layer_key
-                )
+                add_vector_on_map(map_, str(var.path), label, layer_key)
             else:  # LocalRasterVar — same palette resolution as source rasters
-                await asyncio.to_thread(
-                    add_raster_var_on_map,
+                add_raster_var_on_map(
                     map_,
                     str(var.path),
                     var=var,
@@ -123,15 +135,14 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
                 )
                 legend = _derived_legend(key, var)
 
-            # A project switch during the await means this layer is stale (see
-            # VariablesTile's add branch for the same guard) — take it back off
-            # rather than publish a legend for it. Kept outside `finally`: a
-            # `return` inside `finally` would discard an in-flight exception.
+            # A project switch during the add means this layer is stale — take
+            # it back off rather than publish a legend for it.
             if legend_port is not None and legend_port.generation() != generation:
                 map_.remove_layer(layer_key, none_ok=True)
                 return
 
-            derived_on_map.set(set(derived_on_map.value) | {key})
+            with derived_on_map_lock:
+                derived_on_map.set(set(derived_on_map.value) | {key})
             if legend is not None and legend_port is not None:
                 legend_port.register(legend)
         except Exception as exc:
@@ -140,9 +151,24 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
                 timeout=ERROR_TOAST_TIMEOUT,
             )
+        finally:
+            derived_toggle_inflight.release(key)
 
     def on_toggle_map(key: str):
-        pending_toggle.set(key)
-        _apply_map_toggle()
+        cur = project.value
+        if cur is None or not derived_toggle_inflight.claim(key):
+            return
+        try:
+            spawn_in_context(_toggle_on_map, (key, cur))
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread
+            # that never starts would hold this key for the rest of the
+            # session.
+            derived_toggle_inflight.release(key)
+            logger.exception("could not start the map-toggle worker")
+            notifier.error(
+                t("tiles.variables.error_toggle_map", key=key, exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
 
     return on_toggle_map if map_ is not None else None

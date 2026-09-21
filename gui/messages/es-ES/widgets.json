@@ -11,16 +11,23 @@
       "unknown_error": "Error desconocido"
     },
     "prediction_import_modal": {
-      "palette_far": "Rampa FAR (probabilidad, fijada 1..65535)",
-      "palette_stretch": "Rampa ajustada al rango del archivo",
-      "error_select_raster": "Seleccioná un archivo ráster para importar.",
-      "error_enter_name": "Ingresá un nombre para la predicción importada.",
+      "error_select_raster": "Seleccione un archivo ráster para importar.",
+      "error_enter_name": "Escriba un nombre para la predicción importada.",
+      "error_base_raster_required": "Defina el ráster de referencia en el paso de Armonización antes de importar una predicción: la importación se reproyecta a esa malla.",
+      "error_scale_required": "Elija la escala de valores del ráster.",
       "title": "Importar ráster de predicción",
       "label_name": "Nombre",
-      "placeholder_name": "p.ej. qgis-export-2020",
+      "placeholder_name": "p. ej. exportacion-qgis-2020",
       "label_file": "Seleccionar archivo ráster",
-      "label_palette": "Paleta del mapa",
-      "info_text": "El ráster debe ser espacialmente comparable con la verdad elegida en el paso Evaluación para poder ser evaluado.",
+      "label_scale": "Escala de valores",
+      "scale_probability": "Probabilidad 0..1 (se reescala a 1..65535)",
+      "scale_risk": "Escala de riesgo 1..65535 (se usa tal cual)",
+      "spec_intro": "Qué espera la importación",
+      "spec_format": "Un GeoTIFF de una sola banda con sistema de referencia de coordenadas.",
+      "spec_values": "Los valores son probabilidades 0..1 o la escala de riesgo 1..65535; mayor valor, mayor riesgo.",
+      "spec_nodata": "Sin datos: los píxeles marcados con el valor nodata del archivo quedan fuera del mapa.",
+      "spec_zero": "El valor 0: sin datos en la escala de riesgo. En la escala de probabilidad es un valor real — la probabilidad más baja — y se conserva.",
+      "spec_warp": "El ráster se reproyecta a la malla del proyecto (vecino más cercano) al importarlo.",
       "btn_import": "Importar"
     },
     "inference_output_list": {
@@ -93,7 +100,10 @@
       "derived_col_name": "Nombre",
       "derived_col_source": "Fuente",
       "derived_col_status": "Estado",
-      "derived_source_unknown": "desconocido"
+      "derived_source_unknown": "desconocido",
+      "derived_unknown_error": "Error desconocido",
+      "harmonization_title": "Variables",
+      "harmonization_col_status": "Estado"
     },
     "summary_lists": {
       "raw_vars_title": "Variables fuente",
@@ -143,10 +153,15 @@
     },
     "product_table": {
       "status_running": "en ejecución",
+      "status_tiling": "generando teselas",
       "status_ready": "listo",
       "status_completed": "completado",
       "status_failed": "falló",
-      "status_cancelled": "cancelado"
+      "status_cancelled": "cancelado",
+      "status_harmonized": "armonizada",
+      "status_pending": "pendiente",
+      "status_not_downloaded": "sin descargar",
+      "status_checking": "comprobando…"
     },
     "artifact_name": {
       "label": "Nombre",
@@ -157,6 +172,13 @@
     "creation_dialog": {
       "replace_title": "¿Reemplazar existente?",
       "replace_message": "'{key}' ya existe y será reemplazado. ¿Continuar?"
+    },
+    "file_cleanup": {
+      "checkbox_one": "Eliminar también el archivo del disco ({size})",
+      "checkbox_other": "Eliminar también los {n} archivos del disco ({size})",
+      "blocked_outside": "El archivo está fuera de la carpeta de este proyecto ({path}) y se conservará: solo se eliminan los archivos creados por la aplicación.",
+      "blocked_shared": "El archivo también lo usa '{name}' y se conservará.",
+      "file_line": "{path} · {size} · {date}"
     }
   }
 }

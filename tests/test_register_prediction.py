@@ -156,3 +156,68 @@ def test_run_params_survive_the_project_json_round_trip():
     restored = Prediction(**pred.model_dump(mode="json"))
 
     assert restored.run_params == {"mask_layer": "forest_2020"}
+
+
+def test_register_prediction_builds_display_overviews(tmp_path, monkeypatch):
+    """Every written prediction gets overviews.
+
+    Without them the viewer decimates a whole tiled raster for each zoomed-out
+    tile it draws.
+    """
+    import spatialrisk.overviews as ov
+
+    calls = []
+    monkeypatch.setattr(
+        ov, "ensure_overviews", lambda p, **kw: calls.append((str(p), kw)) or True
+    )
+
+    raster = tmp_path / "glm.tif"
+    raster.write_bytes(b"not-a-real-tif")  # ensure_overviews is stubbed out
+
+    project = Project(project_name="ovr_test")
+    model = GLMModel(name="m1", model_type="glm", year=2020)
+    project.add_model(model, auto_save=False)
+    model._register_prediction(raster, dataset=_FakeDataset(), auto_save=False)
+
+    assert [c[0] for c in calls] == [str(raster)]
+    # Threshold-gated: small rasters are already fast to decimate.
+    assert calls[0][1]["min_pixels"] == ov.OVERVIEW_MIN_PIXELS
+
+
+def test_register_prediction_overview_failure_is_not_fatal(tmp_path, monkeypatch):
+    """A prediction still registers when the overview pass fails.
+
+    On a read-only folder or an unreadable file the display is slower; the
+    artifact is not lost.
+    """
+    import spatialrisk.overviews as ov
+
+    def boom(path, **kwargs):
+        raise RuntimeError("no overviews for you")
+
+    monkeypatch.setattr(ov, "ensure_overviews", boom)
+
+    raster = tmp_path / "glm.tif"
+    raster.write_bytes(b"x")
+    project = Project(project_name="ovr_fail")
+    model = GLMModel(name="m1", model_type="glm", year=2020)
+    project.add_model(model, auto_save=False)
+
+    pred = model._register_prediction(raster, dataset=_FakeDataset(), auto_save=False)
+    assert pred is not None
+
+
+def test_register_prediction_skips_overviews_for_a_missing_file(monkeypatch):
+    """Nothing written, nothing to optimise — and no spurious error."""
+    import spatialrisk.overviews as ov
+
+    calls = []
+    monkeypatch.setattr(ov, "ensure_overviews", lambda p, **kw: calls.append(p))
+
+    project = Project(project_name="ovr_missing")
+    model = GLMModel(name="m1", model_type="glm", year=2020)
+    project.add_model(model, auto_save=False)
+    model._register_prediction(
+        Path("/tmp/does-not-exist.tif"), dataset=_FakeDataset(), auto_save=False
+    )
+    assert calls == []

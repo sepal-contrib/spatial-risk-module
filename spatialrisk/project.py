@@ -576,6 +576,9 @@ class Project(BaseModel):
             return False
         if delete_file and getattr(prediction, "path", None):
             self._safe_unlink(prediction.path)
+            # The viewer's overview sidecar: GDAL would serve a leftover .ovr
+            # to the next raster written under this name.
+            self._safe_unlink(str(prediction.path) + ".ovr")
         logger.info("Prediction deleted: project.predictions['%s']", key)
         if auto_save:
             self.save()
@@ -600,6 +603,29 @@ class Project(BaseModel):
             return False
         del self.allocations[key]
         return True
+
+    def delete_variable_files(self, key: str) -> List[Path]:
+        """Delete the on-disk files of the variable registered under *key*.
+
+        Files only — the registry entry, the reference raster and the map layer
+        are the caller's business (the tiles already handle them). Returns the
+        paths actually removed, which is empty whenever
+        :func:`~spatialrisk.variables.file_cleanup.plan_variable_files` refuses:
+        a file outside the project folder, or one another variable still uses.
+        Ask it first if you want to tell the user *why* before deleting.
+        """
+        from spatialrisk.variables.file_cleanup import plan_variable_files
+
+        plan = plan_variable_files(self, key)
+        removed = [path for path in plan.files if self._safe_unlink(path)]
+        if removed:
+            logger.info(
+                "Deleted %d file(s) of variable '%s': %s",
+                len(removed),
+                key,
+                ", ".join(p.name for p in removed),
+            )
+        return removed
 
     def _project_dir(self) -> Path:
         """Folder holding this project's files (manifest, rasters, model artifacts)."""
@@ -744,13 +770,15 @@ class Project(BaseModel):
         # ee.Image objects (not JSON-serializable) and load() only ever
         # reconstructs Local*Var, so a persisted GEEVar could never be read
         # back. Skip them — they are materialized to local vars before save.
-        for var_name, var in self.raw_variables.items():
+        # Registries are snapshotted with list(): background workers insert
+        # into these shared dicts while a save may be walking them.
+        for var_name, var in list(self.raw_variables.items()):
             if type(var).__name__ == "GEEVar":
                 continue
             data["raw_variables"][var_name] = var.model_dump(mode="json")
 
         # Serialize processed variables
-        for var_name, var in self.processed_variables.items():
+        for var_name, var in list(self.processed_variables.items()):
             data["processed_variables"][var_name] = var.model_dump(mode="json")
 
         # Serialize base_raster if it exists
@@ -760,13 +788,13 @@ class Project(BaseModel):
         # Serialize registered ML models
         if self.models:
             data["models"] = {}
-            for key, model in self.models.items():
+            for key, model in list(self.models.items()):
                 data["models"][key] = model.model_dump(mode="json")
 
         # Serialize registered datasets
         if self.datasets:
             data["datasets"] = {}
-            for key, dataset in self.datasets.items():
+            for key, dataset in list(self.datasets.items()):
                 data["datasets"][key] = {
                     "name": dataset.name,
                     "year": dataset.year,
@@ -778,7 +806,7 @@ class Project(BaseModel):
         # Serialize registered samples (location-only; the GPKG is the truth).
         if self.samples:
             data["samples"] = {}
-            for key, s in self.samples.items():
+            for key, s in list(self.samples.items()):
                 data["samples"][key] = {
                     "name": s.name,
                     "raster_var_name": s.raster_var_name,
@@ -800,19 +828,19 @@ class Project(BaseModel):
         # Serialize registered predictions
         if self.predictions:
             data["predictions"] = {}
-            for key, prediction in self.predictions.items():
+            for key, prediction in list(self.predictions.items()):
                 data["predictions"][key] = prediction.model_dump(mode="json")
 
         # Serialize saved evaluation runs
         if self.evaluations:
             data["evaluations"] = {}
-            for key, record in self.evaluations.items():
+            for key, record in list(self.evaluations.items()):
                 data["evaluations"][key] = record.model_dump(mode="json")
 
         # Serialize saved allocation runs
         if self.allocations:
             data["allocations"] = {}
-            for key, run in self.allocations.items():
+            for key, run in list(self.allocations.items()):
                 data["allocations"][key] = run.model_dump(mode="json")
 
         # Serialize the AOI descriptor (geometry lives in the sidecar file)
@@ -1097,6 +1125,7 @@ class Project(BaseModel):
         target_epsg: Optional[str] = None,
         resolution: Optional[float] = None,
         source: str = "raw",
+        keys: Optional[Iterable[str]] = None,
         add_to_processed: bool = True,
         auto_save: bool = True,
         **reproject_kwargs,
@@ -1113,6 +1142,13 @@ class Project(BaseModel):
             (base_raster must be set).
         source : str, optional
             Which variables to reproject: 'raw' or 'processed' (default: 'raw').
+        keys : iterable of str, optional
+            Restrict the run to these source-collection keys. ``None`` (default)
+            reprojects every raster, which is what the notebooks expect;
+            ``process_actions.run_processing`` passes the keys that
+            ``harmonization_status_from_disk`` reports as pending, so an
+            already-aligned layer is not re-derived. An empty iterable means
+            "nothing to do".
         add_to_processed : bool, optional
             Whether to add reprojected variables to the processed collection
             (default: True).
@@ -1161,9 +1197,13 @@ class Project(BaseModel):
         reprojected_vars = {}
         skipped_count = 0
 
+        # `keys is None` means "everything"; an empty iterable means "nothing".
+        selected = None if keys is None else set(keys)
         # Filter on data_type (not isinstance) so module reloads don't break it.
         raster_pairs = [
-            (k, v) for k, v in source_vars.items() if v.data_type == DataType.raster
+            (k, v)
+            for k, v in source_vars.items()
+            if v.data_type == DataType.raster and (selected is None or k in selected)
         ]
         for var_key, var in log_progress(
             raster_pairs, "Reprojecting", label=lambda kv: kv[0]
@@ -1190,6 +1230,7 @@ class Project(BaseModel):
     def rasterize_all(
         self,
         source: str = "raw",
+        keys: Optional[Iterable[str]] = None,
         add_to_processed: bool = True,
         auto_save: bool = True,
         **rasterize_kwargs,
@@ -1201,6 +1242,10 @@ class Project(BaseModel):
         ----------
         source : str, optional
             Which variables to rasterize: 'raw' or 'processed' (default: 'raw').
+        keys : iterable of str, optional
+            Restrict the run to these source-collection keys. ``None`` (default)
+            rasterizes every active vector. An empty iterable means "nothing
+            to do". See ``reproject_and_match_all``.
         add_to_processed : bool, optional
             Whether to add rasterized variables to processed collection (default: True).
         auto_save : bool, optional
@@ -1246,7 +1291,12 @@ class Project(BaseModel):
         rasterized_vars = {}
         skipped_count = 0
 
+        # `keys is None` means "everything"; an empty iterable means "nothing".
+        selected = None if keys is None else set(keys)
+
         for var_key, var in source_vars.items():
+            if selected is not None and var_key not in selected:
+                continue
             if not var.active:
                 print(f"⏭️  Skipping '{var_key}' (inactive)")
                 skipped_count += 1
@@ -1255,7 +1305,9 @@ class Project(BaseModel):
         vector_pairs = [
             (k, v)
             for k, v in source_vars.items()
-            if v.active and v.data_type == DataType.vector
+            if v.active
+            and v.data_type == DataType.vector
+            and (selected is None or k in selected)
         ]
         for var_key, var in log_progress(
             vector_pairs, "Rasterizing", label=lambda kv: kv[0]

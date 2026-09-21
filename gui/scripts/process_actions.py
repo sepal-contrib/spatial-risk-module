@@ -6,8 +6,11 @@ edge/dist post-processing.
 """
 
 import logging
+from collections import namedtuple
 from pathlib import Path
 from typing import List
+
+from spatialrisk.harmonization import harmonization_status_from_disk
 
 logger = logging.getLogger("spatial_risk")
 
@@ -17,7 +20,32 @@ def _is_geevar(var) -> bool:
     return type(var).__name__ == "GEEVar"
 
 
-def materialize_raw_layers(project, keys=None, on_progress=None) -> List[str]:
+def existing_download_targets(project, keys=None) -> List[tuple]:
+    """(key, path) for every pending GEEVar whose target file is already there.
+
+    What the Variables tile needs to decide whether to ask before downloading:
+    with ``overwrite=False`` each of these files would be reused as-is, which is
+    right when it is the layer you already fetched and wrong when it is a stale
+    or half-written one. ``keys`` restricts the check the same way
+    ``materialize_raw_layers`` restricts the download (None = all pending).
+    """
+    targets = []
+    for key, var in (project.raw_variables if project is not None else {}).items():
+        if not _is_geevar(var) or (keys is not None and key not in keys):
+            continue
+        try:
+            path = var.expected_local_path
+        except Exception:  # pragma: no cover - a var with no project/name yet
+            logger.debug("no expected path for %s", key, exc_info=True)
+            continue
+        if path.exists():
+            targets.append((key, path))
+    return targets
+
+
+def materialize_raw_layers(
+    project, keys=None, on_progress=None, overwrite: bool = False, on_wait=None
+) -> List[str]:
     """Download raw GEEVars to local vars, replacing them in raw_variables.
 
     Raster GEEVars -> to_local_raster(); vector GEEVars -> to_local_vector().
@@ -25,12 +53,20 @@ def materialize_raw_layers(project, keys=None, on_progress=None) -> List[str]:
     download to those raw-variable keys (None = all pending). Returns the list
     of keys that were materialized.
 
+    ``overwrite`` re-exports layers whose file is already on disk; the default
+    reuses them (see ``existing_download_targets`` for the files that affects).
+
     ``on_progress(layer_key, layer_idx, n_layers, tiles_done, tiles_total)``
     reports download progress: once with zero tile counts as each layer starts,
     then per completed geedim tile. Vector and already-on-disk layers produce
     only the start event (they have no tile bar).
+
+    ``on_wait(layer_key, layer_idx, n_layers)`` fires once when a raster
+    layer's export has to queue behind another download's (geedim runs one at
+    a time, see ``download_ee_image``); it never fires when the layer starts
+    at once.
     """
-    from spatialrisk.gee.progress import geedim_tile_progress
+    from spatialrisk.gee.progress import geedim_download_wait, geedim_tile_progress
     from spatialrisk.log_utils import log_progress
     from spatialrisk.variables.models import DataType
 
@@ -59,11 +95,16 @@ def materialize_raw_layers(project, keys=None, on_progress=None) -> List[str]:
             if on_progress is not None
             else lambda done, total: None
         )
-        with geedim_tile_progress(tile_cb):
+        wait_cb = (
+            (lambda _k=key, _i=idx: on_wait(_k, _i, n_layers))
+            if on_wait is not None
+            else lambda: None
+        )
+        with geedim_tile_progress(tile_cb), geedim_download_wait(wait_cb):
             if var.data_type == DataType.vector:
-                local = var.to_local_vector()
+                local = var.to_local_vector(overwrite=overwrite)
             else:
-                local = var.to_local_raster()
+                local = var.to_local_raster(overwrite=overwrite)
         # Single-image GEEVars return one var; lists are flattened defensively.
         locals_ = local if isinstance(local, list) else [local]
         for lv in locals_:
@@ -108,25 +149,135 @@ def base_raster_resolution(var) -> "float | None":
     return float(xres)
 
 
-def set_base_raster(project, base_key: str, epsg: str, resolution: float):
-    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base."""
+def validate_projection(epsg: str, resolution: str):
+    """Check a reference CRS and pixel size before any raster work starts.
+
+    Returns ``(blocking_error, warning)`` as sentinel keys, or ``None`` for
+    either. Kept free of ``t()`` so the module stays Solara-free and the rules
+    stay unit-testable; the caller maps the sentinels to messages.
+
+    ``pyproj`` is imported lazily like every other geo dependency in this
+    module, and is already present via rasterio/rioxarray.
+    """
+    from pyproj import CRS
+    from pyproj.exceptions import CRSError
+
+    text = (epsg or "").strip()
+    if not text:
+        return "need_epsg", None
+    # The field's placeholder invites a bare code and `auto_utm_epsg` already
+    # normalises its own output this way, as does `LocalRasterVar.reproject`.
+    # pyproj does not reliably parse a bare digit string, so prefix it here and
+    # keep the three call sites agreeing on what a valid entry looks like.
+    normalised = text if ":" in text else f"EPSG:{text}"
+    try:
+        crs = CRS.from_user_input(normalised)
+    except (CRSError, ValueError, TypeError):
+        return "bad_epsg", None
+
+    try:
+        metres = float(str(resolution).strip())
+    except (TypeError, ValueError):
+        return "bad_resolution", None
+    if metres <= 0:
+        return "bad_resolution", None
+
+    # Resolution is metres throughout (auto_utm_epsg returns UTM;
+    # base_raster_resolution documents "(m)"), so a geographic CRS silently
+    # reinterprets the number as degrees. Worth saying; not worth blocking.
+    return None, ("geographic_crs" if crs.is_geographic else None)
+
+
+def set_base_raster(
+    project, base_key: str, epsg: str, resolution: float, auto_save: bool = True
+):
+    """Reproject the chosen raw raster to `epsg`/`resolution` and set it as base.
+
+    ``auto_save=False`` leaves the project unsaved so a background caller can
+    check the project is still the open one before writing it to disk — see the
+    reference worker in ``process_tile``.
+    """
     base = project.raw_variables[base_key]
     reprojected = base.reproject(target_epsg=epsg, resolution=resolution)
-    reprojected.use_as_base_raster()
+    reprojected.use_as_base_raster(auto_save=auto_save)
     return reprojected
 
 
-def run_processing(project) -> None:
-    """Full Process run, in notebook order. Requires base_raster to be set."""
+def run_processing(project, keys=None) -> dict:
+    """Harmonize the raw variables that are not already on the base grid.
+
+    ``keys`` restricts the run to those raw-variable keys (the per-row
+    harmonize button in Step 3); None means every pending layer. Layers outside
+    ``keys`` are reported as skipped whatever their status.
+
+    Incremental by design: with N layers already aligned, adding one variable
+    used to cost N+1 reprojections. ``harmonization_status_from_disk`` decides
+    what is still pending — see ``spatialrisk/harmonization.py`` for the three
+    conditions. The disk check, not the in-memory one the tile displays: this
+    is about to write files, so it verifies rather than trusting a stamp.
+    Re-deriving an aligned layer is a no-op in output terms, so skipping it
+    is safe; a changed reference raster invalidates every layer's
+    grid and they all re-run automatically.
+
+    To force one layer through again, remove its harmonized output from the
+    list (``remove_processed_variable``): that drops the registry entry, which
+    is condition one, so the layer is pending on the next run.
+
+    Status is read *after* downloading: a GEEVar has no local file to compare
+    until it is materialized, and a freshly downloaded file is newer than any
+    prior output, so it lands in ``pending`` on its own. A *skipped* download
+    (the file was already there) is the exception, which is one of the reasons
+    the nothing-pending branch saves too — see the comment there.
+
+    Returns ``{"processed": [...], "skipped": [...]}`` — raw-variable keys.
+    Requires base_raster to be set.
+    """
     if project.base_raster is None:
         raise ValueError("Set a base raster before running processing.")
-    materialize_raw_layers(project)
-    logger.info("Reprojecting & matching all raw variables…")
-    project.reproject_and_match_all(source="raw")
-    logger.info("Rasterizing all raw variables…")
-    project.rasterize_all(source="raw")
+    if keys is None:
+        materialize_raw_layers(project)
+    else:
+        materialize_raw_layers(project, list(keys))
+
+    status = harmonization_status_from_disk(project)
+    pending = list(status.pending)
+    skipped = list(status.current)
+    if keys is not None:
+        wanted = set(keys)
+        skipped += [k for k in pending if k not in wanted]
+        pending = [k for k in pending if k in wanted]
+    if not pending:
+        # Unconditional: two kinds of in-memory-only change reach this branch,
+        # and before Step 3 became incremental the save at the end of every run
+        # persisted both.
+        #  - materialize_raw_layers replaced GEEVars with local vars using
+        #    add_as_raw(auto_save=False). Not hypothetical: GEEVar
+        #    .to_local_raster skips the download when the file already exists
+        #    (gee_var.py:164), so the "new" local file can carry an old mtime
+        #    and read as current.
+        #  - the Variables tile mutates raw_variables in memory only (add, edit
+        #    and remove all just write the dict). A user who removes a source
+        #    variable and then presses Run with nothing pending would get the
+        #    removal back on the next load.
+        project.save()
+        logger.info(
+            "All %d layer(s) are already harmonized — nothing to do.",
+            len(skipped),
+        )
+        return {"processed": [], "skipped": skipped}
+
+    logger.info(
+        "Harmonizing %d layer(s); %d already aligned.",
+        len(pending),
+        len(skipped),
+    )
+    logger.info("Reprojecting & matching pending raw variables…")
+    project.reproject_and_match_all(source="raw", keys=pending)
+    logger.info("Rasterizing pending raw variables…")
+    project.rasterize_all(source="raw", keys=pending)
     project.save()
     logger.info("Processing complete.")
+    return {"processed": pending, "skipped": skipped}
 
 
 def apply_post_processing(project, processed_key: str, step: str):
@@ -175,13 +326,18 @@ def processing_output_keys(project) -> List[str]:
     return [k for k in project.processed_variables if k not in postprocess]
 
 
-def remove_processed_variable(project, key: str, map_=None, legend_port=None) -> bool:
+def remove_processed_variable(
+    project, key: str, map_=None, legend_port=None, delete_file: bool = False
+) -> bool:
     """Unregister a processed variable and drop its map layer and legend.
 
     Serves both lists that render ``processed_variables`` — Harmonization
     outputs and Derived layers — so removal behaves identically in either tile.
-    Like the source-variable remove this only unregisters: the raster stays on
-    disk, so re-running harmonization or the derived op simply re-registers it.
+    By default this only unregisters: the raster stays on disk, so re-running
+    harmonization or the derived op simply re-registers it. ``delete_file``
+    (the dialog's opt-in) also removes the raster, through
+    ``Project.delete_variable_files`` — which refuses anything outside the
+    project folder or still used by another variable.
     ``legend_port`` is threaded through rather than imported (this module is
     Solara-free); None disables legend withdrawal.
 
@@ -191,8 +347,16 @@ def remove_processed_variable(project, key: str, map_=None, legend_port=None) ->
 
     if project is None or key not in project.processed_variables:
         return False
-    del project.processed_variables[key]
-    drop_derived_from_map(key, map_, legend_port)
+    try:
+        # Before the del: the file plan is resolved from the registry entry.
+        if delete_file:
+            project.delete_variable_files(key)
+    finally:
+        # A file we could not unlink is not a reason to keep a layer the user
+        # asked to drop: the entry goes either way, and the error still reaches
+        # the caller (the tiles toast it).
+        del project.processed_variables[key]
+        drop_derived_from_map(key, map_, legend_port)
     return True
 
 
@@ -259,6 +423,36 @@ def postprocess_output_name(project, pp_key: str, step: str):
     if var is None:
         return None
     return f"{var.name}_{step}"
+
+
+#: What a submitted derived-layer entry will produce: the ``name`` the list
+#: displays and the ``key`` it will be registered under.
+DerivedOutput = namedtuple("DerivedOutput", "name key")
+
+
+def derived_output(project, entry) -> "DerivedOutput | None":
+    """Name and registry key the dialog entry will produce, or None if invalid.
+
+    The two differ for edge/dist: ``add_as_processed`` stores a year-bearing
+    variable under ``{name}_{year}`` and ``_create_post_var`` inherits the
+    source layer's year, so ``forest`` (2010) -> dist displays as
+    ``forest_dist`` but registers as ``forest_dist_2010``. Keying a job on the
+    name alone would therefore treat that layer as never registered, and would
+    wrongly conflate two same-named sources from different years.
+
+    Change layers carry no year, so their name *is* their key.
+    """
+    op = entry["op"]
+    if op in ("loss", "gain"):
+        name = change_output_name(project, op, entry["start_key"], entry["end_key"])
+        return None if name is None else DerivedOutput(name, name)
+
+    pp_key = entry["pp_key"]
+    name = postprocess_output_name(project, pp_key, op)
+    if name is None:
+        return None
+    year = getattr(project.processed_variables[pp_key], "year", None)
+    return DerivedOutput(name, f"{name}_{year}" if year else name)
 
 
 def generate_change_var(project, op: str, start_key: str, end_key: str):

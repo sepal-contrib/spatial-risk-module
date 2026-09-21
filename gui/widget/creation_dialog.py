@@ -87,6 +87,7 @@ def CreationDialog(
     validate: Callable[[], Optional[str]],
     will_replace: Callable[[], Optional[str]],
     launch: Callable[[], None],
+    create_icon: str = "mdi-plus",
     on_close: Optional[Callable[[], None]] = None,
     replace_title: Optional[str] = None,
     replace_message: Optional[Callable[[str], str]] = None,
@@ -99,6 +100,8 @@ def CreationDialog(
         open_: solara.Reactive[bool] — dialog visibility (owned by the tile).
         title: dialog heading.
         create_label: label for the submit button (e.g. "Register", "Save").
+        create_icon: icon on the submit button; the default "+" suits a
+            creation form, a form that *sets* something names its own.
         validate: () -> error message | None; runs on Create click.
         will_replace: () -> existing storage key | None; runs after validate.
             A returned key opens the confirm-replace dialog instead of
@@ -115,6 +118,20 @@ def CreationDialog(
     """
     error, set_error = solara.use_state(None)
     pending_replace, set_pending_replace = solara.use_state(None)
+    # One launch per opening. Closing the dialog is a browser round-trip, so
+    # a second Create (or Replace) click queued behind the first is handled
+    # after it, with the form still valid — the reset re-suggests a valid
+    # name, and a job only registers its product when its worker finishes,
+    # so neither validate() nor will_replace() sees the first launch. A ref,
+    # not state: the second handler runs before any re-render could carry a
+    # new closure, so it has to read what the first handler wrote.
+    launched = solara.use_ref(False)
+
+    def _rearm():
+        if open_.value:
+            launched.current = False
+
+    solara.use_effect(_rearm, [open_.value])
 
     def close():
         set_error(None)
@@ -124,6 +141,9 @@ def CreationDialog(
             on_close()
 
     def do_launch():
+        if launched.current:
+            return
+        launched.current = True
         launch()
         close()
 
@@ -165,12 +185,16 @@ def CreationDialog(
                 solara.Style(_ADVANCED_PANEL_CSS)
                 solara.Column(style="gap:4px;", children=children)
                 if error:
-                    rv.Alert(type_="error", dense=True, children=[error])
+                    # ``type=``, not ``type_=``: reacton's Alert has no ``type_``
+                    # parameter, so it is swallowed and the alert renders grey
+                    # and iconless — under the warning-coloured advisory a few
+                    # pixels above it, with the severity hierarchy inverted.
+                    rv.Alert(type="error", dense=True, children=[error])
             with rv.CardActions(style_="justify-content: flex-end; gap: 8px;"):
                 solara.Button(t("common.cancel"), on_click=close, text=True, small=True)
                 solara.Button(
                     create_label,
-                    icon_name="mdi-plus",
+                    icon_name=create_icon,
                     color="primary",
                     small=True,
                     on_click=on_create,

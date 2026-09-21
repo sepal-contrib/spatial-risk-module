@@ -124,11 +124,18 @@ MODEL_HAS_FORMULA = {k: MODEL_REGISTRY[k].get("has_formula", False) for k in MOD
 
 
 @solara.component
-def ModelFormDialog(project, open_, on_submit: Callable[[dict], None]):
+def ModelFormDialog(
+    project, open_, on_submit: Callable[[dict], None], running_keys=frozenset()
+):
     """Model form in the shared CreationDialog frame.
 
     on_submit(entry) receives {"model_key","name","params","dataset_key",
     "sample_key"}; the tile owns job creation and training.
+
+    running_keys: storage keys of training jobs still in flight. A model
+    registers only when its worker finishes, so ``project.models`` lags a
+    launch — without this, the same name resubmitted while the first run
+    is going would skip the overwrite confirm and train a second copy.
     """
     p = project.value
 
@@ -149,7 +156,7 @@ def ModelFormDialog(project, open_, on_submit: Callable[[dict], None]):
 
     models = p.models if p and p.models else {}
     name_value, on_name_input, reset_name = use_artifact_name(
-        suggest_version(selected_key, models)
+        suggest_version(selected_key, set(models) | set(running_keys))
     )
     clean = sanitize_key(name_value)
     storage_key = f"{selected_key}_{clean}" if clean else selected_key
@@ -227,6 +234,8 @@ def ModelFormDialog(project, open_, on_submit: Callable[[dict], None]):
             return t("tiles.train.error_no_project")
         if not clean:
             return t("tiles.train.error_name_required")
+        if storage_key in running_keys:
+            return t("tiles.train.error_name_running", name=clean)
         if not selected_dataset or selected_dataset not in p.datasets:
             return t("tiles.train.error_invalid_dataset")
         if needs_sample and (not selected_sample or selected_sample not in p.samples):

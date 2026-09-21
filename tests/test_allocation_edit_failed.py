@@ -432,6 +432,10 @@ def test_submitting_an_edit_removes_the_old_failed_job_row(monkeypatch, tmp_path
     # validate_form() honestly rather than stubbing it out.
     borders_file = tmp_path / "borders.gpkg"
     borders_file.write_text("")
+    # The icar run has no ready-made rate table, so the form also requires
+    # the forest-at-period-start layer the table would be computed from.
+    forest_file = tmp_path / "forest.tif"
+    forest_file.write_text("")
 
     project = Project(project_name="p")
     project.predictions = {
@@ -443,6 +447,7 @@ def test_submitting_an_edit_removes_the_old_failed_job_row(monkeypatch, tmp_path
     entry = _entry(
         name="reserve_north",
         borders=BordersSelection(method="FILE", file_path=str(borders_file)),
+        forest_file=str(forest_file),
     )
     job = _failed_job(name="reserve_north")
     job["entry"] = entry

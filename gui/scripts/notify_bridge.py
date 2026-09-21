@@ -76,7 +76,9 @@ def install_task_log_handler(level: int = logging.INFO) -> TaskStepLogHandler:
         return handler
 
 
-def layer_progress_reporter(task, format_title=None, format_detail=None):
+def layer_progress_reporter(
+    task, format_title=None, format_detail=None, format_wait=None
+):
     """Adapt ``materialize_raw_layers``'s ``on_progress`` events to a tracker.
 
     Returns an ``on_progress(layer_key, layer_idx, n_layers, done, total)``
@@ -91,6 +93,10 @@ def layer_progress_reporter(task, format_title=None, format_detail=None):
       fraction, throttled to whole-percent changes so a many-tile layer doesn't
       flood the reactive bus. The detail string comes from
       ``format_detail(key, done, total)`` (default: ``"{key} — tile {d}/{t}"``).
+    - queued (``on_progress.on_wait(key, idx, n)``, wired to
+      ``materialize_raw_layers``'s ``on_wait``): indeterminate ring with
+      ``format_wait(key)`` as the detail, until the first tile tick replaces
+      it. A no-op when no ``format_wait`` is given.
 
     ``format_*`` are injected so callers can localize without this module
     importing the GUI's translator. Progress is never derived from milestone
@@ -135,6 +141,11 @@ def layer_progress_reporter(task, format_title=None, format_detail=None):
         )
         _set_progress(done / total, detail=detail)
 
+    def on_wait(layer_key, layer_idx, n_layers):
+        if format_wait is not None:
+            _set_progress(None, detail=format_wait(layer_key))
+
+    on_progress.on_wait = on_wait
     return on_progress
 
 

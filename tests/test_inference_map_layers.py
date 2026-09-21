@@ -4,7 +4,19 @@ Predictions are drawn with the QGIS-faithful palette (pinned vmin/vmax), and
 overviews are built only when the opt-in flag is set.
 """
 
+import pytest
+
 import gui.scripts.prediction_map as pm
+
+
+@pytest.fixture(autouse=True)
+def _drain_preds_inflight_and_on_map():
+    """Leave no claim or on-map key behind in inference_tile's module state."""
+    yield
+    from gui.tile import inference_tile
+
+    inference_tile.preds_inflight.release(*inference_tile.preds_inflight.value)
+    inference_tile.preds_on_map.set(set())
 
 
 class FakeClient:
@@ -131,42 +143,37 @@ def test_far_palette_pins_range_regardless_of_model_key(monkeypatch, tmp_path):
     assert captured["vmin"] == 1 and captured["vmax"] == 65535
 
 
-def test_overviews_built_only_when_flag_set(monkeypatch, tmp_path):
-    """Overviews are built only when build_overviews=True is passed."""
+def test_overviews_are_always_built(monkeypatch, tmp_path):
+    """The pyramid is not optional.
+
+    A tiled prediction without one makes every zoomed-out tile decode the whole
+    raster, so there is no useful way to display one un-optimised.
+    """
     _patch_localtileserver(monkeypatch)
     calls = []
     monkeypatch.setattr(
         "spatialrisk.overviews.ensure_overviews",
-        lambda p, *a, **k: calls.append(p) or True,
+        lambda p, **k: calls.append((p, k)) or True,
     )
     tif = tmp_path / "p.tif"
     tif.write_bytes(b"")
 
     pm.add_prediction_on_map(
-        FakeMap(),
-        str(tif),
-        model_key="mw_5",
-        layer_name="n",
-        key="k",
-        build_overviews=False,
+        FakeMap(), str(tif), model_key="mw_5", layer_name="n", key="k"
     )
-    assert calls == []  # flag off -> no build
 
-    pm.add_prediction_on_map(
-        FakeMap(),
-        str(tif),
-        model_key="mw_5",
-        layer_name="n",
-        key="k",
-        build_overviews=True,
-    )
-    assert calls == [str(tif)]  # flag on -> built once
+    assert [c[0] for c in calls] == [str(tif)]
+    # ...but small rasters stay untouched: they decimate fast enough already.
+    import spatialrisk.overviews as ov
+
+    assert calls[0][1]["min_pixels"] == ov.OVERVIEW_MIN_PIXELS
 
 
 def test_inference_tile_uses_palette_helper_and_overview_option():
     """Predictions route through the QGIS-faithful helper, not bare add_raster.
 
-    Overviews are an opt-in checkbox, and the add runs off the Solara loop.
+    The helper always builds the overview pyramid, and the add runs off the
+    Solara loop.
     """
     import inspect
 
@@ -175,12 +182,13 @@ def test_inference_tile_uses_palette_helper_and_overview_option():
     src = inspect.getsource(inference_tile.InferenceTile)
     assert "add_prediction_on_map" in src  # value-pinned palette path
     assert "map_.add_raster(" not in src  # no more bare grayscale add
-    assert "gen_overviews" in src  # opt-in overviews reactive
-    assert "tiles.inference.generate_overviews_label" in src  # localized checkbox label
-    assert "build_overviews=" in src  # flag forwarded to helper
-    assert "to_thread" in src  # add offloaded to a thread
-    assert "use_task" in src  # threaded via solara.lab.use_task
-    assert "pending_toggle" in src  # toggle routed through the reactive
+    # No overview opt-out: a tiled prediction with no pyramid makes every
+    # zoomed-out tile decode the whole raster, so a country-scale map never draws.
+    assert "gen_overviews" not in src
+    assert "build_overviews" not in src
+    assert "spawn_in_context" in src  # one worker per toggle, never a shared task
+    assert "use_task" not in src  # a re-invoked use_task drops the continuation
+    assert "preds_inflight" in src  # re-click on a loading row is a no-op
     # Adding a prediction must NOT recenter/rezoom the map — keep the user's view.
     assert "fit_bounds=False" in src
     assert "fit_bounds=True" not in src
@@ -191,9 +199,9 @@ def test_inference_tile_uses_palette_helper_and_overview_option():
 def test_inference_tile_supports_local_prediction_import():
     """Step 7 lets the user import a local raster as a prediction.
 
-    The New prediction dialog has an import mode (file picker + palette
+    The New prediction dialog has an import mode (file picker + value-scale
     choice), and the import script is wired to the registry + reactive. The
-    picker/palette form lives in PredictionFormDialog (unified creation
+    picker/scale form lives in PredictionFormDialog (unified creation
     dialog).
     """
     import inspect
@@ -209,7 +217,7 @@ def test_inference_tile_supports_local_prediction_import():
 
     dialog_src = inspect.getsource(prediction_form_dialog)
     assert "FileInputComponent" in dialog_src  # local raster file picker
-    assert "_import_palette_items" in dialog_src  # palette choice
+    assert "_value_scale_items" in dialog_src  # value-scale choice
 
 
 def _fake_legend_port():
@@ -518,3 +526,73 @@ def test_add_exception_still_reaches_the_error_path(monkeypatch, caplog):
     finally:
         rc.close()
         inference_tile.preds_on_map.set(set())
+
+
+def test_toggling_a_second_row_keeps_the_first_rows_bookkeeping(monkeypatch):
+    """Row B toggled while row A loads: A still lands in preds_on_map + legend."""
+    import threading
+    import time
+
+    from gui.tile import inference_tile
+
+    class FakeMap:
+        """Minimal map stand-in; only remove_layer is exercised here."""
+
+        def remove_layer(self, key, none_ok=False):
+            """No-op remove; this scenario never removes a layer."""
+
+    started_a = threading.Event()
+    gate_a = threading.Event()
+
+    def fake_add(map_, path, **kwargs):
+        """Block row A's add until the test releases the gate."""
+        if kwargs.get("key") == inference_tile._pred_layer_key("pred_a"):
+            started_a.set()
+            gate_a.wait(5.0)
+        return "FAKE_LAYER"
+
+    monkeypatch.setattr("gui.scripts.prediction_map.add_prediction_on_map", fake_add)
+
+    import types
+
+    project = _stale_guard_project("pred_a")
+    project.predictions["pred_b"] = types.SimpleNamespace(
+        path="/tmp/pred_b.tif", display_palette=None
+    )
+    port, registered, _unregistered, _bump = _fake_legend_port()
+    on_toggle_map, rc = _render_capturing_on_toggle_map(
+        monkeypatch, project, FakeMap(), legend_port=port
+    )
+    try:
+        on_toggle_map(
+            {"key": "rowA", "storage_keys": ["pred_a"], "model_key": "m", "name": "A"}
+        )
+        assert started_a.wait(5.0)
+        on_toggle_map(
+            {"key": "rowB", "storage_keys": ["pred_b"], "model_key": "m", "name": "B"}
+        )
+        deadline = time.time() + 5.0
+        while (
+            time.time() < deadline and "rowB" not in inference_tile.preds_on_map.value
+        ):
+            time.sleep(0.01)
+        gate_a.set()
+        deadline = time.time() + 5.0
+        # The worker marks the row on-map in its ``finally`` and registers the
+        # legend only after that, so wait for both signals, not just the first.
+        while time.time() < deadline and (
+            "rowA" not in inference_tile.preds_on_map.value or len(registered) < 2
+        ):
+            time.sleep(0.01)
+        assert "rowA" in inference_tile.preds_on_map.value
+        assert "rowB" in inference_tile.preds_on_map.value
+        assert len(registered) == 2
+        deadline = time.time() + 5.0
+        while time.time() < deadline and inference_tile.preds_inflight.value:
+            time.sleep(0.01)
+        assert not inference_tile.preds_inflight.value
+    finally:
+        gate_a.set()
+        rc.close()
+        inference_tile.preds_on_map.set(set())
+        inference_tile.preds_inflight.release("rowA", "rowB")

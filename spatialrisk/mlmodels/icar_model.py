@@ -494,6 +494,9 @@ class ICARModel(BaseRiskModel):
         import rasterio
         from patsy.highlevel import build_design_matrices
 
+        from spatialrisk.parallel import PREDICT_BAND_ROWS, single_thread_math
+        from spatialrisk.raster_profile import rasterio_profile
+
         if self._ml_model is None:
             self.load_model()
 
@@ -529,7 +532,10 @@ class ICARModel(BaseRiskModel):
             profile = ref.profile.copy()
             target_transform = ref.transform
 
+        # Tiled + ZSTD (deflate fallback) rather than the target's own
+        # layout: see spatialrisk.raster_profile for the measurements.
         profile.update(dtype="uint16", count=1, nodata=0)
+        profile.update(rasterio_profile("uint16"))
 
         mod = self._ml_model
         betas = np.array(mod["betas"])
@@ -540,98 +546,103 @@ class ICARModel(BaseRiskModel):
             else None
         )
 
-        with rasterio.open(output_file, "w", **profile) as dst:
-            # Absolute for the same reason as in fit(): forestatrisk reopens the
-            # path itself, so it must not be read relative to the process CWD.
-            blockinfo = far.misc.makeblock(
-                str(Path(active_dataset.target.path).resolve())
-            )
-            nblock, nblock_x = blockinfo[0], blockinfo[1]
-            x_off, y_off, nx, ny = (
-                blockinfo[3],
-                blockinfo[4],
-                blockinfo[5],
-                blockinfo[6],
-            )
-
-            for b in range(nblock):
-                px = b % nblock_x
-                py = b // nblock_x
-                col_start, row_start = x_off[px], y_off[py]
-                n_cols, n_rows = nx[px], ny[py]
-                window = rasterio.windows.Window(col_start, row_start, n_cols, n_rows)
-
-                # Geographic bounds of this block — used to read co-registered
-                # rasters that may have a different pixel resolution (mask, rho).
-                block_bounds = rasterio.windows.bounds(window, target_transform)
-
-                # Apply mask before prediction
-                mask_invalid = np.zeros(n_rows * n_cols, dtype=bool)
-                if mask is not None:
-                    with rasterio.open(mask) as mask_src:
-                        mask_win = rasterio.windows.from_bounds(
-                            *block_bounds, mask_src.transform
-                        )
-                        mask_block = mask_src.read(
-                            1,
-                            window=mask_win,
-                            out_shape=(n_rows, n_cols),
-                            resampling=rasterio.enums.Resampling.nearest,
-                        )
-                        mask_nodata = mask_src.nodata
-                    mask_invalid = np.isin(mask_block.ravel(), _mask_values)
-                    if mask_nodata is not None:
-                        mask_invalid |= mask_block.ravel() == mask_nodata
-
-                # Read feature data for this block, replacing nodata with NaN
-                block_dict = {}
-                for name, path in feature_paths.items():
-                    with rasterio.open(path) as src:
-                        arr = src.read(1, window=window).astype(float)
-                        if src.nodata is not None:
-                            arr[arr == src.nodata] = np.nan
-                    block_dict[name] = arr.ravel()
-
-                # Read rho block — rho raster may have finer resolution than target
-                with rasterio.open(self.rho_path) as rho_src:
-                    rho_win = rasterio.windows.from_bounds(
-                        *block_bounds, rho_src.transform
-                    )
-                    rho_block = (
-                        rho_src.read(
-                            1,
-                            window=rho_win,
-                            out_shape=(n_rows, n_cols),
-                            resampling=rasterio.enums.Resampling.bilinear,
-                        )
-                        .astype(float)
-                        .ravel()
-                    )
-
-                block_df_full = pd.DataFrame(block_dict)
-                valid_mask = (
-                    ~block_df_full.isnull().any(axis=1).to_numpy() & ~mask_invalid
+        # Tile-aligned bands, BLAS/OpenMP on one thread: see spatialrisk.parallel.
+        with single_thread_math():
+            with rasterio.open(output_file, "w", **profile) as dst:
+                # Absolute for the same reason as in fit(): forestatrisk reopens the
+                # path itself, so it must not be read relative to the process CWD.
+                blockinfo = far.misc.makeblock(
+                    str(Path(active_dataset.target.path).resolve()),
+                    blk_rows=PREDICT_BAND_ROWS,
                 )
-                block_df = block_df_full[valid_mask]
-
-                out_arr = np.zeros(n_rows * n_cols, dtype=np.uint16)
-
-                if not block_df.empty:
-                    (x_block,) = build_design_matrices(
-                        [self._x_design_info], block_df, NA_action="drop"
-                    )
-                    x_arr = np.asarray(x_block)
-                    # iCAR prediction: logit(p) = X @ betas + rho
-                    rho_valid = rho_block[valid_mask]
-                    linear_pred = x_arr @ betas[: x_arr.shape[1]] + rho_valid
-                    proba = 1.0 / (1.0 + np.exp(-linear_pred))
-                    out_arr[valid_mask] = far.misc.rescale(proba).astype(np.uint16)
-
-                dst.write(
-                    out_arr.reshape(n_rows, n_cols),
-                    1,
-                    window=window,
+                nblock, nblock_x = blockinfo[0], blockinfo[1]
+                x_off, y_off, nx, ny = (
+                    blockinfo[3],
+                    blockinfo[4],
+                    blockinfo[5],
+                    blockinfo[6],
                 )
+
+                for b in range(nblock):
+                    px = b % nblock_x
+                    py = b // nblock_x
+                    col_start, row_start = x_off[px], y_off[py]
+                    n_cols, n_rows = nx[px], ny[py]
+                    window = rasterio.windows.Window(
+                        col_start, row_start, n_cols, n_rows
+                    )
+
+                    # Geographic bounds of this block — used to read co-registered
+                    # rasters that may have a different pixel resolution (mask, rho).
+                    block_bounds = rasterio.windows.bounds(window, target_transform)
+
+                    # Apply mask before prediction
+                    mask_invalid = np.zeros(n_rows * n_cols, dtype=bool)
+                    if mask is not None:
+                        with rasterio.open(mask) as mask_src:
+                            mask_win = rasterio.windows.from_bounds(
+                                *block_bounds, mask_src.transform
+                            )
+                            mask_block = mask_src.read(
+                                1,
+                                window=mask_win,
+                                out_shape=(n_rows, n_cols),
+                                resampling=rasterio.enums.Resampling.nearest,
+                            )
+                            mask_nodata = mask_src.nodata
+                        mask_invalid = np.isin(mask_block.ravel(), _mask_values)
+                        if mask_nodata is not None:
+                            mask_invalid |= mask_block.ravel() == mask_nodata
+
+                    # Read feature data for this block, replacing nodata with NaN
+                    block_dict = {}
+                    for name, path in feature_paths.items():
+                        with rasterio.open(path) as src:
+                            arr = src.read(1, window=window).astype(float)
+                            if src.nodata is not None:
+                                arr[arr == src.nodata] = np.nan
+                        block_dict[name] = arr.ravel()
+
+                    # Read rho block — rho raster may have finer resolution than target
+                    with rasterio.open(self.rho_path) as rho_src:
+                        rho_win = rasterio.windows.from_bounds(
+                            *block_bounds, rho_src.transform
+                        )
+                        rho_block = (
+                            rho_src.read(
+                                1,
+                                window=rho_win,
+                                out_shape=(n_rows, n_cols),
+                                resampling=rasterio.enums.Resampling.bilinear,
+                            )
+                            .astype(float)
+                            .ravel()
+                        )
+
+                    block_df_full = pd.DataFrame(block_dict)
+                    valid_mask = (
+                        ~block_df_full.isnull().any(axis=1).to_numpy() & ~mask_invalid
+                    )
+                    block_df = block_df_full[valid_mask]
+
+                    out_arr = np.zeros(n_rows * n_cols, dtype=np.uint16)
+
+                    if not block_df.empty:
+                        (x_block,) = build_design_matrices(
+                            [self._x_design_info], block_df, NA_action="drop"
+                        )
+                        x_arr = np.asarray(x_block)
+                        # iCAR prediction: logit(p) = X @ betas + rho
+                        rho_valid = rho_block[valid_mask]
+                        linear_pred = x_arr @ betas[: x_arr.shape[1]] + rho_valid
+                        proba = 1.0 / (1.0 + np.exp(-linear_pred))
+                        out_arr[valid_mask] = far.misc.rescale(proba).astype(np.uint16)
+
+                    dst.write(
+                        out_arr.reshape(n_rows, n_cols),
+                        1,
+                        window=window,
+                    )
 
         print(f"✓ iCAR raster written: {output_file}")
         self._register_prediction(output_file, dataset=active_dataset)

@@ -1,5 +1,6 @@
 """GEE-backed Variable that downloads assets to local raster/vector variables."""
 
+import logging
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
@@ -16,6 +17,8 @@ from spatialrisk.variables.models import (
     RasterType,
 )
 from spatialrisk.variables.variable import Variable
+
+logger = logging.getLogger("spatial_risk")
 
 
 class GEEVar(Variable):
@@ -89,6 +92,23 @@ class GEEVar(Variable):
                 raise ValueError("gee_images must be provided for download.")
         return self.gee_images
 
+    @property
+    def expected_local_path(self) -> Path:
+        """Where downloading this variable will write, before it runs.
+
+        ``_download`` writes exactly here, so the GUI can tell — without
+        contacting Earth Engine — whether starting a download would land on a
+        file that already exists and needs the user's decision first.
+
+        Reads ``project.folders``, whose getter creates the project's folder
+        tree when it is missing. That is the one side effect of asking this
+        question, and it is the same tree the download itself would create.
+        """
+        extensions = {"vector": ".shp", "raster": ".tif"}
+        filename = f"{self.name}_{self.year}" if self.year is not None else self.name
+        folder = self.project.folders.data_raw_folder
+        return (folder / filename).with_suffix(extensions[self.data_type])
+
     def _download(
         self,
         overwrite: bool = False,
@@ -111,24 +131,12 @@ class GEEVar(Variable):
         List[Path]
             List of paths to the downloaded files.
         """
-        output_path: Path = None
-        extensions = {"vector": ".shp", "raster": ".tif"}
-
         images = self.resolve_images()
 
-        # Get the output folder
-        output_folder = self.project.folders.data_raw_folder
-        output_folder.mkdir(parents=True, exist_ok=True)
+        output_path = self.expected_local_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        local_paths = []
-
-        # Process images
-
-        filename = f"{self.name}_{self.year}" if self.year is not None else self.name
-        output_path = output_folder / filename
-
-        output_path = output_path.with_suffix(extensions[self.data_type])
-        local_paths.append(output_path)
+        local_paths = [output_path]
 
         if overwrite or not output_path.exists():
 
@@ -162,7 +170,10 @@ class GEEVar(Variable):
                     nodata_value=nodata,
                 )
         elif output_path.exists():
-            print(f"{output_path} already exists. Skipping download.")
+            # Reusing what is on disk. The GUI asks before it gets here (the
+            # Variables tile offers "Keep existing" vs "Re-download"), so this
+            # is a log line, not a user-facing message.
+            logger.info("%s already exists — skipping download.", output_path)
 
         # Verify all files were downloaded
         for local_path in local_paths:
