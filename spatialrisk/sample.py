@@ -60,7 +60,23 @@ class Sample(BaseModel):
         return var.path
 
     def generate(self) -> "Sample":
-        """Draw the points, write them to ``points_path``, and build the PMTiles."""
+        """Draw the points, write them to ``points_path``, and build the PMTiles.
+
+        :meth:`draw_points` then :meth:`build_tiles`; callers that want to
+        report the two phases separately (the sampling tile does, since tiling
+        can take longer than sampling) call them one after the other.
+        """
+        self.draw_points()
+        self.build_tiles()
+        return self
+
+    def draw_points(self) -> "Sample":
+        """Draw the sample and write it to ``points_path``; no tiles yet.
+
+        After this the sample is complete as data (``n_total``,
+        ``class_counts``, ``created_at`` and the GPKG on disk); only the map
+        archive is missing, so ``pmtiles_path`` stays as it was.
+        """
         from spatialrisk.sampling import generate_points
 
         raster_path = self._resolve_path(self.raster_var_name)
@@ -87,7 +103,14 @@ class Sample(BaseModel):
             str(int(k)): int(v) for k, v in gdf["strata"].value_counts().items()
         }
         self.created_at = datetime.now().isoformat(timespec="seconds")
+        return self
 
+    def build_tiles(self) -> "Sample":
+        """Build the PMTiles archive for the points on disk (non-fatal on error).
+
+        A failed or unavailable conversion leaves ``pmtiles_path`` None and
+        the sample renders through the GeoJSON fallback.
+        """
         if self.points_path is not None:
             try:
                 # force: a re-run over the same paths must rebuild the archive,
@@ -95,11 +118,10 @@ class Sample(BaseModel):
                 self.ensure_pmtiles(force=True)
             except Exception:
                 logger.exception(
-                    "PMTiles conversion failed for sample '%s'; GeoJSON " "fallback",
+                    "PMTiles conversion failed for sample '%s'; GeoJSON fallback",
                     self.name,
                 )
                 self.pmtiles_path = None
-
         return self
 
     def ensure_pmtiles(self, *, force: bool = False) -> bool:

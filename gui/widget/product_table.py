@@ -65,6 +65,7 @@ ACTIONS_COL_WIDTH = "112px"
 # "cancelled" stays a literal grey: it is deliberately neutral, not a theme tone.
 STATUS_COLORS = {
     "running": "info",
+    "tiling": "info",
     "ready": "success",
     "completed": "success",
     "failed": "error",
@@ -77,6 +78,7 @@ STATUS_COLORS = {
 }
 STATUS_ICONS = {
     "running": "mdi-loading mdi-spin",
+    "tiling": "mdi-loading mdi-spin",
     "ready": "mdi-check-circle",
     "completed": "mdi-check-circle",
     "failed": "mdi-alert-circle",

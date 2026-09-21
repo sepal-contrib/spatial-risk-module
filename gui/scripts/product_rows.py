@@ -195,6 +195,15 @@ def format_sample_points(
     return f"{n_total} ({', '.join(parts)})"
 
 
+ACTIVE_SAMPLING_STATUSES = frozenset({"running", "tiling"})
+"""Sampling job statuses that are still in flight.
+
+``running`` while the points are drawn, ``tiling`` once they are on disk and
+the map archive is being built (which on SEPAL used to take far longer than
+the draw itself). Both keep the name reserved and hide the dismiss action.
+"""
+
+
 def sample_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
     """Job rows (newest first) then one row per registered sample set."""
     samples = (getattr(project, "samples", None) or {}) if project is not None else {}

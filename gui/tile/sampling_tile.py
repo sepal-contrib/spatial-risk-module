@@ -16,6 +16,7 @@ from pysepal.solara.notifications import use_notifications
 from gui.i18n import t
 from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import tracked_job
+from gui.scripts.product_rows import ACTIVE_SAMPLING_STATUSES
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
 from gui.widget.confirm_dialog import ConfirmDialog
@@ -152,7 +153,10 @@ def _run_sampling(
 
         p = project_reactive.value
         if p is None:
-            return  # project was closed/deleted while the job was queued
+            # Project closed/deleted while the job was queued: the row must not
+            # stay on "running" forever.
+            _update_job(job_id, status="cancelled", error=None)
+            return
         with tracked_job(
             notifier, task_title or f"Generating sample '{name}'"
         ), writing(p.project_name):
@@ -176,7 +180,22 @@ def _run_sampling(
             # bound process RSS, since GDAL's native cache is separate from
             # them (see `spatialrisk.gdal_env.sampling_gdal_env`).
             with _sampling_slot, sampling_gdal_env():
-                sample.generate()
+                sample.draw_points()
+            # The points are on disk: show their counts while the map archive
+            # is built (outside the slot -- tiling is I/O, the next job may
+            # start reading its raster meanwhile).
+            _update_job(
+                job_id,
+                status="tiling",
+                n_total=sample.n_total,
+                class_counts=sample.class_counts,
+            )
+            logger.info(
+                "Sample points ready: %s (%d points); building map tiles",
+                name,
+                sample.n_total,
+            )
+            sample.build_tiles()
             p.add_sample(sample, auto_save=True)
             publish_if_current(project_reactive, p)
             _update_job(
@@ -223,7 +242,9 @@ def SamplingTile(project, map_=None):
     # registers asynchronously inside the worker, so p.samples lags a click).
     existing_names = frozenset(p.samples)
     running_names = frozenset(
-        j["name"] for j in sampling_jobs.value if j["status"] == "running"
+        j["name"]
+        for j in sampling_jobs.value
+        if j["status"] in ACTIVE_SAMPLING_STATUSES
     )
 
     def _do_remove(key):

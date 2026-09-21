@@ -6,7 +6,11 @@ from typing import Callable, Optional
 import solara
 
 from gui.i18n import t
-from gui.scripts.product_rows import format_sample_points, sample_rows
+from gui.scripts.product_rows import (
+    ACTIVE_SAMPLING_STATUSES,
+    format_sample_points,
+    sample_rows,
+)
 from gui.widget.product_table import ProductTable
 
 logger = logging.getLogger("spatial_risk")
@@ -71,12 +75,18 @@ def SampleSetList(
                 )
         else:
             alloc = ""
-            points = (
-                "…"
-                if r["status"] == "running"
-                else (str(r["n_total"]) if r.get("n_total") is not None else "—")
-            )
-            if r["status"] != "running" and on_dismiss is not None:
+            if r.get("n_total") is not None:
+                # Known as soon as the points are drawn -- shown while the map
+                # tiles are still being built.
+                points = format_sample_points(
+                    r["n_total"],
+                    r.get("class_counts") or {},
+                    r["strategy"],
+                    more_fmt=t("widgets.sample_set_list.more_strata"),
+                )
+            else:
+                points = "…" if r["status"] in ACTIVE_SAMPLING_STATUSES else "—"
+            if r["status"] not in ACTIVE_SAMPLING_STATUSES and on_dismiss is not None:
                 actions.append(
                     {
                         "kind": "dismiss",

@@ -153,6 +153,7 @@
     },
     "product_table": {
       "status_running": "en cours",
+      "status_tiling": "création des tuiles",
       "status_ready": "prêt",
       "status_completed": "terminé",
       "status_failed": "échec",

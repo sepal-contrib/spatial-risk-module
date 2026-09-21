@@ -153,6 +153,7 @@
     },
     "product_table": {
       "status_running": "en ejecución",
+      "status_tiling": "generando teselas",
       "status_ready": "listo",
       "status_completed": "completado",
       "status_failed": "falló",

@@ -153,6 +153,7 @@
     },
     "product_table": {
       "status_running": "running",
+      "status_tiling": "building tiles",
       "status_ready": "ready",
       "status_completed": "completed",
       "status_failed": "failed",

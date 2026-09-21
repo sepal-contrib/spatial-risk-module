@@ -149,6 +149,41 @@ def scratch_dir() -> Path:
     )
 
 
+LOCAL_SCRATCH_ENV = "SPATIAL_RISK_LOCAL_SCRATCH"
+"""Override for :func:`local_scratch_dir` (a directory on local disk)."""
+
+#: Roots tried for local-disk scratch, best first. On SEPAL ``/tmp`` is an NFS
+#: mount of the user's home (as is ``~/module_results``), and the container's
+#: overlay root is the only local disk: ``/var/tmp`` lives there.
+_LOCAL_SCRATCH_ROOTS = (Path("/var/tmp"),)
+
+
+def local_scratch_dir() -> Path:
+    """A scratch directory on *local* disk for small, seek-heavy writes.
+
+    :func:`scratch_dir` is the right place for GDAL's large sequential temp
+    files (on SEPAL it lands on the NFS home, which has the space). It is the
+    wrong place for a writer that seeks and rewrites constantly: tippecanoe
+    building a 10 000-point PMTiles archive took 57-70 s with its output on
+    NFS and 1.0 s on local disk (SEPAL c8, 2026-09-21). Callers build such
+    files here and move the finished result into place.
+
+    ``SPATIAL_RISK_LOCAL_SCRATCH`` wins when writable, then a per-user
+    directory under each of :data:`_LOCAL_SCRATCH_ROOTS`, then
+    :func:`scratch_dir` so nothing breaks on a box without a usable local
+    root. Keep only small files here: the local disk is the container's
+    overlay and is far smaller than the NFS home.
+    """
+    env = os.environ.get(LOCAL_SCRATCH_ENV)
+    if env and _is_usable(Path(env)):
+        return Path(env)
+    for root in _LOCAL_SCRATCH_ROOTS:
+        candidate = Path(root) / f"spatial_risk_{os.getuid()}"
+        if _is_usable(candidate):
+            return candidate
+    return scratch_dir()
+
+
 def configure_gdal_tmpdir() -> Optional[Path]:
     """Point GDAL's temp-file allocator at :func:`scratch_dir`. Idempotent.
 

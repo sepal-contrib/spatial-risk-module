@@ -50,6 +50,16 @@ async def to_thread_in_context(fn, *args, **kwargs):
     return await asyncio.to_thread(_with_context)
 
 
+_update_job_lock = threading.Lock()
+"""Serialises the read-modify-write in :func:`update_job`.
+
+Two workers finishing within microseconds of each other each read the same
+list, build their own copy and publish it; without the lock the second
+publish silently discards the first's status change and that row stays on
+"running" for good.
+"""
+
+
 def update_job(jobs_reactive, job_id, *, skip_if_cancelled=True, **changes):
     """Immutably update one job dict by id and publish so the UI re-renders.
 
@@ -73,13 +83,16 @@ def update_job(jobs_reactive, job_id, *, skip_if_cancelled=True, **changes):
     **changes
         Fields to overwrite on the matching job dict.
     """
-    new_jobs = []
-    for j in jobs_reactive.value:
-        if j["id"] == job_id and not (skip_if_cancelled and j["status"] == "cancelled"):
-            new_jobs.append({**j, **changes})
-        else:
-            new_jobs.append(j)
-    jobs_reactive.set(new_jobs)
+    with _update_job_lock:
+        new_jobs = []
+        for j in jobs_reactive.value:
+            if j["id"] == job_id and not (
+                skip_if_cancelled and j["status"] == "cancelled"
+            ):
+                new_jobs.append({**j, **changes})
+            else:
+                new_jobs.append(j)
+        jobs_reactive.set(new_jobs)
 
 
 def spawn_in_context(target, args=(), *, daemon=True):
