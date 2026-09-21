@@ -14,6 +14,27 @@ _STRATEGIES = {
 }
 
 
+def _gdal_budget(scan):
+    """GDAL decode threads and block cache sized for the scan's worker pool.
+
+    Nested inside the tile's process-wide :func:`sampling_gdal_env` (same
+    caveats: GDAL config is global, restored on exit). With several workers
+    each read decodes on one thread so the total stays at the core budget, and
+    the cache holds every in-flight raster and mask stripe so the readers do
+    not evict each other's tiles.
+    """
+    import contextlib
+
+    import rasterio
+
+    if scan.plan is None:
+        return contextlib.nullcontext()
+    return rasterio.Env(
+        GDAL_NUM_THREADS=int(scan.plan.gdal_threads),
+        GDAL_CACHEMAX=int(scan.plan.cachemax_bytes),
+    )
+
+
 def generate_points(
     raster_path,
     mask_path: Optional[Path] = None,
@@ -25,6 +46,7 @@ def generate_points(
     adapt: bool = False,
     spacing_m: Optional[float] = None,
     rows_per_stripe: Optional[int] = None,
+    workers: Optional[int] = None,
 ):
     """Draw sample locations and return a GeoDataFrame of point centres.
 
@@ -41,6 +63,12 @@ def generate_points(
     ``rows_per_stripe`` overrides the stripe height, for tests and tuning; by
     default the scan picks a whole number of tile rows (512 for the usual 256 px
     tiles) so a stripe boundary never makes GDAL decode a tile twice.
+
+    ``workers`` sizes the stripe-level thread pool; ``None`` (the default) lets
+    :func:`spatialrisk.gdal_env.plan_sampling` choose from the cores and free
+    memory of the machine, and also budgets GDAL's decode threads and block
+    cache for that many concurrent readers. The output does not depend on the
+    worker count.
     """
     import geopandas as gpd
     import numpy as np
@@ -67,7 +95,9 @@ def generate_points(
         )
 
     impl = _STRATEGIES[strategy_enum]()
-    with RasterScan(raster_path, mask_path, rows_per_stripe=rows_per_stripe) as scan:
+    with RasterScan(
+        raster_path, mask_path, rows_per_stripe=rows_per_stripe, workers=workers
+    ) as scan, _gdal_budget(scan):
         transform = scan.transform
         crs = scan.crs
         # pixel area in hectares from a projected transform (m^2 -> ha)
