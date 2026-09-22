@@ -32,14 +32,18 @@ import rasterio
 # Imported here, not where ``rescale`` is called: that call site is a stripe
 # running on a pool thread, and importing forestatrisk (it pulls matplotlib's
 # Agg backend in through a ``dlopen``) there holds CPython's import lock and
-# the GIL while it waits for glibc's loader lock -- which another worker holds
-# while pinning itself (see :func:`_warm_up_pool`). That inversion hung 17 of
-# 20 16-worker runs of the 2026-09-22 bench. At module level the whole import
-# happens on the calling thread instead, before any pool exists.
+# the GIL while it waits for glibc's loader lock -- which any other thread of
+# this process can be holding while it waits for the GIL, threadpoolctl's
+# ``dl_iterate_phdr`` walk being the one that re-enters Python from a ctypes
+# callback under that lock (this run builds its one controller on the calling
+# thread, but a concurrent run, or any library doing its own scan, still
+# does). That inversion hung 17 of 20 16-worker runs of the 2026-09-22 bench.
+# At module level the whole import happens on the calling thread instead,
+# before any pool exists.
 from forestatrisk.misc import rescale
 from rasterio.enums import Resampling
 from rasterio.windows import Window
-from threadpoolctl import threadpool_limits
+from threadpoolctl import ThreadpoolController
 
 from spatialrisk.gdal_env import (
     INFERENCE_LEDGER,
@@ -273,15 +277,17 @@ def _plan_and_reserve(
     )
 
     def plan_fn(reserved_bytes, reserved_workers):
-        plan = plan_inference(
+        # ``workers_override`` rather than rewriting ``plan.workers``: the
+        # count also sizes ``gdal_threads`` and ``cachemax_bytes``, and
+        # setting it afterwards left both at the policy's value (an explicit
+        # serial run read with GDAL_NUM_THREADS=1 and a two-worker cache).
+        return plan_inference(
             rows_per_stripe=rows_per_stripe,
             reserved_bytes=reserved_bytes,
             reserved_workers=reserved_workers,
+            workers_override=workers,
             **common,
         )
-        if workers is not None:
-            plan.workers = max(1, int(workers))
-        return plan
 
     return INFERENCE_LEDGER.plan_and_reserve(
         plan_fn, minimum_bytes=minimum, label=label, log=log
@@ -306,7 +312,7 @@ def _write_serial(dst, stripes, one, milestones, log):
         _log_progress(done, len(stripes), milestones, log)
 
 
-def _pin_worker_math():
+def _pin_worker_math(controller):
     """Pin one worker thread's math pools to a single thread.
 
     :func:`spatialrisk.parallel.single_thread_math` around the run covers the
@@ -316,45 +322,62 @@ def _pin_worker_math():
     prevent. Applied once per worker thread and never restored: the thread
     dies with the pool, and the caller's ``single_thread_math`` puts the
     process-wide settings back when the run ends.
+
+    ``controller`` is the run's single
+    :class:`~threadpoolctl.ThreadpoolController`, built on the calling thread
+    before the pool exists (:func:`_warm_up_pool` says why). Pinning through
+    it only calls ``set_num_threads`` on library handles that controller has
+    already resolved, so a worker never runs threadpoolctl's
+    ``dl_iterate_phdr`` scan; the bare ``threadpool_limits(limits=1)`` this
+    replaced did, because it builds a controller of its own on every call.
+    ``omp_set_num_threads`` is still per thread, so the OpenMP pin is still
+    this worker's.
     """
-    threadpool_limits(limits=1)
+    controller.limit(limits=1)
 
 
-def _warm_up_pool(pool, workers):
+def _warm_up_pool(pool, workers, controller):
     """Pin every pool thread and park it, before the first stripe is submitted.
 
-    The pin walks every shared object loaded in the process (threadpoolctl's
-    ``dl_iterate_phdr``), taking glibc's loader lock and re-entering Python
-    through a ctypes callback while holding it. A worker doing that while
-    another worker is inside a stripe deadlocks the run: anything the stripe
-    ``dlopen``s (a C extension being imported, a GDAL driver) wants that
-    loader lock with the GIL in hand, while the scanning worker wants the GIL
-    with the loader lock in hand. The executor ``initializer`` cannot keep the
-    two apart -- the pool starts one thread per submit, so the last worker
-    pins itself while the first is already predicting; that race hung 17 of 20
-    16-worker runs of the 2026-09-22 bench.
+    Finding the math libraries is the dangerous half of a pin: threadpoolctl's
+    ``dl_iterate_phdr`` walk takes glibc's loader lock and re-enters Python
+    through a ctypes callback while holding it. A thread doing that while
+    another is inside a stripe deadlocks the run: anything the stripe
+    ``dlopen``s (a C extension being imported, a GDAL driver plugin) wants
+    that loader lock with the GIL in hand, while the scanning thread wants the
+    GIL with the loader lock in hand. That walk therefore happens exactly once
+    per run, on the calling thread, where ``controller`` was built and no pool
+    exists yet; the workers below only set thread counts on its resolved
+    handles. It matters across runs too -- the ledger queues predictions by
+    memory, not exclusivity, so a second run's scan could otherwise overlap
+    the first run's stripes.
 
-    So the pins are submitted as work instead: one task per worker, each
-    pinning its own thread and then waiting on a barrier that only opens once
-    every worker has. Each task holds its thread, so the pool has to start a
-    new one for the next task, and when the last future returns all
-    ``max_workers`` threads exist, are pinned and are idle -- the pool never
-    creates another one, so no stripe can ever overlap a pin.
-    :data:`_WARM_UP_TIMEOUT` bounds both the barrier and the wait on it, so a
-    pool that cannot start raises (``BrokenBarrierError``/``TimeoutError``)
-    instead of hanging the run.
+    The pins are still submitted as work rather than given to the executor's
+    ``initializer``: the pool starts one thread per submit, so an initializer
+    would pin the last worker while the first is already predicting, and a
+    stripe would run on a thread whose OpenMP pool is still the machine's
+    (``workers`` x the cores, the oversubscription the pin prevents). It was
+    also the shape of the 2026-09-22 deadlock, which hung 17 of 20 16-worker
+    bench runs. So: one task per worker, each pinning its own thread and then
+    waiting on a barrier that only opens once every worker has. Each task
+    holds its thread, so the pool has to start a new one for the next task,
+    and when the last future returns all ``max_workers`` threads exist, are
+    pinned and are idle -- the pool never creates another one, so no stripe
+    can ever run on an unpinned thread. :data:`_WARM_UP_TIMEOUT` bounds both
+    the barrier and the wait on it, so a pool that cannot start raises
+    (``BrokenBarrierError``/``TimeoutError``) instead of hanging the run.
     """
     barrier = threading.Barrier(workers, timeout=_WARM_UP_TIMEOUT)
 
     def warm():
-        _pin_worker_math()
+        _pin_worker_math(controller)
         barrier.wait()
 
     for future in [pool.submit(warm) for _ in range(workers)]:
         future.result(timeout=_WARM_UP_TIMEOUT)
 
 
-def _write_pooled(dst, stripes, one, workers, milestones, log):
+def _write_pooled(dst, stripes, one, workers, milestones, log, controller):
     """Predict stripes on a pool and write them from this thread, in order.
 
     Stripes are submitted in order with at most ``2 x workers`` outstanding,
@@ -372,13 +395,15 @@ def _write_pooled(dst, stripes, one, workers, milestones, log):
     exception is re-raised.
 
     The pool is warmed up before the first stripe is submitted, which is what
-    pins the workers' math libraries (:func:`_warm_up_pool` says why it is not
-    the executor's ``initializer``).
+    pins the workers' math libraries through ``controller``, the run's one
+    :class:`~threadpoolctl.ThreadpoolController` (:func:`_warm_up_pool` says
+    why it is built by the caller and why this is not the executor's
+    ``initializer``).
     """
     total = len(stripes)
     look_ahead = 2 * workers
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="predict") as pool:
-        _warm_up_pool(pool, workers)
+        _warm_up_pool(pool, workers, controller)
         pending = []  # (window, future), in submission order
         next_i = 0
         done = 0
@@ -510,7 +535,19 @@ def predict_windowed(
             if plan.workers <= 1:
                 _write_serial(dst, stripes, one, milestones, log)
             else:
-                _write_pooled(dst, stripes, one, plan.workers, milestones, log)
+                # The run's one threadpoolctl library scan, here on the
+                # calling thread with no pool started yet: the workers pin
+                # themselves through this controller and never walk the
+                # loaded objects themselves (see :func:`_warm_up_pool`).
+                _write_pooled(
+                    dst,
+                    stripes,
+                    one,
+                    plan.workers,
+                    milestones,
+                    log,
+                    ThreadpoolController(),
+                )
         os.replace(part, output_file)
     except BaseException:
         try:

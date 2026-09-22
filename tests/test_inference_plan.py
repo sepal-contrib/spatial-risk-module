@@ -182,6 +182,43 @@ def test_cache_holds_every_in_flight_input_stripe(monkeypatch):
     assert plan.cachemax_bytes >= 64 << 20
 
 
+def test_an_explicit_worker_count_also_sizes_the_cache_and_decode_threads(monkeypatch):
+    """workers_override reaches gdal_threads and cachemax, not just ``workers``.
+
+    The engine used to rewrite ``plan.workers`` after the fact, which left
+    both fields at the policy's count: an explicitly serial run (RF's
+    default) read with GDAL_NUM_THREADS=1 and a cache sized for the pool it
+    was not running.
+    """
+    monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
+    kw = dict(cores=16, free_bytes=64 * GiB, gdal_cache_bytes=0)
+    raw_row = 4000 * (1 + 1 + 4 + 1)  # the features and the mask, bytes per row
+
+    policy = _plan(**kw)
+    assert policy.workers == 8 and policy.gdal_threads == 1
+
+    serial = _plan(**kw, workers_override=1)
+    assert serial.workers == 1
+    assert serial.gdal_threads == gdal_env.sampling_num_threads()
+    assert serial.cachemax_bytes == 2 * serial.rows_per_stripe * raw_row
+
+    pooled = _plan(**kw, workers_override=4)
+    assert pooled.workers == 4 and pooled.gdal_threads == 1
+    assert pooled.cachemax_bytes == 4 * 2 * pooled.rows_per_stripe * raw_row
+
+    # The policy's own readings are still reported, and an override of 0 or
+    # less is floored at one worker like every other worker count here.
+    assert serial.by_cores == policy.by_cores
+    assert _plan(**kw, workers_override=0).workers == 1
+
+
+def test_an_explicit_worker_count_wins_over_the_env_override(monkeypatch):
+    """A caller's workers_override beats SPATIAL_RISK_INFERENCE_WORKERS."""
+    monkeypatch.setenv(INFERENCE_WORKERS_ENV, "3")
+    assert _plan().workers == 3
+    assert _plan(workers_override=2).workers == 2
+
+
 def test_reservations_add_up_and_release():
     """Live reservations sum per resource and disappear on release."""
     led = ResourceLedger(budget_fn=lambda: 10 * GiB)

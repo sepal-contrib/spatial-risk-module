@@ -196,7 +196,11 @@ class RFModel(BaseRiskModel):
         # there 2 workers cost 32.9 s. An explicit ``workers`` is still
         # honoured and is the way to pool a forest deliberately; pinning it
         # here does mean SPATIAL_RISK_INFERENCE_WORKERS, which plan_inference
-        # reads, no longer reaches one.
+        # reads, no longer reaches one. Caveat on those c8 numbers: they were
+        # taken while an explicit worker count did not reach the plan's
+        # gdal_threads/cachemax, so the serial arm read with
+        # GDAL_NUM_THREADS=1 and a two-worker cache; serial RF is now, if
+        # anything, a little faster than recorded here.
         workers = 1 if workers is None else workers
         # With a stripe pool the outer workers own the cores: joblib's per-call
         # tree fan-out would multiply them (workers x n_jobs). Serial keeps the

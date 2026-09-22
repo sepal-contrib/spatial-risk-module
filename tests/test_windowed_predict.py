@@ -767,14 +767,11 @@ def test_every_pool_thread_is_pinned_before_the_first_stripe(
 ):
     """The pool is warmed up: every worker is pinned and idle before any stripe.
 
-    The pin walks every shared object loaded in the process
-    (``threadpoolctl`` -> ``dl_iterate_phdr``), taking glibc's loader lock and
-    re-entering Python under it, so a worker still starting up while another
-    is inside a stripe is exactly the 2026-09-22 deadlock: the stripe's
-    ``dlopen`` (an import, a GDAL driver) wants the loader lock with the GIL
-    in hand. Submitting the pins as barriered warm-up tasks and waiting for
-    them keeps the two apart, which the executor ``initializer`` -- started
-    lazily, one thread per submit -- could not.
+    A stripe running on a thread whose OpenMP pool is still the machine's is
+    the oversubscription the pin exists to prevent, and the executor
+    ``initializer`` -- started lazily, one thread per submit -- cannot rule it
+    out: it pins the last worker while the first is already predicting.
+    Submitting the pins as barriered warm-up tasks and waiting for them does.
     """
     from threadpoolctl import threadpool_info
 
@@ -789,8 +786,8 @@ def test_every_pool_thread_is_pinned_before_the_first_stripe(
     all_in = threading.Barrier(workers, timeout=60)
     real_pin, real_stripe = wp._pin_worker_math, wp._predict_stripe
 
-    def spy_pin():
-        real_pin()
+    def spy_pin(controller):
+        real_pin(controller)
         with lock:
             events.append(("pin", threading.current_thread().name))
 
@@ -827,5 +824,46 @@ def test_every_pool_thread_is_pinned_before_the_first_stripe(
     assert len(pinned) == workers and pinned == ran
     assert all(n.startswith("predict") for n in pinned)
     assert {n for sizes in math_threads.values() for n in sizes} == {1}
+    arr, _ = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["glm"][0])
+
+
+def test_no_pool_thread_builds_a_threadpool_controller(tmp_path, golden, monkeypatch):
+    """The run's one threadpoolctl library scan happens on the calling thread.
+
+    Building a ``ThreadpoolController`` is the ``dl_iterate_phdr`` walk over
+    every shared object in the process: glibc's loader lock taken while a
+    ctypes callback re-enters Python for the GIL. On a pool thread that
+    inverts against anything a stripe ``dlopen``s -- in this run or in a
+    concurrent one, since the ledger queues predictions by memory, not
+    exclusivity. The workers pin themselves through the controller the caller
+    built, which only sets thread counts on handles it already resolved.
+    """
+    import threadpoolctl
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    lock = threading.Lock()
+    built = []
+    real_init = threadpoolctl.ThreadpoolController.__init__
+
+    def spy_init(self, *args, **kwargs):
+        with lock:
+            built.append(threading.current_thread().name)
+        return real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(threadpoolctl.ThreadpoolController, "__init__", spy_init)
+
+    out = _run_glm(
+        tmp_path,
+        ds,
+        model,
+        tmp_path / "scan.tif",
+        workers=4,
+        rows_per_stripe=64,
+    )
+
+    assert built, "the run builds no controller at all: the pin cannot work"
+    assert [n for n in built if n.startswith("predict")] == []
     arr, _ = read_raster(out)
     np.testing.assert_array_equal(arr, golden["glm"][0])

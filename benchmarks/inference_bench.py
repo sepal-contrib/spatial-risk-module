@@ -11,7 +11,11 @@ fitted model, each in a fresh subprocess, and reports wall clock, CPU time
 ``apply`` itself; the golden tests prove the engine's serial path equals it,
 which is why ``current`` stands in for it here. Fitting happens before the
 clock starts. All rasters are hashed and compared so a speed-up that changes
-results is reported as a failure, not a win.
+results is reported as a failure, not a win. The ``workers`` column is what
+the run actually used, read back from the engine's plan line rather than from
+``--workers``: the policy chooses when ``--workers`` is unset, and a forest's
+``apply`` defaults to serial whatever the policy says, so an RF ``pool`` row
+reads 1 unless ``--workers`` is given.
 
 A synthetic stack is written to a temporary directory: ``--layers`` tiled
 float32 GeoTIFFs of ``--size`` pixels with nodata holes, plus a uint8 target.
@@ -26,7 +30,9 @@ Output is a plain table on stdout.
 import argparse
 import hashlib
 import json
+import logging
 import os
+import re
 import resource
 import subprocess
 import sys
@@ -35,6 +41,12 @@ import time
 from pathlib import Path
 
 IMPLS = ("original", "current", "pool")
+
+#: The worker count in the engine's plan line, e.g. "pred.tif: 8 worker(s),
+#: 256 rows/stripe, budget ...". What the run really used, which is not what
+#: ``--workers`` asked for: RF's default is serial whatever the policy says,
+#: and an unset ``--workers`` leaves the choice to the policy.
+_PLAN_LINE_RE = re.compile(r"(?P<workers>\d+) worker\(s\), \d+ rows/stripe")
 
 # Measure the checkout this file lives in, not whichever one the editable
 # install points at: a script puts its own directory on sys.path, so without
@@ -179,6 +191,22 @@ def _fit(args, folder):
     return model, ds
 
 
+class _WorkerCapture(logging.Handler):
+    """Read the worker count the engine reports out of its plan line."""
+
+    def __init__(self):
+        """Start with nothing captured."""
+        super().__init__(level=logging.INFO)
+        self.workers = None
+
+    def emit(self, record):
+        """Keep the first plan line's worker count."""
+        if self.workers is None:
+            match = _PLAN_LINE_RE.search(record.getMessage())
+            if match:
+                self.workers = int(match["workers"])
+
+
 def _worker(args) -> dict:
     """Fit, then run one implementation in this process and return its metrics."""
     import numpy as np
@@ -188,17 +216,33 @@ def _worker(args) -> dict:
         model, ds = _fit(args, Path(out))
         pred = Path(out) / f"pred_{args.impl}.tif"
 
+        # The engine decides the worker count (the policy, or a model's own
+        # default overriding --workers), so the count is read back off its
+        # plan line instead of reported from the request. The logger is
+        # levelled up for the run because nothing configures logging here.
+        capture = _WorkerCapture()
+        engine_log = logging.getLogger("spatial_risk")
+        saved_level = engine_log.level
+        engine_log.setLevel(logging.INFO)
+        engine_log.addHandler(capture)
+
         base_mib, base_cpu = _peak_mib(), _cpu_s()
         t0 = time.perf_counter()
-        if args.impl == "original":
-            _original_apply(model, ds, pred)
-        elif args.impl == "current":
-            model.apply(output_file=pred, workers=1)
-        else:
-            model.apply(output_file=pred, workers=args.workers)
+        try:
+            if args.impl == "original":
+                _original_apply(model, ds, pred)
+            elif args.impl == "current":
+                model.apply(output_file=pred, workers=1)
+            else:
+                model.apply(output_file=pred, workers=args.workers)
+        finally:
+            engine_log.removeHandler(capture)
+            engine_log.setLevel(saved_level)
         wall = time.perf_counter() - t0
         cpu = _cpu_s() - base_cpu
         peak = _peak_mib()
+        # The reference loop is this one thread and logs no plan line.
+        effective_workers = 1 if args.impl == "original" else capture.workers
         with rasterio.open(pred) as src:
             arr = src.read(1)
             blocks = src.block_shapes[0]
@@ -214,7 +258,7 @@ def _worker(args) -> dict:
         "setup_peak_mib": base_mib,
         "blocks": blocks,
         "digest": digest,
-        "workers": args.workers,
+        "workers": effective_workers,
     }
 
 
@@ -329,8 +373,10 @@ def main():
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
+        # "?" only if the engine logged no plan line, which would be a bug.
+        workers = "?" if r["workers"] is None else str(r["workers"])
         print(
-            f"{r['impl']:<10} {str(r['workers']):>7} {r['wall_s']:>8.2f} "
+            f"{r['impl']:<10} {workers:>7} {r['wall_s']:>8.2f} "
             f"{r['cpu_s']:>8.2f} {r['peak_mib']:>10.0f} "
             f"{r['setup_peak_mib']:>10.0f} "
             f"{str(tuple(r['blocks'])):>10}  {r['digest']}"

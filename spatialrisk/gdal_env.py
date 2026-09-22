@@ -419,7 +419,15 @@ whole output tiles."""
 
 
 class InferencePlan:
-    """What :func:`plan_inference` decided, and the readings it decided from."""
+    """What :func:`plan_inference` decided, and the readings it decided from.
+
+    Every field but ``cachemax_bytes`` describes memory this run will really
+    take and really reserves on the :class:`ResourceLedger`
+    (``workers x stripe_bytes``). ``cachemax_bytes`` is neither: it is the
+    ``GDAL_CACHEMAX`` the run asks for, unreserved and -- GDAL latching the
+    value on first use -- honoured only if this is the process's first job
+    (see :func:`plan_inference`).
+    """
 
     __slots__ = (
         "rows_per_stripe",
@@ -491,6 +499,7 @@ def plan_inference(
     gdal_cache_bytes: Optional[int] = None,
     reserved_bytes: int = 0,
     reserved_workers: int = 0,
+    workers_override: Optional[int] = None,
 ) -> InferencePlan:
     """Choose stripe height, worker count and GDAL budget for one prediction.
 
@@ -510,8 +519,23 @@ def plan_inference(
       :func:`sampling_num_threads`;
     * the cache grows to hold every in-flight stripe of every input.
 
-    ``SPATIAL_RISK_INFERENCE_WORKERS`` overrides the worker count (min 1). An
-    explicit ``rows_per_stripe`` is honoured as given and never shrunk.
+    ``cachemax_bytes`` is budgeted for only as the flat
+    :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` subtracted from the memory budget
+    above, never as the larger figure this returns, and it is not reserved on
+    the :class:`ResourceLedger` at all: a second concurrent run plans as if
+    one nominal cache existed. It is a request rather than a size in any
+    case -- GDAL reads ``GDAL_CACHEMAX`` the first time it needs the block
+    cache and latches it, so in the long-lived app process the first job of
+    the session fixes the cache every later one runs with, whatever their
+    plans say.
+
+    ``SPATIAL_RISK_INFERENCE_WORKERS`` overrides the worker count (min 1), and
+    a caller's own ``workers_override`` (min 1) wins over both the policy and
+    that variable. An override goes in here rather than onto the returned plan
+    because the count also sizes ``gdal_threads`` and ``cachemax_bytes``;
+    ``by_cores`` and ``by_memory`` still report what the policy would have
+    chosen. An explicit ``rows_per_stripe`` is honoured as given and never
+    shrunk.
     """
     if cores is None:
         cores = _available_cores()
@@ -566,6 +590,8 @@ def plan_inference(
     env_val = os.environ.get(INFERENCE_WORKERS_ENV)
     if env_val:
         workers = max(1, int(env_val))
+    if workers_override is not None:
+        workers = max(1, int(workers_override))
 
     raw_row = int(width) * (
         sum(int(s) for s in feature_itemsizes)
@@ -618,6 +644,13 @@ class ResourceLedger:
     as :func:`plan_sampling`). The reading is conservative on purpose: a
     running job's allocations are already gone from the free-memory reading
     *and* still counted here, which only makes the later job smaller.
+
+    What is tracked is the stripe working sets only. A plan's
+    ``cachemax_bytes`` is never reserved here: it is allowed for once, flatly,
+    as the :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` that
+    :func:`plan_inference` takes off the budget, and the GDAL block cache is
+    process-wide and latched at its first use anyway, so it is not a
+    per-reservation quantity to begin with.
     """
 
     def __init__(self, budget_fn=None, clock=time.monotonic, sleep_log_every_s=30.0):
@@ -638,16 +671,22 @@ class ResourceLedger:
     def outstanding_bytes(self) -> int:
         """Bytes every live reservation holds.
 
-        Deliberately lock-free: a ``budget_fn`` reads it from inside a waiting
-        thread while that thread holds the condition's lock. Taking the lock
-        here would deadlock the wait loop.
+        Read without taking the lock, and over a snapshot. Not for fear of
+        deadlock: ``threading.Condition`` owns an ``RLock``, so the callers
+        that reach this from inside ``with self._cond`` (a ``budget_fn`` in
+        the wait loop, :meth:`plan_and_reserve`) could re-enter it freely.
+        The lock is skipped because those callers already hold it and the sum
+        is the only thing it would protect; the snapshot is what makes the
+        property safe for a reader that does *not* hold it, since iterating
+        ``self._live`` directly can raise "dictionary changed size during
+        iteration" the moment another thread records or releases.
         """
-        return sum(r.bytes_ for r in self._live.values())
+        return sum(r.bytes_ for r in list(self._live.values()))
 
     @property
     def outstanding_workers(self) -> int:
-        """Worker threads every live reservation holds (lock-free, see above)."""
-        return sum(r.workers for r in self._live.values())
+        """Worker threads every live reservation holds (snapshot, see above)."""
+        return sum(r.workers for r in list(self._live.values()))
 
     def snapshot(self) -> list:
         """The live reservations, as a list, taken under the lock."""
