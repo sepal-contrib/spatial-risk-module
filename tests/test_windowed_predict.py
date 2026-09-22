@@ -584,20 +584,24 @@ def test_look_ahead_is_bounded_to_twice_the_workers(tmp_path, golden, monkeypatc
     predict = _glm_closure(model)
     workers = 2
     lock = threading.Lock()
-    submits = [0]
+    submits, warm_ups = [0], [0]
     submitted = threading.Semaphore(0)
     entered = threading.Semaphore(0)
     release = threading.Event()
     in_flight, peak, starts = [0], [0], [0]
 
     class CountingPool(wp.ThreadPoolExecutor):
-        """A pool that counts what the writer submits."""
+        """A pool that counts the stripes the writer submits, warm-up apart."""
 
         def submit(self, fn, *args, **kwargs):
             """Count the submission before it reaches the pool."""
-            with lock:
-                submits[0] += 1
-            submitted.release()
+            if args:  # a stripe carries its index; a warm-up task takes none
+                with lock:
+                    submits[0] += 1
+                submitted.release()
+            else:
+                with lock:
+                    warm_ups[0] += 1
             return super().submit(fn, *args, **kwargs)
 
     monkeypatch.setattr(wp, "ThreadPoolExecutor", CountingPool)
@@ -643,6 +647,7 @@ def test_look_ahead_is_bounded_to_twice_the_workers(tmp_path, golden, monkeypatc
         with lock:
             # Nothing can progress now, so this is the whole look-ahead.
             assert submits[0] == 2 * workers
+            assert warm_ups[0] == workers  # one pin per worker, before any stripe
     finally:
         release.set()
         runner.join(60)
@@ -719,3 +724,108 @@ def test_rf_apply_pins_n_jobs_per_worker_and_restores_it(tmp_path):
     seen.clear()
     model.apply(tmp_path / "rfdefault.tif", ds, ds.mask_path, 0)
     assert set(seen) == {-1}
+
+
+# --------------------------------------------------------------------------- #
+# pool start-up: nothing is imported on a worker, every worker is pinned first
+# --------------------------------------------------------------------------- #
+def test_the_engine_imports_nothing_at_call_time():
+    """Source guard: no function in the engine imports, so no worker dlopens.
+
+    The 2026-09-22 inference bench deadlocked a pooled run at pool start-up,
+    roughly one attempt in three at 16 workers and also at the 8 the policy
+    picks on a 16-core box. One worker sat in ``_predict_stripe``'s per-stripe
+    ``import forestatrisk``, holding CPython's import lock and the GIL while
+    ``dlopen`` waited for glibc's loader lock; two more held that loader lock
+    inside ``threadpoolctl``'s ``dl_iterate_phdr`` walk and waited for the GIL
+    from its ctypes callback; the rest queued on the import lock. Every import
+    the engine needs is therefore resolved once, at module import, on the
+    calling thread that has no pool yet.
+    """
+    import ast
+    import inspect
+
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    tree = ast.parse(inspect.getsource(wp))
+    lazy = [
+        f"{fn.name}:{node.lineno}"
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in ast.walk(fn)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    assert lazy == [], f"call-time imports in the stripe engine: {lazy}"
+    top_level = {n.module for n in tree.body if isinstance(n, ast.ImportFrom)} | {
+        a.name for n in tree.body if isinstance(n, ast.Import) for a in n.names
+    }
+    assert any(m and m.split(".")[0] == "forestatrisk" for m in top_level)
+
+
+def test_every_pool_thread_is_pinned_before_the_first_stripe(
+    tmp_path, golden, monkeypatch
+):
+    """The pool is warmed up: every worker is pinned and idle before any stripe.
+
+    The pin walks every shared object loaded in the process
+    (``threadpoolctl`` -> ``dl_iterate_phdr``), taking glibc's loader lock and
+    re-entering Python under it, so a worker still starting up while another
+    is inside a stripe is exactly the 2026-09-22 deadlock: the stripe's
+    ``dlopen`` (an import, a GDAL driver) wants the loader lock with the GIL
+    in hand. Submitting the pins as barriered warm-up tasks and waiting for
+    them keeps the two apart, which the executor ``initializer`` -- started
+    lazily, one thread per submit -- could not.
+    """
+    from threadpoolctl import threadpool_info
+
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    workers = 4
+    lock = threading.Lock()
+    events = []  # ("pin" | "stripe", thread name), in the order they happened
+    math_threads = {}  # thread name -> the math pool sizes it saw in its first stripe
+    all_in = threading.Barrier(workers, timeout=60)
+    real_pin, real_stripe = wp._pin_worker_math, wp._predict_stripe
+
+    def spy_pin():
+        real_pin()
+        with lock:
+            events.append(("pin", threading.current_thread().name))
+
+    def spy_stripe(*args, **kwargs):
+        name = threading.current_thread().name
+        with lock:
+            events.append(("stripe", name))
+            first = name not in math_threads
+            if first:
+                math_threads[name] = {i["num_threads"] for i in threadpool_info()}
+        if first:
+            all_in.wait()  # hold every worker until all of them have a stripe
+        return real_stripe(*args, **kwargs)
+
+    monkeypatch.setattr(wp, "_pin_worker_math", spy_pin)
+    monkeypatch.setattr(wp, "_predict_stripe", spy_stripe)
+
+    out = _run_glm(
+        tmp_path,
+        ds,
+        model,
+        tmp_path / "warm.tif",
+        workers=workers,
+        rows_per_stripe=64,  # 11 stripes, look-ahead 8: all four workers run
+    )
+
+    kinds = [kind for kind, _ in events]
+    # The pins are the first events there are: the last one happened before
+    # the first stripe body, on every thread the pool will ever run a stripe on.
+    assert kinds.count("pin") == workers
+    assert kinds.index("stripe") == workers
+    pinned = {n for kind, n in events if kind == "pin"}
+    ran = {n for kind, n in events if kind == "stripe"}
+    assert len(pinned) == workers and pinned == ran
+    assert all(n.startswith("predict") for n in pinned)
+    assert {n for sizes in math_threads.values() for n in sizes} == {1}
+    arr, _ = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["glm"][0])

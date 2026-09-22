@@ -28,6 +28,15 @@ from typing import Callable, Dict, Optional, Sequence, Union
 import numpy as np
 import pandas as pd
 import rasterio
+
+# Imported here, not where ``rescale`` is called: that call site is a stripe
+# running on a pool thread, and importing forestatrisk (it pulls matplotlib's
+# Agg backend in through a ``dlopen``) there holds CPython's import lock and
+# the GIL while it waits for glibc's loader lock -- which another worker holds
+# while pinning itself (see :func:`_warm_up_pool`). That inversion hung 17 of
+# 20 16-worker runs of the 2026-09-22 bench. At module level the whole import
+# happens on the calling thread instead, before any pool exists.
+from forestatrisk.misc import rescale
 from rasterio.enums import Resampling
 from rasterio.windows import Window
 from threadpoolctl import threadpool_limits
@@ -43,6 +52,11 @@ from spatialrisk.raster_profile import BLOCK_SIZE, rasterio_profile
 logger = logging.getLogger("spatial_risk")
 
 PathLike = Union[str, Path]
+
+#: Seconds :func:`_warm_up_pool` gives the pool to start every worker and pin
+#: it. Pinning is milliseconds of work; the bound is here so a pool that
+#: cannot start raises instead of hanging the run forever.
+_WARM_UP_TIMEOUT = 60.0
 
 
 @dataclass(frozen=True)
@@ -201,8 +215,6 @@ def _predict_stripe(
     predict_block,
 ):
     """One stripe's uint16 output (0 where invalid or empty)."""
-    import forestatrisk as far
-
     valid, block_df, extras = _read_stripe(
         handles,
         window,
@@ -215,7 +227,7 @@ def _predict_stripe(
     out = np.zeros(int(window.height) * int(window.width), dtype=np.uint16)
     if not block_df.empty:
         proba = np.asarray(predict_block(block_df, extras), dtype=float)
-        out[valid] = far.misc.rescale(proba).astype(np.uint16)
+        out[valid] = rescale(proba).astype(np.uint16)
     return out.reshape(int(window.height), int(window.width))
 
 
@@ -308,6 +320,40 @@ def _pin_worker_math():
     threadpool_limits(limits=1)
 
 
+def _warm_up_pool(pool, workers):
+    """Pin every pool thread and park it, before the first stripe is submitted.
+
+    The pin walks every shared object loaded in the process (threadpoolctl's
+    ``dl_iterate_phdr``), taking glibc's loader lock and re-entering Python
+    through a ctypes callback while holding it. A worker doing that while
+    another worker is inside a stripe deadlocks the run: anything the stripe
+    ``dlopen``s (a C extension being imported, a GDAL driver) wants that
+    loader lock with the GIL in hand, while the scanning worker wants the GIL
+    with the loader lock in hand. The executor ``initializer`` cannot keep the
+    two apart -- the pool starts one thread per submit, so the last worker
+    pins itself while the first is already predicting; that race hung 17 of 20
+    16-worker runs of the 2026-09-22 bench.
+
+    So the pins are submitted as work instead: one task per worker, each
+    pinning its own thread and then waiting on a barrier that only opens once
+    every worker has. Each task holds its thread, so the pool has to start a
+    new one for the next task, and when the last future returns all
+    ``max_workers`` threads exist, are pinned and are idle -- the pool never
+    creates another one, so no stripe can ever overlap a pin.
+    :data:`_WARM_UP_TIMEOUT` bounds both the barrier and the wait on it, so a
+    pool that cannot start raises (``BrokenBarrierError``/``TimeoutError``)
+    instead of hanging the run.
+    """
+    barrier = threading.Barrier(workers, timeout=_WARM_UP_TIMEOUT)
+
+    def warm():
+        _pin_worker_math()
+        barrier.wait()
+
+    for future in [pool.submit(warm) for _ in range(workers)]:
+        future.result(timeout=_WARM_UP_TIMEOUT)
+
+
 def _write_pooled(dst, stripes, one, workers, milestones, log):
     """Predict stripes on a pool and write them from this thread, in order.
 
@@ -324,14 +370,15 @@ def _write_pooled(dst, stripes, one, workers, milestones, log):
     already running are awaited (a running task still holds its thread's
     handles, which the caller closes once this returns) before the original
     exception is re-raised.
+
+    The pool is warmed up before the first stripe is submitted, which is what
+    pins the workers' math libraries (:func:`_warm_up_pool` says why it is not
+    the executor's ``initializer``).
     """
     total = len(stripes)
     look_ahead = 2 * workers
-    with ThreadPoolExecutor(
-        max_workers=workers,
-        thread_name_prefix="predict",
-        initializer=_pin_worker_math,
-    ) as pool:
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="predict") as pool:
+        _warm_up_pool(pool, workers)
         pending = []  # (window, future), in submission order
         next_i = 0
         done = 0
