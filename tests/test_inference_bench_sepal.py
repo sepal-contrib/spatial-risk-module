@@ -206,6 +206,10 @@ DEFAULT_SEED = 42
 STRIPE_ROWS = 256
 #: Rows copied per read/write while the shorter stack is built.
 COPY_CHUNK_ROWS = 1024
+#: How long one stage may take before it is killed. Generous: a country-scale
+#: window at one worker is minutes, and the point is only to fail a wedged
+#: configuration rather than to police a slow one.
+STAGE_TIMEOUT_S = 3600
 
 #: The engine's plan line, e.g. "pred_glm_1.tif: 8 worker(s), 256 rows/stripe,
 #: budget 24594 MiB (psutil.available), reserved 18072 MiB". Parsed only for
@@ -483,13 +487,32 @@ def run_stage(cfg: Dict) -> Dict:
 
 
 def spawn_stage(cfg: Dict) -> Dict:
-    """Run ``run_stage(cfg)`` in a fresh interpreter and parse its JSON line."""
+    """Run ``run_stage(cfg)`` in a fresh interpreter and parse its JSON line.
+
+    A stage that stops making progress is killed after
+    :data:`STAGE_TIMEOUT_S` and reported with its stderr, so one wedged
+    configuration fails the run instead of hanging it with nothing to read
+    (the stage's output is captured, so a hung child prints nothing).
+    """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     cmd = [sys.executable, str(Path(__file__).resolve()), "--worker", json.dumps(cfg)]
-    proc = subprocess.run(
-        cmd, check=True, capture_output=True, text=True, env=env, cwd=str(ROOT)
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(ROOT),
+            timeout=STAGE_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"stage {cfg['stage']!r} (workers={cfg.get('workers')}) did not finish "
+            f"in {STAGE_TIMEOUT_S} s and was killed; its stderr tail:\n"
+            + (exc.stderr or "")[-2000:]
+        ) from exc
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
@@ -654,20 +677,35 @@ def crop_stack(
     The engine reads every feature with the *target's* window, so the layers
     must stay pixel-aligned: they are all cut at the same offset, and each
     keeps its source's dtype, nodata, compression and block layout so the
-    decode cost per stripe is the one the real raster has. Returns the new
-    inputs and the target's class histogram, which is counted for free while
-    its rows go past.
+    decode cost per stripe is the one the real raster has. A layer that is
+    not on the target's grid is refused here rather than cut: cutting it at
+    the target's offset would shift it, and nothing downstream could tell --
+    every stage shares the one cropped stack, so the digests would agree on
+    the same wrong answer. Returns the new inputs and the target's class
+    histogram, which is counted for free while its rows go past.
     """
     import rasterio
     from affine import Affine
     from rasterio.windows import Window
 
     counts: Dict[int, int] = {}
+    with rasterio.open(inputs["target"][1]) as src:
+        grid = (src.height, src.width, src.transform)
 
     def copy(entry, tally=False):
         name, path, rtype = entry
         dst_path = out_dir / f"{name}.tif"
         with rasterio.open(path) as src:
+            if (src.height, src.width) != grid[:2] or not src.transform.almost_equals(
+                grid[2]
+            ):
+                raise ValueError(
+                    f"{name!r} is not on the target's grid: "
+                    f"{src.width}x{src.height} at {tuple(src.transform)[:6]} vs "
+                    f"{grid[1]}x{grid[0]} at {tuple(grid[2])[:6]}. The engine reads "
+                    "every feature with the target's own window indices, so an "
+                    "unharmonised stack cannot be windowed (or predicted)."
+                )
             profile = src.profile.copy()
             # The window's transform, built with affine rather than
             # rasterio.windows.transform: that helper goes through the
@@ -998,12 +1036,17 @@ def test_plan_line_regex_reads_the_engines_own_log_line():
     assert match["source"] == "psutil.available"
 
 
-def _write_raster(path, array, *, nodata, dtype=None):
-    """Write a tiled single-band GeoTIFF with 30 m pixels."""
+def _write_raster(path, array, *, nodata, dtype=None, north=None):
+    """Write a tiled single-band GeoTIFF with 30 m pixels.
+
+    ``north`` moves the top edge, which is how a test builds a layer that is
+    the right shape but not on the target's grid.
+    """
     import rasterio
     from rasterio.transform import from_origin
 
     array = array if dtype is None else array.astype(dtype)
+    north = array.shape[0] * 30 if north is None else north
     with rasterio.open(
         path,
         "w",
@@ -1013,7 +1056,7 @@ def _write_raster(path, array, *, nodata, dtype=None):
         count=1,
         dtype=array.dtype.name,
         crs="EPSG:3857",
-        transform=from_origin(0, array.shape[0] * 30, 30, 30),
+        transform=from_origin(0, north, 30, 30),
         nodata=nodata,
         tiled=True,
         blockxsize=256,
@@ -1048,6 +1091,99 @@ def _synthetic_stack(folder: Path, height=600, width=300, layers=3, seed=1) -> D
 
 
 @pytest.mark.raster
+def test_crop_stack_puts_every_layer_on_the_targets_cropped_grid(tmp_path):
+    """Every layer is cut at the same offset, onto the target's cropped grid.
+
+    The digest assertion structurally cannot catch a bad crop: every stage
+    shares the one cropped stack, so a feature cut at the wrong offset gives
+    consistently wrong predictions with agreeing digests. This compares each
+    cropped layer against its own source's window instead.
+    """
+    import rasterio
+    from affine import Affine
+    from rasterio.windows import Window
+
+    inputs = _synthetic_stack(tmp_path)
+    rows, offset = 256, 172
+    out = tmp_path / "cropped"
+    out.mkdir()
+    cropped, counts = crop_stack(inputs, rows, offset, out)
+
+    with rasterio.open(inputs["target"][1]) as src:
+        width = src.width
+        want_transform = src.transform * Affine.translation(0, offset)
+        window = Window(0, offset, width, rows)
+        target_block = src.read(1, window=window)
+
+    sources = [inputs["target"]] + inputs["features"]
+    for entry, source in zip([cropped["target"]] + cropped["features"], sources):
+        name = entry[0]
+        assert name == source[0]
+        with rasterio.open(entry[1]) as dst, rasterio.open(source[1]) as src:
+            assert (dst.height, dst.width) == (rows, width), name
+            assert dst.transform == want_transform, name
+            assert (dst.dtypes, dst.nodata) == (src.dtypes, src.nodata), name
+            np.testing.assert_array_equal(
+                dst.read(1), src.read(1, window=window), err_msg=name
+            )
+
+    # the histogram counted during the copy is the window's own, and two
+    # classes are enough to fit on
+    values, seen = np.unique(target_block, return_counts=True)
+    assert counts == dict(zip(values.tolist(), seen.tolist()))
+    assert _check_classes(Path(cropped["target"][1]), counts)
+
+
+@pytest.mark.raster
+def test_crop_stack_refuses_a_layer_off_the_targets_grid(tmp_path):
+    """A layer on another grid is an error, not a silently shifted read."""
+    out = tmp_path / "cropped"
+    out.mkdir()
+    ones = np.ones((600, 300), dtype="float32")
+
+    taller = _synthetic_stack(tmp_path)
+    _write_raster(tmp_path / "tall.tif", np.ones((640, 300), "float32"), nodata=-9999.0)
+    taller["features"].append(("tall", str(tmp_path / "tall.tif"), "continuous"))
+    with pytest.raises(ValueError, match="not on the target's grid"):
+        crop_stack(taller, 256, 172, out)
+
+    # same shape, shifted origin: only the transform gives it away
+    shifted = _synthetic_stack(tmp_path)
+    _write_raster(tmp_path / "shift.tif", ones, nodata=-9999.0, north=600 * 30 + 30)
+    shifted["features"].append(("shift", str(tmp_path / "shift.tif"), "continuous"))
+    with pytest.raises(ValueError, match="not on the target's grid"):
+        crop_stack(shifted, 256, 172, out)
+
+
+@pytest.mark.raster
+def test_check_classes_refuses_a_window_it_cannot_fit(tmp_path):
+    """One class (or only nodata) in the window names the knobs that move it."""
+    path = tmp_path / "t.tif"
+    _write_raster(path, np.ones((256, 300), dtype="uint8"), nodata=255)
+    assert _check_classes(path, {0: 10, 1: 5, 255: 3}) == "0: 10, 1: 5"
+    with pytest.raises(ValueError, match="nothing to fit"):
+        _check_classes(path, {1: 10, 255: 7})
+    with pytest.raises(ValueError, match=ROW_OFFSET_ENV):
+        _check_classes(path, {255: 7})
+
+
+@pytest.mark.raster
+@pytest.mark.slow
+def test_inference_bench_smoke_crops_the_stack(tmp_path):
+    """The megapixel budget shortens the stack and the run still predicts it.
+
+    0.1 Mpx over a 300 px wide raster is 333 rows, which rounds down to one
+    whole 256-row stripe, centred in the 600-row stack.
+    """
+    inputs = _synthetic_stack(tmp_path)
+    result = assess(inputs, models_spec="glm", workers_spec="1", n_samples=300, mpx=0.1)
+    assert result["window"] == {"rows": 256, "offset": 172, "cropped": True}
+    assert result["stripes"]["shape"] == [256, 300]
+    assert result["stripes"]["n_stripes"] == 1
+    assert result["records"][0]["predicted_px"] > 0
+
+
+@pytest.mark.raster
 @pytest.mark.slow
 def test_inference_bench_smoke(tmp_path):
     """The whole subprocess pipeline works and the pool agrees with the serial path."""
@@ -1075,7 +1211,9 @@ def test_sepal_inference_assessment():
     """Time serial and pooled ``apply`` for each model on a real project's stack."""
     try:
         inputs = inputs_from_env()
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
+        # ValueError: the project is here but has no dataset and no explicit
+        # variables -- still "not a machine this benchmark can run on".
         pytest.skip(f"not on a machine with the project: {exc}")
     for name, path, _rtype in [inputs["target"]] + inputs["features"]:
         assert Path(path).exists(), f"{name}: {path}"
