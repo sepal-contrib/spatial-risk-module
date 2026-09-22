@@ -1,8 +1,12 @@
 # tests/test_inference_plan.py
 """The inference stripe plan: workers from cores and memory, stripe shrink floor."""
+import threading
+import time
+
 from spatialrisk import gdal_env
 from spatialrisk.gdal_env import (
     INFERENCE_WORKERS_ENV,
+    ResourceLedger,
     inference_working_set,
     plan_inference,
 )
@@ -169,3 +173,78 @@ def test_cache_holds_every_in_flight_input_stripe(monkeypatch):
     raw_row = 4000 * (1 + 1 + 4 + 1)  # features + mask, bytes per row
     assert plan.cachemax_bytes >= plan.workers * 2 * plan.rows_per_stripe * raw_row
     assert plan.cachemax_bytes >= 64 << 20
+
+
+def test_reservations_add_up_and_release():
+    """Live reservations sum per resource and disappear on release."""
+    led = ResourceLedger(budget_fn=lambda: 10 * GiB)
+    a = led.reserve(bytes_=GiB, workers=2, label="a", minimum_bytes=GiB)
+    b = led.reserve(bytes_=2 * GiB, workers=1, label="b", minimum_bytes=GiB)
+    assert led.outstanding_bytes == 3 * GiB
+    assert led.outstanding_workers == 3
+    led.release(a)
+    assert led.outstanding_bytes == 2 * GiB
+    assert [r.label for r in led.snapshot()] == ["b"]
+    led.release(b)
+    assert led.outstanding_bytes == 0 and led.outstanding_workers == 0
+
+
+def test_minimum_proceeds_when_nothing_is_outstanding():
+    """A lone job on a starved machine runs anyway: nothing else holds memory."""
+    led = ResourceLedger(budget_fn=lambda: 0)
+    r = led.reserve(bytes_=GiB, workers=1, label="lonely", minimum_bytes=GiB)
+    assert led.outstanding_bytes == GiB
+    led.release(r)
+
+
+def test_reserve_waits_for_a_release_when_the_minimum_does_not_fit():
+    """A second job blocks while the first holds the budget; a release wakes it."""
+    budget = 3 * GiB
+    led = ResourceLedger(
+        budget_fn=lambda: budget - led.outstanding_bytes, sleep_log_every_s=0.05
+    )
+    first = led.reserve(bytes_=3 * GiB, workers=2, label="first", minimum_bytes=GiB)
+    started, got = threading.Event(), {}
+
+    def second():
+        started.set()
+        got["r"] = led.reserve(bytes_=GiB, workers=1, label="second", minimum_bytes=GiB)
+        got["t"] = time.monotonic()
+
+    t = threading.Thread(target=second)
+    t.start()
+    started.wait()
+    time.sleep(0.2)
+    assert "r" not in got  # still waiting
+    t_release = time.monotonic()
+    led.release(first)
+    t.join(5)
+    assert not t.is_alive()
+    assert got["t"] >= t_release
+    assert led.outstanding_bytes == GiB
+    led.release(got["r"])
+
+
+def test_plan_and_reserve_replans_against_what_is_left(monkeypatch):
+    """The second run plans against the remainder, not against the whole machine."""
+    monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
+    budget = 6 * GiB
+    led = ResourceLedger(budget_fn=lambda: budget - led.outstanding_bytes)
+    seen = []
+
+    def plan_fn(reserved_bytes, reserved_workers):
+        seen.append((reserved_bytes, reserved_workers))
+        return _plan(
+            free_bytes=int((budget - reserved_bytes) / 0.5),
+            gdal_cache_bytes=0,
+            reserved_workers=reserved_workers,
+        )
+
+    p1, r1 = led.plan_and_reserve(plan_fn, minimum_bytes=1, label="one")
+    assert seen[-1] == (0, 0)
+    p2, r2 = led.plan_and_reserve(plan_fn, minimum_bytes=1, label="two")
+    assert seen[-1] == (r1.bytes_, r1.workers)
+    assert p2.workers <= max(1, 4 - p1.workers)
+    assert led.outstanding_bytes == r1.bytes_ + r2.bytes_
+    led.release(r1)
+    led.release(r2)

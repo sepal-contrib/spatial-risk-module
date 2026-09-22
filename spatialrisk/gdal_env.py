@@ -19,6 +19,9 @@ config rather than a change to any one destination dtype.
 import logging
 import os
 import tempfile
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -583,3 +586,125 @@ def plan_inference(
         free_bytes=int(free_bytes),
         memory_source=memory_source,
     )
+
+
+# --------------------------------------------------------------------------- #
+# cross-run budget: one ledger per process
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Reservation:
+    """What one running job holds: planned bytes and worker threads."""
+
+    bytes_: int
+    workers: int
+    label: str
+    id: int
+
+
+class ResourceLedger:
+    """Live reservations of memory and workers across the jobs of this process.
+
+    A per-run plan cannot see the other runs; when two predictions were
+    launched together on SEPAL each sized itself against the whole machine
+    and the kernel died (2026-09-22). Every engine run reserves what its plan
+    will use and releases it when done, and the next plan is made against
+    the remainder (:func:`plan_inference` ``reserved_bytes`` /
+    ``reserved_workers``).
+
+    ``reserve`` blocks only when *another* reservation is outstanding and
+    even ``minimum_bytes`` (one worker at one tile row) does not fit the
+    budget; a release wakes it. With nothing outstanding the minimum always
+    proceeds, so a lone job on a starved machine still runs (the same rule
+    as :func:`plan_sampling`). The reading is conservative on purpose: a
+    running job's allocations are already gone from the free-memory reading
+    *and* still counted here, which only makes the later job smaller.
+    """
+
+    def __init__(self, budget_fn=None, clock=time.monotonic, sleep_log_every_s=30.0):
+        """Take the budget reading, the clock and how often a wait is logged."""
+        self._budget_fn = budget_fn or self._default_budget
+        self._clock = clock
+        self._log_every = float(sleep_log_every_s)
+        self._cond = threading.Condition()
+        self._live = {}
+        self._next_id = 0
+
+    def _default_budget(self) -> int:
+        """Free memory this process may still claim, net of what is outstanding."""
+        free, _ = free_memory_bytes()
+        return max(0, int(free * INFERENCE_MEMORY_FRACTION) - self.outstanding_bytes)
+
+    @property
+    def outstanding_bytes(self) -> int:
+        """Bytes every live reservation holds.
+
+        Deliberately lock-free: a ``budget_fn`` reads it from inside a waiting
+        thread while that thread holds the condition's lock. Taking the lock
+        here would deadlock the wait loop.
+        """
+        return sum(r.bytes_ for r in self._live.values())
+
+    @property
+    def outstanding_workers(self) -> int:
+        """Worker threads every live reservation holds (lock-free, see above)."""
+        return sum(r.workers for r in self._live.values())
+
+    def snapshot(self) -> list:
+        """The live reservations, as a list, taken under the lock."""
+        with self._cond:
+            return list(self._live.values())
+
+    def _wait_until_fits(self, minimum_bytes, label, log):
+        """Under the lock: block while others hold memory and the minimum cannot fit."""
+        last_log = None
+        while self._live and self._budget_fn() < minimum_bytes:
+            now = self._clock()
+            if last_log is None or now - last_log >= self._log_every:
+                holders = ", ".join(
+                    f"{r.label} {r.bytes_ / 2**20:.0f} MiB" for r in self._live.values()
+                )
+                (log or logger).info(
+                    "%s: waiting for memory (needs %.0f MiB; held by %s)",
+                    label,
+                    minimum_bytes / 2**20,
+                    holders,
+                )
+                last_log = now
+            self._cond.wait(timeout=self._log_every)
+
+    def _record(self, bytes_, workers, label) -> Reservation:
+        """Add one reservation to the live set and return it."""
+        self._next_id += 1
+        r = Reservation(int(bytes_), int(workers), str(label), self._next_id)
+        self._live[r.id] = r
+        return r
+
+    def reserve(
+        self, *, bytes_, workers, label, minimum_bytes, log=None
+    ) -> Reservation:
+        """Record a reservation, waiting first if the minimum cannot fit."""
+        with self._cond:
+            self._wait_until_fits(minimum_bytes, label, log)
+            return self._record(bytes_, workers, label)
+
+    def plan_and_reserve(self, plan_fn, *, minimum_bytes, label, log=None):
+        """Plan against what is left, wait if needed, re-plan, reserve. Atomic.
+
+        ``plan_fn(reserved_bytes, reserved_workers) -> plan`` with
+        ``plan.workers`` and ``plan.stripe_bytes``. Returns ``(plan, reservation)``.
+        """
+        with self._cond:
+            self._wait_until_fits(minimum_bytes, label, log)
+            plan = plan_fn(self.outstanding_bytes, self.outstanding_workers)
+            r = self._record(plan.workers * plan.stripe_bytes, plan.workers, label)
+            return plan, r
+
+    def release(self, reservation) -> None:
+        """Drop a reservation and wake every thread waiting for room."""
+        with self._cond:
+            self._live.pop(reservation.id, None)
+            self._cond.notify_all()
+
+
+INFERENCE_LEDGER = ResourceLedger()
+"""The process-wide ledger every ``predict_windowed`` run reserves on."""
