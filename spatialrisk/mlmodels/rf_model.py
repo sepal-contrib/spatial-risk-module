@@ -153,13 +153,15 @@ class RFModel(BaseRiskModel):
             Value(s) in the mask raster that identify pixels to suppress.
             Defaults to 0. Ignored when ``mask`` is None.
         workers : int, optional
-            Stripe worker threads. None lets the resource policy choose;
-            1 runs serially on the calling thread, keeping the estimator's
-            own ``n_jobs``. Any other worker count (including the default,
-            which may resolve to more than one) pins the estimator to
-            ``n_jobs=1`` for the run: with a stripe pool the outer workers
-            own the cores, so joblib's per-call tree fan-out would multiply
-            them (workers x n_jobs) instead of adding parallelism.
+            Stripe worker threads. None -- the default -- runs serially on
+            the calling thread, keeping the estimator's own ``n_jobs``, which
+            is where a forest's parallelism already lives; unlike the other
+            predictors the resource policy is not consulted (the numbers
+            behind that are in the body). ``1`` is the same path. Any other
+            worker count pins the estimator to ``n_jobs=1`` for the run: with
+            a stripe pool the outer workers own the cores, so joblib's
+            per-call tree fan-out would multiply them (workers x n_jobs)
+            instead of adding parallelism.
         """
         from patsy.highlevel import build_design_matrices
 
@@ -181,10 +183,25 @@ class RFModel(BaseRiskModel):
             (x,) = build_design_matrices([design_info], block_df, NA_action="drop")
             return estimator.predict_proba(np.asarray(x))[:, 1]
 
+        # A forest is the one predictor whose default is NOT the resource
+        # policy: joblib already spreads its trees over every core, while a
+        # pooled run gives each stripe worker one joblib thread and is
+        # therefore capped at the worker count -- which the memory budget
+        # pins low on the machine that matters. Measured 2026-09-22 on a
+        # SEPAL c8 (8 cores, 13.9 GiB free, 62 Mpx of a 40412 px wide,
+        # 8-feature stack, where plan_inference chose 2 workers, memory-bound):
+        # serial 17.4 s, 2 workers 30.8 s (+77 %), 4 workers 21.2 s (+22 %) --
+        # every pooled count lost. Pooling only paid on a 16-core dev box,
+        # where the policy could afford 8 workers (15.6 s -> 12.2 s), and even
+        # there 2 workers cost 32.9 s. An explicit ``workers`` is still
+        # honoured and is the way to pool a forest deliberately; pinning it
+        # here does mean SPATIAL_RISK_INFERENCE_WORKERS, which plan_inference
+        # reads, no longer reaches one.
+        workers = 1 if workers is None else workers
         # With a stripe pool the outer workers own the cores: joblib's per-call
         # tree fan-out would multiply them (workers x n_jobs). Serial keeps the
         # pickled n_jobs (-1), which is where a single run's parallelism lives.
-        pooled = workers is None or int(workers) > 1
+        pooled = int(workers) > 1
         saved_n_jobs = estimator.n_jobs
         if pooled:
             estimator.n_jobs = 1

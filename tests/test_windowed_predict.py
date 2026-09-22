@@ -690,7 +690,13 @@ def test_pooled_workers_predict_with_one_math_thread_each(tmp_path):
 
 
 def test_rf_apply_pins_n_jobs_per_worker_and_restores_it(tmp_path):
-    """RF.apply() pins the estimator to one joblib worker per pooled run."""
+    """RF.apply() pins the estimator to one joblib worker per pooled run.
+
+    ``workers=None`` is the serial path for a forest, not the resource
+    policy's choice, so the estimator keeps its own ``n_jobs``: on a SEPAL c8
+    the policy's 2 workers made prediction 77 % slower than serial
+    (2026-09-22, see the comment in ``RFModel.apply``).
+    """
     from _inference_fixture import build_rf
 
     ds = build_dataset(tmp_path)
@@ -709,4 +715,7 @@ def test_rf_apply_pins_n_jobs_per_worker_and_restores_it(tmp_path):
     assert model._ml_model.n_jobs == -1
     seen.clear()
     model.apply(tmp_path / "rf1.tif", ds, ds.mask_path, 0, workers=1)
+    assert set(seen) == {-1}
+    seen.clear()
+    model.apply(tmp_path / "rfdefault.tif", ds, ds.mask_path, 0)
     assert set(seen) == {-1}
