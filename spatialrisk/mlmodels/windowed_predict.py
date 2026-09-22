@@ -322,44 +322,49 @@ def predict_windowed(
         label,
         log,
     )
-    log.info(
-        "%s: %d worker(s), %d rows/stripe, budget %.0f MiB (%s), reserved %.0f MiB",
-        label,
-        plan.workers,
-        plan.rows_per_stripe,
-        plan.memory_budget_bytes / 2**20,
-        plan.memory_source,
-        reservation.bytes_ / 2**20,
-    )
-
-    with rasterio.open(target_path) as ref:
-        profile = ref.profile.copy()
-        target_transform = ref.transform
-    profile.update(dtype="uint16", count=1, nodata=0)
-    profile.update(rasterio_profile("uint16"))
-
-    stripes = _stripes(target_path, plan.rows_per_stripe)
-    milestones = {max(1, round(len(stripes) * q)) for q in (0.25, 0.5, 0.75, 1.0)}
+    # Everything from here on runs inside the try: the reservation is only
+    # ever given back by the finally below, and a leaked one subtracts from
+    # every later plan's budget for the life of the process (and can park the
+    # next run in the ledger's wait). Even the setup steps can fail — a
+    # read-only or quota-bound output directory trips the unlink and the open.
     handles = _Handles(feature_paths, mask, extra_layers)
-    env = rasterio.Env(
-        GDAL_CACHEMAX=plan.cachemax_bytes,
-        GDAL_NUM_THREADS=str(plan.gdal_threads),
-    )
-
-    def one(i):
-        return _predict_stripe(
-            handles.get(),
-            stripes[i][1],
-            target_transform,
-            feature_names,
-            mask_values,
-            mask_by_bounds,
-            extra_layers,
-            predict_block,
+    try:
+        log.info(
+            "%s: %d worker(s), %d rows/stripe, budget %.0f MiB (%s), reserved %.0f MiB",
+            label,
+            plan.workers,
+            plan.rows_per_stripe,
+            plan.memory_budget_bytes / 2**20,
+            plan.memory_source,
+            reservation.bytes_ / 2**20,
         )
 
-    part.unlink(missing_ok=True)
-    try:
+        with rasterio.open(target_path) as ref:
+            profile = ref.profile.copy()
+            target_transform = ref.transform
+        profile.update(dtype="uint16", count=1, nodata=0)
+        profile.update(rasterio_profile("uint16"))
+
+        stripes = _stripes(target_path, plan.rows_per_stripe)
+        milestones = {max(1, round(len(stripes) * q)) for q in (0.25, 0.5, 0.75, 1.0)}
+        env = rasterio.Env(
+            GDAL_CACHEMAX=plan.cachemax_bytes,
+            GDAL_NUM_THREADS=str(plan.gdal_threads),
+        )
+
+        def one(i):
+            return _predict_stripe(
+                handles.get(),
+                stripes[i][1],
+                target_transform,
+                feature_names,
+                mask_values,
+                mask_by_bounds,
+                extra_layers,
+                predict_block,
+            )
+
+        part.unlink(missing_ok=True)
         with single_thread_math(), env, rasterio.open(part, "w", **profile) as dst:
             done = 0
             for i, window in stripes:
@@ -374,7 +379,10 @@ def predict_windowed(
                     )
         os.replace(part, output_file)
     except BaseException:
-        part.unlink(missing_ok=True)
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:  # cleanup must not replace the failure that got us here
+            log.warning("Could not remove the partial output %s", part)
         raise
     finally:
         handles.close_all()

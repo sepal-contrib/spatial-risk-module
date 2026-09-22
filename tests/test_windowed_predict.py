@@ -15,6 +15,8 @@ from _inference_fixture import (  # noqa: E402
     read_raster,
 )
 
+from spatialrisk.gdal_env import INFERENCE_LEDGER  # noqa: E402
+
 
 def _design_info(model):
     """The model's patsy design info, rebuilt from its samples CSV as apply() does.
@@ -207,6 +209,37 @@ def test_output_is_atomic_and_a_failure_keeps_the_old_file(tmp_path):
     after, _ = read_raster(out)
     np.testing.assert_array_equal(after, before)
     assert not list(tmp_path.glob("*.part.tif"))
+    assert INFERENCE_LEDGER.snapshot() == []
+
+
+def test_the_ledger_is_released_on_every_path(tmp_path, monkeypatch):
+    """A run hands its reservation back whether it finishes, fails mid-walk or early.
+
+    A leaked reservation is unrecoverable: nothing but ``release`` removes it
+    from the ledger, so it subtracts from every later plan's budget for the
+    life of the process and can park the next run in ``_wait_until_fits``.
+    """
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    assert INFERENCE_LEDGER.snapshot() == []
+
+    _run_glm(tmp_path, ds, model, tmp_path / "ok.tif", workers=1)
+    assert INFERENCE_LEDGER.outstanding_bytes == 0
+    assert INFERENCE_LEDGER.outstanding_workers == 0
+    assert INFERENCE_LEDGER.snapshot() == []
+
+    # A failure between the reservation and the stripe walk — what a read-only
+    # or quota-bound output directory does to the setup steps.
+    def boom(*a, **k):
+        raise OSError("read-only output directory")
+
+    monkeypatch.setattr(wp, "_stripes", boom)
+    with pytest.raises(OSError, match="read-only"):
+        _run_glm(tmp_path, ds, model, tmp_path / "early.tif", workers=1)
+    assert INFERENCE_LEDGER.outstanding_bytes == 0
+    assert INFERENCE_LEDGER.snapshot() == []
 
 
 def test_every_opened_handle_is_closed(tmp_path, monkeypatch):
