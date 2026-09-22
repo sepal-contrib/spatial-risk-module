@@ -68,6 +68,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["tests"]
 addopts = "--strict-markers"
 markers = [
     "ui: mounts components through reacton/solara (needs the i18n warm-up + rc.close discipline)",
