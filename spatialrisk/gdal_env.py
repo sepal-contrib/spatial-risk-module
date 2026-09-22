@@ -519,6 +519,15 @@ def plan_inference(
       :func:`sampling_num_threads`;
     * the cache grows to hold every in-flight stripe of every input.
 
+    The shrink is a floor rather than a lever as the engine calls this:
+    :data:`INFERENCE_TARGET_STRIPE_ROWS` equals the
+    :data:`spatialrisk.raster_profile.BLOCK_SIZE` passed as ``tile_rows``, so
+    the starting height is already one tile row and ``while rows > tile_rows``
+    never runs. On a raster wide enough that one stripe overruns the budget
+    the policy therefore drops to one worker and hands it that stripe whole;
+    it never trades stripe height for fit. Shrinking only happens for a
+    caller with ``tile_rows`` below the target.
+
     ``cachemax_bytes`` is budgeted for only as the flat
     :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` subtracted from the memory budget
     above, never as the larger figure this returns, and it is not reserved on

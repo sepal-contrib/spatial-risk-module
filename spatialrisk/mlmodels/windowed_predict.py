@@ -457,7 +457,14 @@ def predict_windowed(
     ``predict_block(block_df, extras)`` receives the valid pixels of one stripe
     (float64 feature columns named as in ``feature_paths``) and the extra
     layers' values at those pixels, and returns probabilities in [0, 1] in the
-    same order. Output: uint16, 1..65535 (``far.misc.rescale``), 0 = nodata,
+    same order. With ``workers > 1`` it is called from several pool threads at
+    once, on different stripes, so it must be thread-safe: read-only use of
+    what it closes over is fine (a fitted estimator's ``predict_proba``,
+    patsy design info), mutating shared state is not. It must also not import
+    anything on first call -- an import on a pool thread is the loader-lock
+    inversion :func:`_warm_up_pool` describes, so whoever builds the closure
+    imports what it needs first, as the three ``apply`` bodies do.
+    Output: uint16, 1..65535 (``far.misc.rescale``), 0 = nodata,
     tiled + compressed per :func:`spatialrisk.raster_profile.rasterio_profile`.
 
     ``workers=None`` lets :func:`spatialrisk.gdal_env.plan_inference` choose

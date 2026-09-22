@@ -741,6 +741,11 @@ def test_the_engine_imports_nothing_at_call_time():
     from its ctypes callback; the rest queued on the import lock. Every import
     the engine needs is therefore resolved once, at module import, on the
     calling thread that has no pool yet.
+
+    Scope: the engine module only. A ``predict_block`` closure runs on the
+    same pool threads and is under the same rule, but its source is not
+    checked here -- each model's ``apply`` imports what its closure needs
+    before calling in (``predict_windowed``'s docstring states the contract).
     """
     import ast
     import inspect

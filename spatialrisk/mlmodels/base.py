@@ -292,6 +292,8 @@ class BaseRiskModel(BaseModel):
         dataset: Optional[Any] = None,
         mask: Optional[Union[str, Path]] = None,
         mask_value: Union[int, float, list] = 0,
+        *,
+        workers: Optional[int] = None,
     ) -> Path:
         """Generate a probability raster from a Dataset object.
 
@@ -310,6 +312,11 @@ class BaseRiskModel(BaseModel):
         mask_value : int, float, or list of int/float, optional
             Value(s) in the mask raster that identify pixels to suppress.
             Defaults to 0. Ignored when ``mask`` is None.
+        workers : int, optional
+            Stripe worker threads for
+            :func:`spatialrisk.mlmodels.windowed_predict.predict_windowed`.
+            None lets each predictor apply its own default (the resource
+            policy, except RF's serial one); 1 runs on the calling thread.
 
         Returns:
         --------

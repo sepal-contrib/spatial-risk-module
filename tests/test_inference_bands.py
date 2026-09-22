@@ -1,9 +1,13 @@
-"""The ML predictors stream tile-aligned bands with BLAS/OpenMP on one thread.
+"""The ML predictors stream tile-aligned stripes with BLAS/OpenMP on one thread.
 
-The three ``apply`` bodies share the same block loop, so the wiring is
-checked once for real on the cheapest model (GLM) and by a source guard on
-all three: each must ask forestatrisk for ``PREDICT_BAND_ROWS`` bands and
-run its loop inside ``single_thread_math``.
+The block loop the three ``apply`` bodies used to share now lives in
+:mod:`spatialrisk.mlmodels.windowed_predict`, which also owns the stripe
+plan, the thread pinning and the writing. So the wiring is checked once for
+real on the cheapest model (GLM) -- default stripes are ``PREDICT_BAND_ROWS``
+tall, the run is pinned to one math thread, and the worker count changes no
+pixel -- and by a source guard on all three predictors: each must call
+``predict_windowed`` and must contain no loop of its own, i.e. no
+``makeblock``, no ``single_thread_math`` and no ``dst.write``.
 """
 
 from pathlib import Path
