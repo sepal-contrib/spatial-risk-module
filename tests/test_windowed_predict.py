@@ -1,6 +1,8 @@
 # tests/test_windowed_predict.py
 """The shared stripe engine behind GLM/RF/iCAR apply()."""
 import json
+import logging
+import threading
 
 import numpy as np
 import pytest
@@ -301,3 +303,387 @@ def test_the_run_is_pinned_to_one_blas_thread(tmp_path):
     )
     if seen:
         assert set(seen) == {1}
+
+
+# --------------------------------------------------------------------------- #
+# the pool: worker threads, one bounded writer
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("workers", [2, 4])
+def test_pooled_engine_reproduces_the_glm_golden(tmp_path, golden, workers):
+    """Every worker count writes the serial engine's raster, pixel for pixel."""
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    out = _run_glm(
+        tmp_path,
+        ds,
+        model,
+        tmp_path / f"p{workers}.tif",
+        workers=workers,
+        rows_per_stripe=64,  # 11 stripes: more stripes than workers, real contention
+    )
+    arr, meta = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["glm"][0])
+    assert meta == golden["glm"][1]
+
+
+def test_pooled_engine_reproduces_the_icar_golden(tmp_path, golden):
+    """Extra layers and a bounds-read mask are stripe-local, so the pool is safe."""
+    from patsy.highlevel import build_design_matrices
+
+    from spatialrisk.mlmodels.windowed_predict import ExtraLayer, predict_windowed
+
+    ds = build_dataset(tmp_path)
+    model = build_icar(tmp_path, ds)
+    betas = model._ml_model["betas"]
+
+    def predict_block(block_df, extras):
+        (x,) = build_design_matrices([model._x_design_info], block_df, NA_action="drop")
+        x = np.asarray(x)
+        return 1.0 / (1.0 + np.exp(-(x @ betas[: x.shape[1]] + extras["rho"])))
+
+    out = predict_windowed(
+        ds.target.path,
+        {v.name: v.path for v in ds.features},
+        predict_block,
+        tmp_path / "i4.tif",
+        mask=ds.mask_path,
+        mask_by_bounds=True,
+        extra_layers={"rho": ExtraLayer(ds.rho_path, "bilinear")},
+        workers=4,
+        rows_per_stripe=64,
+        n_design_cols=3,
+    )
+    arr, meta = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["icar"][0])
+    assert meta == golden["icar"][1]
+
+
+def test_pool_runs_predict_block_on_worker_threads_and_closes_their_handles(
+    tmp_path, monkeypatch
+):
+    """Stripes are predicted on named worker threads, each with its own handles.
+
+    The first stripe holds its worker until a second thread shows up, so a run
+    that quietly stayed on one thread cannot pass by scheduling everything
+    before the first task returns.
+    """
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    predict = _glm_closure(model)
+    lock = threading.Lock()
+    names, started, opened = set(), [], []
+    second_thread = threading.Event()
+    real_open = wp.rasterio.open
+
+    def spy_open(*a, **k):
+        handle = real_open(*a, **k)
+        if k.get("mode", a[1] if len(a) > 1 else "r") == "r":
+            with lock:
+                opened.append((threading.current_thread().name, handle))
+        return handle
+
+    monkeypatch.setattr(wp.rasterio, "open", spy_open)
+
+    def spy(block_df, extras):
+        with lock:
+            names.add(threading.current_thread().name)
+            first = not started
+            started.append(1)
+            if len(names) > 1:
+                second_thread.set()
+        if first:
+            second_thread.wait(10)  # hold worker 1: stripe 2 needs another thread
+        return predict(block_df, extras)
+
+    wp.predict_windowed(
+        ds.target.path,
+        {v.name: v.path for v in ds.features},
+        spy,
+        tmp_path / "t.tif",
+        mask=ds.mask_path,
+        workers=3,
+        rows_per_stripe=64,
+        n_design_cols=3,
+    )
+    assert len(names) > 1 and all(n.startswith("predict") for n in names)
+    worker_threads = {n for n, _ in opened if n.startswith("predict")}
+    worker_handles = [h for n, h in opened if n.startswith("predict")]
+    assert worker_handles and all(h.closed for h in worker_handles)
+    # 4 handles (3 features + the mask) opened once per worker thread that ran
+    assert len(worker_handles) == 4 * len(worker_threads)
+
+
+def test_a_worker_failure_cancels_the_run_and_cleans_up(tmp_path, monkeypatch):
+    """One failed stripe ends the run: the queued stripes are cancelled, never run.
+
+    The very first stripe fails, before any real work, while the others take
+    milliseconds of raster reading; the writer therefore meets the failure
+    while stripes it looked ahead to are still queued, and those must be
+    cancelled instead of quietly finishing the raster the run is abandoning.
+    """
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    out = tmp_path / "fail.tif"
+    _run_glm(tmp_path, ds, model, out, workers=1)
+    before, _ = read_raster(out)
+    futures, started = [], []
+    lock = threading.Lock()
+    real_predict_stripe = wp._predict_stripe
+
+    class RecordingPool(wp.ThreadPoolExecutor):
+        """A pool that keeps every future it hands back to the writer."""
+
+        def submit(self, fn, *args, **kwargs):
+            """Record the future so the test can read its final state."""
+            future = super().submit(fn, *args, **kwargs)
+            with lock:
+                futures.append(future)
+            return future
+
+    def spy_stripe(handles, window, *args, **kwargs):
+        with lock:
+            started.append(int(window.row_off))
+        if window.row_off == 0:
+            raise RuntimeError("stripe zero died")
+        return real_predict_stripe(handles, window, *args, **kwargs)
+
+    monkeypatch.setattr(wp, "ThreadPoolExecutor", RecordingPool)
+    monkeypatch.setattr(wp, "_predict_stripe", spy_stripe)
+
+    with pytest.raises(RuntimeError, match="stripe zero died"):
+        wp.predict_windowed(
+            ds.target.path,
+            {v.name: v.path for v in ds.features},
+            _glm_closure(model),
+            out,
+            workers=2,
+            rows_per_stripe=64,  # 11 stripes, 4 of them submitted up front
+            n_design_cols=3,
+        )
+    cancelled = [f for f in futures if f.cancelled()]
+    assert cancelled  # the stripes still queued behind the failure
+    assert len(started) < 11  # and they never ran
+    after, _ = read_raster(out)
+    np.testing.assert_array_equal(after, before)
+    assert not list(tmp_path.glob("*.part.tif"))
+    assert INFERENCE_LEDGER.snapshot() == []
+
+
+def test_two_concurrent_runs_share_one_budget_and_the_second_waits(
+    tmp_path, golden, monkeypatch
+):
+    """The 2026-09-22 SEPAL incident: GLM + RF at once must queue, not die.
+
+    The budget is faked so that exactly one run's reservation fits. The second
+    run must not read a stripe until the first has released, and both outputs
+    must still be golden.
+    """
+    from spatialrisk import gdal_env
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    predict = _glm_closure(model)
+    # One 256-row stripe of the 300 px wide fixture (3 features of 1, 1 and 4
+    # bytes, a mask, no extras): a two-worker run reserves two of these, and
+    # the budget below holds two and a half of them — one run, not two.
+    stripe = gdal_env.inference_working_set(
+        300,
+        256,
+        n_features=3,
+        feature_itemsizes=[1, 1, 4],
+        n_design_cols=3,
+        with_mask=True,
+        with_extra=False,
+    )
+    held = []
+    ledger = gdal_env.ResourceLedger(
+        budget_fn=lambda: int(2.5 * stripe) - held[0].outstanding_bytes
+    )
+    held.append(ledger)
+    monkeypatch.setattr(wp, "INFERENCE_LEDGER", ledger)
+
+    parked = threading.Event()
+
+    class _Parked(logging.Handler):
+        """Fires ``parked`` when the ledger reports a run waiting for memory."""
+
+        def emit(self, record):
+            """Watch one log line."""
+            if "waiting for memory" in record.getMessage():
+                parked.set()
+
+    second_log = logging.Logger("second-run")  # unregistered: nothing else sees it
+    second_log.addHandler(_Parked())
+
+    events, errors = [], []
+    ev_lock = threading.Lock()
+    first_in_body = threading.Event()
+    release_first = threading.Event()
+
+    def slow_first(block_df, extras):
+        with ev_lock:
+            events.append("first-block")
+        first_in_body.set()
+        assert release_first.wait(30)
+        return predict(block_df, extras)
+
+    def second(block_df, extras):
+        with ev_lock:
+            events.append("second-block")
+        return predict(block_df, extras)
+
+    def run(*args, **kwargs):
+        try:
+            wp.predict_windowed(*args, **kwargs)
+        except BaseException as exc:  # surfaced in the main thread below
+            errors.append(exc)
+
+    feats = {v.name: v.path for v in ds.features}
+    out1, out2 = tmp_path / "one.tif", tmp_path / "two.tif"
+    common = dict(mask=ds.mask_path, workers=2, rows_per_stripe=256, n_design_cols=3)
+    t1 = threading.Thread(
+        target=run,
+        args=(ds.target.path, feats, slow_first, out1),
+        kwargs=dict(label="one", **common),
+    )
+    t2 = threading.Thread(
+        target=run,
+        args=(ds.target.path, feats, second, out2),
+        kwargs=dict(label="two", log=second_log, **common),
+    )
+    t1.start()
+    assert first_in_body.wait(30)
+    t2.start()
+    assert parked.wait(30)  # the second run is queued on the ledger, not running
+    with ev_lock:
+        assert "second-block" not in events
+    assert [r.label for r in ledger.snapshot()] == ["one"]
+    release_first.set()
+    t1.join(60)
+    t2.join(60)
+    assert not t1.is_alive() and not t2.is_alive()
+    assert errors == []
+    assert events.index("second-block") > events.index("first-block")
+    assert ledger.snapshot() == []
+    for out in (out1, out2):
+        arr, _ = read_raster(out)
+        np.testing.assert_array_equal(arr, golden["glm"][0])
+
+
+def test_look_ahead_is_bounded_to_twice_the_workers(tmp_path, golden, monkeypatch):
+    """The writer keeps at most 2 x workers stripes submitted ahead of itself."""
+    from spatialrisk.mlmodels import windowed_predict as wp
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    predict = _glm_closure(model)
+    workers = 2
+    lock = threading.Lock()
+    submits = [0]
+    submitted = threading.Semaphore(0)
+    entered = threading.Semaphore(0)
+    release = threading.Event()
+    in_flight, peak, starts = [0], [0], [0]
+
+    class CountingPool(wp.ThreadPoolExecutor):
+        """A pool that counts what the writer submits."""
+
+        def submit(self, fn, *args, **kwargs):
+            """Count the submission before it reaches the pool."""
+            with lock:
+                submits[0] += 1
+            submitted.release()
+            return super().submit(fn, *args, **kwargs)
+
+    monkeypatch.setattr(wp, "ThreadPoolExecutor", CountingPool)
+
+    def blocking(block_df, extras):
+        with lock:
+            nth = starts[0]
+            starts[0] += 1
+            in_flight[0] += 1
+            peak[0] = max(peak[0], in_flight[0])
+        if nth < workers:  # park every worker; the writer can make no progress
+            entered.release()
+            assert release.wait(30)
+        with lock:
+            in_flight[0] -= 1
+        return predict(block_df, extras)
+
+    out = tmp_path / "la.tif"
+    errors = []
+
+    def run():
+        try:
+            wp.predict_windowed(
+                ds.target.path,
+                {v.name: v.path for v in ds.features},
+                blocking,
+                out,
+                mask=ds.mask_path,
+                workers=workers,
+                rows_per_stripe=64,
+                n_design_cols=3,
+            )
+        except BaseException as exc:  # surfaced in the main thread below
+            errors.append(exc)
+
+    runner = threading.Thread(target=run)
+    runner.start()
+    try:
+        for _ in range(2 * workers):
+            assert submitted.acquire(timeout=30)  # the look-ahead fills up
+        for _ in range(workers):
+            assert entered.acquire(timeout=30)  # every worker is parked
+        with lock:
+            # Nothing can progress now, so this is the whole look-ahead.
+            assert submits[0] == 2 * workers
+    finally:
+        release.set()
+        runner.join(60)
+    assert not runner.is_alive()
+    assert errors == []
+    assert peak[0] <= workers  # never more predictions at once than workers
+    arr, _ = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["glm"][0])
+
+
+def test_pooled_workers_predict_with_one_math_thread_each(tmp_path):
+    """Every worker thread runs predict_block with BLAS and OpenMP pinned to one.
+
+    ``single_thread_math()`` on the calling thread does not carry over to the
+    pool: libgomp keeps its thread count per thread, so an unpinned worker
+    would run scikit-learn's OpenMP regions on every core — ``workers`` times
+    over, the oversubscription the pin exists to prevent.
+    """
+    from threadpoolctl import threadpool_info
+
+    from spatialrisk.mlmodels.windowed_predict import predict_windowed
+
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    predict = _glm_closure(model)
+    lock = threading.Lock()
+    seen = set()
+
+    def spy(block_df, extras):
+        with lock:
+            seen.update((i["user_api"], i["num_threads"]) for i in threadpool_info())
+        return predict(block_df, extras)
+
+    predict_windowed(
+        ds.target.path,
+        {v.name: v.path for v in ds.features},
+        spy,
+        tmp_path / "pin.tif",
+        mask=ds.mask_path,
+        workers=2,
+        rows_per_stripe=64,
+        n_design_cols=3,
+    )
+    assert seen and {n for _, n in seen} == {1}

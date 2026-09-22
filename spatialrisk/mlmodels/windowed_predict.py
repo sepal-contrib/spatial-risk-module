@@ -20,6 +20,7 @@ so a change here must be mirrored there and re-pinned by the memory probe.
 import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Sequence, Union
@@ -29,6 +30,7 @@ import pandas as pd
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.windows import Window
+from threadpoolctl import threadpool_limits
 
 from spatialrisk.gdal_env import (
     INFERENCE_LEDGER,
@@ -105,9 +107,16 @@ class _Handles:
         return loc.features, loc.mask, loc.extra
 
     def close_all(self):
-        """Close every handle any thread opened. Called once, in the run's finally."""
+        """Close every handle any thread opened. Called once, in the run's finally.
+
+        The per-thread slots go with them: a fresh ``threading.local`` drops
+        every thread's references at once, so nothing can be handed a closed
+        handle afterwards (only the run's ``finally`` calls this, once the
+        pool has shut down and no thread is inside :meth:`get`).
+        """
         with self._lock:
             handles, self._all = self._all, []
+            self._local = threading.local()
         for h in handles:
             try:
                 h.close()
@@ -267,6 +276,87 @@ def _plan_and_reserve(
     )
 
 
+def _log_progress(done, total, milestones, log):
+    """Log a milestone line. Only the writer thread ever calls this."""
+    if done in milestones:
+        log.info(
+            "Prediction %d%% (%d/%d stripes)",
+            round(100 * done / total),
+            done,
+            total,
+        )
+
+
+def _write_serial(dst, stripes, one, milestones, log):
+    """Read, predict and write every stripe in order on the calling thread."""
+    for done, (i, window) in enumerate(stripes, start=1):
+        dst.write(one(i), 1, window=window)
+        _log_progress(done, len(stripes), milestones, log)
+
+
+def _pin_worker_math():
+    """Pin one worker thread's math pools to a single thread.
+
+    :func:`spatialrisk.parallel.single_thread_math` around the run covers the
+    process-wide BLAS setting, but not OpenMP: libgomp keeps its thread count
+    per thread, so a worker would run scikit-learn's OpenMP regions on every
+    core, ``workers`` times over — the oversubscription the pin exists to
+    prevent. Applied once per worker thread and never restored: the thread
+    dies with the pool, and the caller's ``single_thread_math`` puts the
+    process-wide settings back when the run ends.
+    """
+    threadpool_limits(limits=1)
+
+
+def _write_pooled(dst, stripes, one, workers, milestones, log):
+    """Predict stripes on a pool and write them from this thread, in order.
+
+    Stripes are submitted in order with at most ``2 x workers`` outstanding,
+    which keeps the pool fed while the writer is blocked on the oldest one
+    and still bounds the memory: ``workers`` stripes are being read and
+    predicted (the working set
+    :func:`spatialrisk.gdal_env.plan_inference` budgets per worker) and at
+    most ``workers`` more are finished uint16 stripes queued for the writer.
+    Each future is awaited in submission order and written to its own
+    window, so the order stripes happen to finish in changes no pixel.
+
+    The first failure wins: the pending futures are cancelled and the ones
+    already running are awaited (a running task still holds its thread's
+    handles, which the caller closes once this returns) before the original
+    exception is re-raised.
+    """
+    total = len(stripes)
+    look_ahead = 2 * workers
+    with ThreadPoolExecutor(
+        max_workers=workers,
+        thread_name_prefix="predict",
+        initializer=_pin_worker_math,
+    ) as pool:
+        pending = []  # (window, future), in submission order
+        next_i = 0
+        done = 0
+        try:
+            while done < total:
+                while next_i < total and len(pending) < look_ahead:
+                    i, window = stripes[next_i]
+                    pending.append((window, pool.submit(one, i)))
+                    next_i += 1
+                window, future = pending.pop(0)
+                dst.write(future.result(), 1, window=window)
+                done += 1
+                _log_progress(done, total, milestones, log)
+        except BaseException:
+            for _, future in pending:
+                future.cancel()
+            for _, future in pending:
+                if not future.cancelled():
+                    try:
+                        future.result()
+                    except BaseException:  # the first failure is the one that wins
+                        pass
+            raise
+
+
 def predict_windowed(
     target_path: PathLike,
     feature_paths: Dict[str, PathLike],
@@ -299,7 +389,11 @@ def predict_windowed(
     tiled + compressed per :func:`spatialrisk.raster_profile.rasterio_profile`.
 
     ``workers=None`` lets :func:`spatialrisk.gdal_env.plan_inference` choose
-    the pool size and stripe height; ``workers=1`` runs on the calling thread.
+    the pool size and stripe height; ``workers=1`` reads, predicts and writes
+    on the calling thread. More workers move the reads and ``predict_block``
+    to a thread pool (its own dataset handles per thread, at most
+    ``2 x workers`` stripes in flight) while the calling thread stays the
+    only writer and writes them in stripe order, which changes no pixel.
     The file is written as ``<output>.part.tif`` and renamed on success; on
     failure the partial file is removed and a previous output is untouched.
     """
@@ -366,17 +460,10 @@ def predict_windowed(
 
         part.unlink(missing_ok=True)
         with single_thread_math(), env, rasterio.open(part, "w", **profile) as dst:
-            done = 0
-            for i, window in stripes:
-                dst.write(one(i), 1, window=window)
-                done += 1
-                if done in milestones:
-                    log.info(
-                        "Prediction %d%% (%d/%d stripes)",
-                        round(100 * done / len(stripes)),
-                        done,
-                        len(stripes),
-                    )
+            if plan.workers <= 1:
+                _write_serial(dst, stripes, one, milestones, log)
+            else:
+                _write_pooled(dst, stripes, one, plan.workers, milestones, log)
         os.replace(part, output_file)
     except BaseException:
         try:
