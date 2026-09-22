@@ -400,3 +400,186 @@ def plan_sampling(
         memory_source=memory_source,
         width_bytes_per_row=int(width_bytes_per_row),
     )
+
+
+# --------------------------------------------------------------------------- #
+# inference stripe plan
+# --------------------------------------------------------------------------- #
+INFERENCE_WORKERS_ENV = "SPATIAL_RISK_INFERENCE_WORKERS"
+"""Override for the worker count chosen by :func:`plan_inference` (min 1)."""
+
+INFERENCE_MEMORY_FRACTION = SAMPLING_MEMORY_FRACTION
+INFERENCE_TARGET_STRIPE_ROWS = 256
+"""Default stripe height for prediction = the output tile height
+(:data:`spatialrisk.parallel.PREDICT_BAND_ROWS`), so a stripe write covers
+whole output tiles."""
+
+
+class InferencePlan:
+    """What :func:`plan_inference` decided, and the readings it decided from."""
+
+    __slots__ = (
+        "rows_per_stripe",
+        "workers",
+        "gdal_threads",
+        "cachemax_bytes",
+        "by_cores",
+        "by_memory",
+        "stripe_bytes",
+        "memory_budget_bytes",
+        "free_bytes",
+        "memory_source",
+    )
+
+    def __init__(self, **kw):
+        """Take every slot as a keyword; all of them are required."""
+        for name in self.__slots__:
+            setattr(self, name, kw[name])
+
+    def __repr__(self):
+        """Every field, for logs and bench records."""
+        fields = ", ".join(f"{n}={getattr(self, n)!r}" for n in self.__slots__)
+        return f"InferencePlan({fields})"
+
+
+def inference_working_set(
+    width: int,
+    rows: int,
+    *,
+    n_features: int,
+    feature_itemsizes,
+    n_design_cols: int,
+    with_mask: bool,
+    with_extra: bool,
+) -> int:
+    """Bytes one prediction stripe holds at its peak, per the engine's body.
+
+    Per pixel: each feature's decoded band plus its float64 column, the one
+    DataFrame of float64 columns, the patsy design matrix, the probability
+    vector and its rescaled copy, the uint16 output stripe, the mask byte and
+    the float64 extra layer (iCAR rho). See the spec §4; pinned by the memory
+    probe in ``tests/test_inference_plan.py``.
+    """
+    per_px = (
+        sum(int(s) for s in feature_itemsizes)
+        + n_features * 8
+        + n_features * 8
+        + n_design_cols * 8
+        + 2 * 8
+        + 2
+        + (1 if with_mask else 0)
+        + (8 if with_extra else 0)
+    )
+    return int(width) * int(rows) * per_px
+
+
+def plan_inference(
+    *,
+    width: int,
+    tile_rows: int,
+    n_features: int,
+    feature_itemsizes,
+    n_design_cols: int,
+    with_mask: bool,
+    with_extra: bool,
+    cores: Optional[int] = None,
+    free_bytes: Optional[int] = None,
+    rows_per_stripe: Optional[int] = None,
+    gdal_cache_bytes: Optional[int] = None,
+    reserved_bytes: int = 0,
+    reserved_workers: int = 0,
+) -> InferencePlan:
+    """Choose stripe height, worker count and GDAL budget for one prediction.
+
+    Same policy as :func:`plan_sampling`, with the inference working set.
+    ``reserved_bytes`` / ``reserved_workers`` are what other runs in this
+    process already hold (:class:`ResourceLedger`); they come off the memory
+    and core budgets first, so a second concurrent prediction plans for what
+    is left instead of for the whole machine (the 2026-09-22 SEPAL kernel
+    death: GLM + RF launched together).
+
+    * ``workers = min(half the affinity cores - reserved_workers,
+      budget // stripe_bytes)``, min 1;
+    * the budget is :data:`INFERENCE_MEMORY_FRACTION` of the free memory minus
+      GDAL's block cache; if one worker does not fit the stripe shrinks in
+      whole tile rows, never below one, and the job runs serially;
+    * pooled workers get one GDAL decode thread each, a single worker keeps
+      :func:`sampling_num_threads`;
+    * the cache grows to hold every in-flight stripe of every input.
+
+    ``SPATIAL_RISK_INFERENCE_WORKERS`` overrides the worker count (min 1). An
+    explicit ``rows_per_stripe`` is honoured as given and never shrunk.
+    """
+    if cores is None:
+        cores = _available_cores()
+    if free_bytes is None:
+        free_bytes, memory_source = free_memory_bytes()
+    else:
+        memory_source = "given"
+    if gdal_cache_bytes is None:
+        gdal_cache_bytes = DEFAULT_SAMPLING_CACHEMAX_BYTES
+
+    tile_rows = max(1, int(tile_rows))
+    if rows_per_stripe is not None:
+        rows = int(rows_per_stripe)
+        if rows < 1:
+            raise ValueError("rows_per_stripe must be >= 1.")
+        fixed_rows = True
+    else:
+        rows = (
+            tile_rows
+            if tile_rows >= INFERENCE_TARGET_STRIPE_ROWS
+            else (INFERENCE_TARGET_STRIPE_ROWS // tile_rows) * tile_rows
+        )
+        fixed_rows = False
+
+    def _ws(r):
+        return inference_working_set(
+            width,
+            r,
+            n_features=n_features,
+            feature_itemsizes=feature_itemsizes,
+            n_design_cols=n_design_cols,
+            with_mask=with_mask,
+            with_extra=with_extra,
+        )
+
+    by_cores = max(1, int(cores) // 2 - int(reserved_workers))
+    budget = max(
+        0,
+        int(free_bytes * INFERENCE_MEMORY_FRACTION)
+        - gdal_cache_bytes
+        - int(reserved_bytes),
+    )
+    stripe_bytes = _ws(rows)
+    by_memory = budget // stripe_bytes
+    if by_memory < 1 and not fixed_rows:
+        while rows > tile_rows and _ws(rows) > budget:
+            rows = max(tile_rows, ((rows // tile_rows) - 1) * tile_rows)
+        stripe_bytes = _ws(rows)
+        by_memory = budget // stripe_bytes
+    workers = max(1, min(by_cores, by_memory))
+
+    env_val = os.environ.get(INFERENCE_WORKERS_ENV)
+    if env_val:
+        workers = max(1, int(env_val))
+
+    raw_row = int(width) * (
+        sum(int(s) for s in feature_itemsizes)
+        + (1 if with_mask else 0)
+        + (4 if with_extra else 0)
+    )
+    cachemax = max(gdal_cache_bytes, workers * 2 * rows * raw_row)
+    gdal_threads = sampling_num_threads() if workers == 1 else 1
+    return InferencePlan(
+        rows_per_stripe=rows,
+        workers=workers,
+        gdal_threads=gdal_threads,
+        cachemax_bytes=int(cachemax),
+        by_cores=by_cores,
+        by_memory=int(max(0, by_memory)),
+        stripe_bytes=int(stripe_bytes),
+        memory_budget_bytes=int(budget),
+        free_bytes=int(free_bytes),
+        memory_source=memory_source,
+    )
