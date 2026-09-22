@@ -486,6 +486,22 @@ def run_stage(cfg: Dict) -> Dict:
     }
 
 
+def _as_text(captured) -> str:
+    """Decode whatever a child process had written, however it comes back.
+
+    ``subprocess.run(text=True)`` decodes the output it *returns*, but on
+    ``TimeoutExpired`` it attaches whatever it had already read as raw
+    ``bytes`` (checked on CPython 3.11.10). A stage that printed something
+    before wedging would otherwise turn the timeout report into a
+    ``TypeError`` and bury the one thing worth reading.
+    """
+    if captured is None:
+        return ""
+    if isinstance(captured, bytes):
+        return captured.decode("utf-8", "replace")
+    return captured
+
+
 def spawn_stage(cfg: Dict) -> Dict:
     """Run ``run_stage(cfg)`` in a fresh interpreter and parse its JSON line.
 
@@ -511,7 +527,7 @@ def spawn_stage(cfg: Dict) -> Dict:
         raise RuntimeError(
             f"stage {cfg['stage']!r} (workers={cfg.get('workers')}) did not finish "
             f"in {STAGE_TIMEOUT_S} s and was killed; its stderr tail:\n"
-            + (exc.stderr or "")[-2000:]
+            + _as_text(exc.stderr)[-2000:]
         ) from exc
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
@@ -1012,6 +1028,27 @@ def test_inputs_from_manifest_rejects_what_it_cannot_resolve():
     # half an override would otherwise be ignored and the dataset used instead
     with pytest.raises(ValueError, match="go together"):
         inputs_from_manifest(_manifest(), Path("/proj"), feature_vars=["altitude"])
+
+
+def test_spawn_stage_reports_a_wedged_stage_instead_of_crashing(monkeypatch):
+    """A killed stage raises with its name and what it printed, not a TypeError.
+
+    ``subprocess.run(text=True)`` hands the captured output back as raw bytes
+    on ``TimeoutExpired``, so the handler has to decode it itself.
+    """
+    assert _as_text(None) == ""
+    assert _as_text("already text") == "already text"
+    assert _as_text(b"\xff") == "\ufffd"  # undecodable bytes must not raise
+
+    def fake_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"], stderr=b"partial\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as raised:
+        spawn_stage({"stage": "rf", "workers": 2})
+    message = str(raised.value)
+    assert "'rf'" in message and "workers=2" in message
+    assert "partial" in message and str(STAGE_TIMEOUT_S) in message
 
 
 def test_digests_agree_compares_within_one_model():
