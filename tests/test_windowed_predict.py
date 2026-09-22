@@ -687,3 +687,26 @@ def test_pooled_workers_predict_with_one_math_thread_each(tmp_path):
         n_design_cols=3,
     )
     assert seen and {n for _, n in seen} == {1}
+
+
+def test_rf_apply_pins_n_jobs_per_worker_and_restores_it(tmp_path):
+    """RF.apply() pins the estimator to one joblib worker per pooled run."""
+    from _inference_fixture import build_rf
+
+    ds = build_dataset(tmp_path)
+    model = build_rf(tmp_path, ds)
+    model._ml_model.n_jobs = -1
+    seen = []
+    real = model._ml_model.predict_proba
+
+    def spy(x):
+        seen.append(model._ml_model.n_jobs)
+        return real(x)
+
+    model._ml_model.predict_proba = spy
+    model.apply(tmp_path / "rf4.tif", ds, ds.mask_path, 0, workers=4)
+    assert set(seen) == {1}
+    assert model._ml_model.n_jobs == -1
+    seen.clear()
+    model.apply(tmp_path / "rf1.tif", ds, ds.mask_path, 0, workers=1)
+    assert set(seen) == {-1}
