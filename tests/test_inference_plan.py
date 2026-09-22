@@ -1,7 +1,14 @@
 # tests/test_inference_plan.py
 """The inference stripe plan: workers from cores and memory, stripe shrink floor."""
+import json
+import os
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
+
+import pytest
 
 from spatialrisk import gdal_env
 from spatialrisk.gdal_env import (
@@ -248,3 +255,57 @@ def test_plan_and_reserve_replans_against_what_is_left(monkeypatch):
     assert led.outstanding_bytes == r1.bytes_ + r2.bytes_
     led.release(r1)
     led.release(r2)
+
+
+# --------------------------------------------------------------------------- #
+# Memory probe — pins the working-set model against a real GLM apply()
+# --------------------------------------------------------------------------- #
+def _spawn_env():
+    """Pin PYTHONPATH to this checkout so the probe never imports a different one."""
+    repo = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+@pytest.mark.slow
+def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path):
+    """peak(4 workers) - peak(1 worker) <= 3 x the plan's stripe working set.
+
+    The policy sizes the pool as ``budget // stripe_bytes``, so the estimate
+    must be at least what one extra worker really adds. Measured in fresh
+    processes (VmHWM) on a 4 x 3000x3000 float32 stack, mirroring
+    ``tests/test_sampling_pool.py``'s sampling-side probe.
+    """
+    probe = Path(__file__).resolve().parents[1] / "benchmarks" / "_inference_probe.py"
+
+    def run(workers):
+        d = tmp_path / f"w{workers}"
+        d.mkdir()
+        out = subprocess.run(
+            [sys.executable, str(probe), str(d), str(workers)],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=_spawn_env(),
+        )
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    one, four = run(1), run(4)
+    plan = plan_inference(
+        width=3000,
+        tile_rows=256,
+        n_features=4,
+        feature_itemsizes=[4, 4, 4, 4],
+        n_design_cols=5,
+        with_mask=False,
+        with_extra=False,
+        cores=8,
+        free_bytes=64 * GiB,
+        rows_per_stripe=256,
+    )
+    extra_bytes = (four["peak_kib"] - one["peak_kib"]) * 1024
+    assert extra_bytes <= 3 * plan.stripe_bytes, (
+        f"one={one['peak_kib']} KiB four={four['peak_kib']} KiB "
+        f"stripe={plan.stripe_bytes / 1024:.0f} KiB"
+    )
