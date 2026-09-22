@@ -1,13 +1,17 @@
-"""Benchmark the ML predictors' ``apply``: 128-row bands vs tile-aligned bands.
+"""Benchmark the ML predictors' ``apply``: serial vs pooled stripe engine.
 
 Runs the pre-optimisation block loop (``original``, inlined below verbatim:
-forestatrisk's default 128-row bands, BLAS threads left to OpenBLAS) and the
-current ``apply`` (``current``: 256-row bands aligned to the output tiles,
-BLAS pinned to one thread) on the same feature stack and the same fitted
-model, each in a fresh subprocess, and reports wall clock, CPU time
-(user + system) and peak RSS. Fitting happens before the clock starts. Both
-rasters are hashed and compared so a speed-up that changes results is
-reported as a failure, not a win.
+forestatrisk's default 128-row bands, BLAS threads left to OpenBLAS), the
+engine's serial path (``current``: ``apply(workers=1)``, 256-row bands
+aligned to the output tiles, BLAS pinned to one thread) and the engine's
+threaded pool (``pool``: ``apply(workers=N)``, ``N`` from ``--workers`` or
+the resource policy when unset) on the same feature stack and the same
+fitted model, each in a fresh subprocess, and reports wall clock, CPU time
+(user + system) and peak RSS. The pre-engine loop no longer exists in
+``apply`` itself; the golden tests prove the engine's serial path equals it,
+which is why ``current`` stands in for it here. Fitting happens before the
+clock starts. All rasters are hashed and compared so a speed-up that changes
+results is reported as a failure, not a win.
 
 A synthetic stack is written to a temporary directory: ``--layers`` tiled
 float32 GeoTIFFs of ``--size`` pixels with nodata holes, plus a uint8 target.
@@ -30,7 +34,7 @@ import tempfile
 import time
 from pathlib import Path
 
-IMPLS = ("original", "current")
+IMPLS = ("original", "current", "pool")
 
 # Measure the checkout this file lives in, not whichever one the editable
 # install points at: a script puts its own directory on sys.path, so without
@@ -188,8 +192,10 @@ def _worker(args) -> dict:
         t0 = time.perf_counter()
         if args.impl == "original":
             _original_apply(model, ds, pred)
+        elif args.impl == "current":
+            model.apply(output_file=pred, workers=1)
         else:
-            model.apply(output_file=pred)
+            model.apply(output_file=pred, workers=args.workers)
         wall = time.perf_counter() - t0
         cpu = _cpu_s() - base_cpu
         peak = _peak_mib()
@@ -208,6 +214,7 @@ def _worker(args) -> dict:
         "setup_peak_mib": base_mib,
         "blocks": blocks,
         "digest": digest,
+        "workers": args.workers,
     }
 
 
@@ -260,7 +267,7 @@ def _write_synthetic(tmp, size, layers, seed):
 
 
 def main():
-    """Parse arguments, build the fixture, run both implementations."""
+    """Parse arguments, build the fixture, run the requested implementations."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -272,6 +279,12 @@ def main():
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--impls", default=",".join(IMPLS))
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="pool workers (default: the resource policy)",
+    )
     # Internal subprocess entry point.
     ap.add_argument("--worker", choices=IMPLS, dest="impl")
     ap.add_argument("--rasters", nargs="+", help=argparse.SUPPRESS)
@@ -296,6 +309,8 @@ def main():
         "--rasters",
         *args.rasters,
     ]
+    if args.workers is not None:
+        common += ["--workers", str(args.workers)]
     rows = []
     for impl in args.impls.split(","):
         for _ in range(args.repeat):
@@ -308,15 +323,16 @@ def main():
         f"{os.cpu_count()} cpus (setup peak, i.e. imports + fit, in its own column)"
     )
     hdr = (
-        f"{'impl':<10} {'wall s':>8} {'cpu s':>8} {'peak MiB':>10} "
+        f"{'impl':<10} {'workers':>7} {'wall s':>8} {'cpu s':>8} {'peak MiB':>10} "
         f"{'setup MiB':>10} {'blocks':>10}  digest"
     )
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
         print(
-            f"{r['impl']:<10} {r['wall_s']:>8.2f} {r['cpu_s']:>8.2f} "
-            f"{r['peak_mib']:>10.0f} {r['setup_peak_mib']:>10.0f} "
+            f"{r['impl']:<10} {str(r['workers']):>7} {r['wall_s']:>8.2f} "
+            f"{r['cpu_s']:>8.2f} {r['peak_mib']:>10.0f} "
+            f"{r['setup_peak_mib']:>10.0f} "
             f"{str(tuple(r['blocks'])):>10}  {r['digest']}"
         )
     digests = {r["digest"] for r in rows}
