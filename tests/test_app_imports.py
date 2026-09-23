@@ -233,3 +233,57 @@ def test_notification_area_is_gone():
     # find_spec returns None for a missing submodule of an existing package —
     # no dependency on the test runner's working directory.
     assert importlib.util.find_spec("gui.widget.notification_area") is None
+
+
+def test_solara_test_flag_removed():
+    """The SOLARA_TEST flag has been replaced with PYSEPAL_DEV_AUTH."""
+    from pathlib import Path
+
+    src = Path(__file__).parent.parent / "gui" / "solara_app.py"
+    content = src.read_text()
+    assert "SOLARA_TEST" not in content, "SOLARA_TEST should not appear in source"
+
+
+def test_pysepal_dev_auth_flag_present():
+    """The app uses PYSEPAL_DEV_AUTH for dev mode activation."""
+    from pathlib import Path
+
+    src = Path(__file__).parent.parent / "gui" / "solara_app.py"
+    content = src.read_text()
+    assert "PYSEPAL_DEV_AUTH" in content, "PYSEPAL_DEV_AUTH should appear in source"
+    assert (
+        "_DEV_AUTH_ARMED" in content
+    ), "Module-level guard _DEV_AUTH_ARMED should exist"
+
+
+def test_prime_dev_auth_guarded():
+    """prime_dev_auth() call is guarded by _DEV_AUTH_ARMED to prevent RuntimeError."""
+    from pathlib import Path
+
+    src = Path(__file__).parent.parent / "gui" / "solara_app.py"
+    content = src.read_text()
+    assert "prime_dev_auth()" in content, "prime_dev_auth() call must be present"
+    # Verify it appears in a guarded context
+    lines = content.split("\n")
+    prime_dev_auth_line = None
+    for i, line in enumerate(lines):
+        if "prime_dev_auth()" in line:
+            prime_dev_auth_line = i
+            break
+    assert prime_dev_auth_line is not None, "prime_dev_auth() not found"
+    # Check that the previous lines contain the guard
+    context = "\n".join(
+        lines[max(0, prime_dev_auth_line - 3) : prime_dev_auth_line + 1]
+    )
+    assert (
+        "_DEV_AUTH_ARMED" in context
+    ), "prime_dev_auth() must be guarded by _DEV_AUTH_ARMED"
+
+
+def test_conftest_guards_dev_auth():
+    """Test isolation: conftest sets PYSEPAL_DEV_AUTH to 0 to prevent logins."""
+    import os
+
+    assert (
+        os.environ.get("PYSEPAL_DEV_AUTH") == "0"
+    ), "conftest should set PYSEPAL_DEV_AUTH=0 for test isolation"

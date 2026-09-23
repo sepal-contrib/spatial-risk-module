@@ -6,6 +6,7 @@ Run locally:
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 import reacton.ipyvuetify as rv
@@ -17,6 +18,7 @@ from pysepal.solara import (
     NotificationProvider,
     get_current_gee_interface,
     get_current_sepal_client,
+    prime_dev_auth,
     setup_sessions,
     setup_solara_server,
     setup_theme_colors,
@@ -80,11 +82,26 @@ logger.setLevel(logging.DEBUG)
 logger.debug("Spatial Risk app initialized")
 logger.debug("Solara version: %s", solara.__version__)
 
+# Guard for dev auth activation: reused by both seed-helper checks to avoid
+# repetition and to ensure consistent logic.
+_DEV_AUTH_ARMED = os.getenv("PYSEPAL_DEV_AUTH", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 # Forward INFO+ milestones from tracked background jobs into the pysepal
 # notification task pill (see gui/scripts/notify_bridge.py).
 install_task_log_handler()
 
 setup_solara_server(extra_asset_locations=[])
+
+# Prime the blocking dev login at startup: raises RuntimeError if armed without
+# valid credentials. The guard keeps the HTTP login off the render path — this
+# code runs only once at app startup, not on every render.
+if _DEV_AUTH_ARMED:
+    prime_dev_auth()
 
 
 @solara.lab.on_kernel_start
@@ -839,9 +856,7 @@ def Page():
     solara.use_effect(reset_jobs_on_load, [project_loaded_signal])
 
     def _seed_test_aoi():
-        import os
-
-        if os.getenv("SOLARA_TEST", "false").lower() != "true":
+        if not _DEV_AUTH_ARMED:
             return
         if app_state.aoi_result.value is not None:
             return
@@ -854,17 +869,15 @@ def Page():
             geometry=[box(12.403, 43.893, 12.517, 43.993)],
             crs="EPSG:4326",
         )
-        logger.debug("SOLARA_TEST: seeding AOI with San Marino")
+        logger.debug("PYSEPAL_DEV_AUTH: seeding AOI with San Marino")
         app_state.aoi_result.set(AoiResult(method="DRAW", name="San Marino", gdf=gdf))
 
     # Test AOI seeding disabled for now — start from an empty project.
-    # (SOLARA_TEST stays on; re-enable by uncommenting the line below.)
+    # (To enable, uncomment the line below and set PYSEPAL_DEV_AUTH=1.)
     # solara.use_effect(_seed_test_aoi, [])
 
     def _seed_test_variables():
-        import os
-
-        if os.getenv("SOLARA_TEST", "false").lower() != "true":
+        if not _DEV_AUTH_ARMED:
             return
         p = app_state.project.value
         aoi_result = app_state.aoi_result.value
@@ -947,14 +960,14 @@ def Page():
                 )
 
         logger.debug(
-            "SOLARA_TEST: seeded %d raw + %d processed variables",
+            "PYSEPAL_DEV_AUTH: seeded %d raw + %d processed variables",
             len(p.raw_variables),
             len(p.processed_variables),
         )
         app_state.project.set(p.model_copy())
 
     # Test variable seeding disabled for now — Step 2 starts with no variables.
-    # (SOLARA_TEST stays on; re-enable by uncommenting the line below.)
+    # (To enable, uncomment the line below and set PYSEPAL_DEV_AUTH=1.)
     # solara.use_effect(_seed_test_variables, [app_state.project.value])
 
     # Test model/prediction seeding removed: it injected a fake GLM model and a
