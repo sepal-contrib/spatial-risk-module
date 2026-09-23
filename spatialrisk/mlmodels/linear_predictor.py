@@ -22,6 +22,33 @@ contributes exactly what its one-hot column would have.
 
 Numerics: term-wise accumulation and BLAS ``X @ coef`` may differ in the last
 ulp of eta. Callers who rescale to uint16 gate that with exact golden tests.
+
+Memory: :meth:`LinearPredictor.eta` walks the frame in row chunks of
+``_ETA_CHUNK_ROWS``, so its only per-pixel allocation is the returned vector
+(:attr:`LinearPredictor.working_set_columns` is 1). Every other transient --
+lookup gathers, patsy's per-factor copies, the subset matrix, the product --
+lives for one chunk at a time. That scratch is bounded per call by
+:attr:`LinearPredictor.chunk_scratch_bytes` (about 4 MiB per ``scale()``
+numeric, 42 MiB for ten, ~120 MiB for a 106-level categorical patsy has to
+materialise), and the planner does not charge it: one scratch per worker is
+left to the headroom the memory budget keeps
+(:data:`spatialrisk.gdal_env.INFERENCE_MEMORY_FRACTION` budgets only half the
+free memory).
+
+patsy still gets pandas Series, as it did from the whole frame: ``scale()``
+keeps its mean and variance as float128, and pandas arithmetic rounds
+``(x - mean) / sd`` to float64 once where numpy's in-place operators round
+twice, so plain numpy rows would move the last ulp of ~27% of the rows. The
+Series are built over row views of the columns rather than taken from
+``block_df.iloc[...]``, because every pandas view of ``block_df`` registers a
+weak reference on it and those pile up with the chunk count.
+
+Chunking is bit-identical to one whole-frame pass: every step is row-wise, and
+a power-of-two chunk keeps OpenBLAS's 4-row gemv blocks where a whole-frame
+``X @ coef`` puts them (chunks that are not a multiple of 4 moved the last ulp
+of tens to hundreds of rows in 1M on a 10-numeric design). That holds with one
+BLAS thread, which the engine pins; a threaded gemv splits the rows at thread
+boundaries and is not reproducible across thread counts even unchunked.
 """
 from __future__ import annotations
 
@@ -30,25 +57,34 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 import numpy as np
+import pandas as pd
 from patsy.highlevel import build_design_matrices
 
 _PLAIN_C = re.compile(r"^C\(\s*([A-Za-z_]\w*)\s*(?:,.*)?\)$", re.S)
 
-# eta()'s peak working set, in float64 columns (8 B/px each). The figures come
-# from tracemalloc measurements (patsy 1.0.2, pandas 2.3), rounded up, and
-# tests/test_linear_predictor.py pins them. eta() runs two phases that never
-# overlap. Both hold the returned eta vector.
+# eta() walks block_df in chunks of this many rows: the smallest power of two
+# within 5% of the fastest (2^18) on 7 scale() numerics + two lookups over 4M
+# rows, and the largest whose scratch stays under 64 MiB for ten numerics.
+_ETA_CHUNK_ROWS = 1 << 17
+
+# eta()'s memory in float64 columns (8 B each). The figures come from
+# tracemalloc measurements (patsy 1.0.2, pandas 2.3, numpy 2.2), rounded up,
+# and tests/test_linear_predictor.py pins them.
+#
+# Per pixel: the returned eta vector is the only allocation that scales with
+# the stripe.
 _ETA_COLS = 1
-# Lookup phase: the column cast to float64 (a copy only when the frame holds
+# Per chunk row, two phases that never overlap (chunk_scratch_bytes).
+# Lookup phase: the chunk cast to float64 (a copy only when the frame holds
 # ints), the int64 searchsorted index, one gathered float64 vector and the bool
-# miss mask. Measured: 25 B/px on float columns, 33 B/px on int columns.
+# miss mask. Measured: 17 B/row on float columns, 25 B/row on int columns.
 _LOOKUP_COLS = 4
 # Materialised phase: until the matrix is built, patsy keeps each factor's
 # evaluated copy and its NA mask alive, and scale() copies once more. Measured:
-# 25 B/px per scale() factor with its matrix column included.
+# 25 B/row per scale() factor with its matrix column included.
 _COLS_PER_FACTOR = 3
 # The in-flight factor's evaluation temporaries and the ``X @ coef`` product.
-# A single scale() factor peaks at 40 B/px inside patsy.
+# A single scale() factor peaks at 40 B/row inside patsy.
 _BUILD_COLS = 2
 
 
@@ -76,11 +112,27 @@ class LinearPredictor:
 
     @property
     def working_set_columns(self) -> int:
-        """Design columns the planner should charge per pixel for one eta() call.
+        """Float64 columns per pixel the planner should charge for one eta() call.
 
-        This is a conservative model of eta()'s measured peak in float64 columns,
-        not a count of design columns. It is the eta vector plus the larger of
-        two phases:
+        eta() evaluates the frame in chunks of ``_ETA_CHUNK_ROWS`` rows, so the
+        only allocation that scales with the stripe is the returned eta vector:
+        one column, whatever the design and whatever any categorical's level
+        count. The per-chunk transients are bounded separately by
+        :attr:`chunk_scratch_bytes`, which the planner does not charge: that
+        scratch (one per worker; about 4 MiB per ``scale()`` numeric of the
+        formulas ``generate_patsy_formula`` emits, ~120 MiB for a materialised
+        106-level categorical) is left to the memory budget's headroom.
+        ``test_working_set_columns_covers_the_measured_eta_peak`` pins both
+        against tracemalloc.
+        """
+        return _ETA_COLS
+
+    @property
+    def chunk_scratch_bytes(self) -> int:
+        """Upper bound on eta()'s per-chunk transients, in bytes.
+
+        ``_ETA_CHUNK_ROWS`` rows times the larger of two phases, in float64
+        columns:
 
         * the lookup phase, a fixed 4 columns whatever the level count;
         * the materialised phase: the subset matrix, 3 columns per factor
@@ -90,8 +142,6 @@ class LinearPredictor:
         ``scale(x)``, plain numeric and ``C(...)`` factors that
         ``generate_patsy_formula`` emits. A multi-column basis such as a spline
         would need re-measuring.
-        ``test_working_set_columns_covers_the_measured_eta_peak`` pins the model
-        against tracemalloc.
         """
         lookup = _LOOKUP_COLS if self.lookups else 0
         materialised = 0
@@ -100,7 +150,7 @@ class LinearPredictor:
             materialised = (
                 self.materialised_columns + _COLS_PER_FACTOR * n_factors + _BUILD_COLS
             )
-        return _ETA_COLS + max(lookup, materialised)
+        return _ETA_CHUNK_ROWS * max(lookup, materialised) * 8
 
     def describe(self) -> str:
         """One line for the plan log."""
@@ -110,28 +160,50 @@ class LinearPredictor:
         )
 
     def eta(self, block_df) -> np.ndarray:
-        """The linear predictor for every row of ``block_df`` (float64)."""
+        """The linear predictor for every row of ``block_df`` (float64).
+
+        Rows are evaluated in chunks of ``_ETA_CHUNK_ROWS`` (see the module
+        docstring). Each row still accumulates the constant, then the lookups
+        in ``term_codings`` order, then the materialised product. A value
+        outside a lookup's levels raises ``ValueError``; the message lists the
+        offending values of the first chunk that has any, not of the whole
+        frame.
+        """
         n = len(block_df)
         out = np.full(n, self.constant, dtype=np.float64)
-        for lk in self.lookups:
-            values = np.asarray(block_df[lk.column], dtype=np.float64)
-            pos = np.searchsorted(lk.levels_sorted, values)
-            np.minimum(pos, lk.levels_sorted.shape[0] - 1, out=pos)
-            miss = lk.levels_sorted[pos] != values
-            if miss.any():
-                bad = np.unique(values[miss])[:10].tolist()
-                raise ValueError(
-                    f"{lk.code}: values not among the training levels: {bad}"
+        # Views of the frame's columns, fetched once: chunks slice them, so no
+        # column is cast or copied whole.
+        columns = {name: np.asarray(block_df[name]) for name in block_df}
+        lookup_columns = [columns[lk.column] for lk in self.lookups]
+        step = _ETA_CHUNK_ROWS
+        for start in range(0, n, step):
+            stop = min(start + step, n)
+            for lk, column in zip(self.lookups, lookup_columns):
+                values = np.asarray(column[start:stop], dtype=np.float64)
+                pos = np.searchsorted(lk.levels_sorted, values)
+                np.minimum(pos, lk.levels_sorted.shape[0] - 1, out=pos)
+                miss = lk.levels_sorted[pos] != values
+                if miss.any():
+                    bad = np.unique(values[miss])[:10].tolist()
+                    raise ValueError(
+                        f"{lk.code}: values not among the training levels: {bad}"
+                    )
+                out[start:stop] += lk.table_sorted[pos]
+                # Free the chunk's transients before the next lookup or the
+                # patsy build below.
+                del values, pos, miss
+            if self.subset_design_info is not None:
+                # pandas Series, not numpy rows (see the module docstring).
+                rows = {
+                    name: pd.Series(column[start:stop], name=name, copy=False)
+                    for name, column in columns.items()
+                }
+                (x,) = build_design_matrices(
+                    [self.subset_design_info], rows, NA_action="raise"
                 )
-            out += lk.table_sorted[pos]
-            # Free the per-pixel transients now, not when the next lookup or the
-            # patsy build below rebinds or outlives them.
-            del values, pos, miss
-        if self.subset_design_info is not None:
-            (x,) = build_design_matrices(
-                [self.subset_design_info], block_df, NA_action="raise"
-            )
-            out += np.asarray(x, dtype=np.float64) @ self.subset_coef
+                out[start:stop] += np.asarray(x, dtype=np.float64) @ self.subset_coef
+                # Do not carry the matrix into the next chunk's lookups.
+                del rows, x
         return out
 
 
