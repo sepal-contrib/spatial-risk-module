@@ -11,12 +11,15 @@ height is the output tile height (:data:`spatialrisk.parallel.PREDICT_BAND_ROWS`
 = :data:`spatialrisk.raster_profile.BLOCK_SIZE`), which is what
 :func:`spatialrisk.gdal_env.plan_inference` starts from; if that does not fit
 one worker it shrinks further, halving below the tile height down to
-:data:`spatialrisk.gdal_env.INFERENCE_MIN_STRIPE_ROWS`, and logs a warning if
-even that stripe still overruns the budget.
+:data:`spatialrisk.gdal_env.INFERENCE_MIN_STRIPE_ROWS`; :func:`predict_windowed`
+logs a warning if even that stripe still overruns the budget.
 
 Memory per stripe is what :func:`spatialrisk.gdal_env.plan_inference`
 budgets (see its docstring); the body below is written to match that model,
 so a change here must be mirrored there and re-pinned by the memory probe.
+Its ``n_design_cols`` is the per-pixel float64 working width the closure is
+charged, documented next to :func:`predict_windowed`'s ``n_design_cols``
+kwarg below.
 """
 
 import logging
@@ -475,6 +478,19 @@ def predict_windowed(
     only writer and writes them in stripe order, which changes no pixel.
     The file is written as ``<output>.part.tif`` and renamed on success; on
     failure the partial file is removed and a previous output is untouched.
+
+    ``n_design_cols`` is the per-pixel float64 working width ``predict_block``
+    is charged for in :func:`spatialrisk.gdal_env.plan_inference`'s memory
+    budget -- not necessarily the fitted formula's column count. GLM and iCAR
+    pass
+    :attr:`spatialrisk.mlmodels.linear_predictor.LinearPredictor.working_set_columns`
+    (1: ``eta`` walks the stripe in row chunks, so nothing scales with stripe
+    size except its own output vector), while RF passes
+    ``len(design_info.column_names)`` because its trees consume the full
+    one-hot matrix at once. That is why the plan log's "design cols" field
+    prints 1 for GLM/iCAR while their own "GLM design: ... lookup term(s),
+    ... materialised col(s)" / "iCAR design: ..." line carries the real
+    counts. Defaults to ``len(feature_paths) + 1`` when omitted.
     """
     log = log or logger
     output_file = Path(output_file)

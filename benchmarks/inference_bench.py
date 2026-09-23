@@ -43,9 +43,10 @@ from pathlib import Path
 IMPLS = ("original", "current", "pool")
 
 #: The worker count in the engine's plan line, e.g. "pred.tif: 8 worker(s),
-#: 256 rows/stripe, budget ...". What the run really used, which is not what
-#: ``--workers`` asked for: RF's default is serial whatever the policy says,
-#: and an unset ``--workers`` leaves the choice to the policy.
+#: 256 rows/stripe (12 MiB each, 3 design cols), budget ...". What the run
+#: really used, which is not what ``--workers`` asked for: RF's default is
+#: serial whatever the policy says, and an unset ``--workers`` leaves the
+#: choice to the policy.
 _PLAN_LINE_RE = re.compile(r"(?P<workers>\d+) worker\(s\), \d+ rows/stripe")
 
 # Measure the checkout this file lives in, not whichever one the editable
