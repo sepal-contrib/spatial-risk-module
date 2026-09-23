@@ -122,9 +122,11 @@ def test_failed_row_dismiss_hands_back_the_job_id():
 
 # --- the form seeds itself from a prefill entry -------------------------------
 
+import asyncio  # noqa: E402
 import inspect  # noqa: E402
 import types  # noqa: E402
 
+from pysepal.message import msg  # noqa: E402
 from pysepal.sepalwidgets.file_input import FileInput  # noqa: E402
 from pysepal.solara.components.inputs import AdminLevelSelector  # noqa: E402
 
@@ -306,27 +308,36 @@ def test_edit_keeps_the_seeded_name_when_the_edited_job_stays_in_running_names()
     assert field.v_model == "allocation_1"
 
 
-def test_borders_picker_passes_an_admin_restore_seed(monkeypatch):
-    """AdminLevelSelector takes its restore seed from `initial`, not `value`.
+def test_borders_picker_restores_the_admin_cascade_through_codes(monkeypatch):
+    """AdminLevelSelector is restored from the whole code chain, `codes`.
 
-    pysepal documents `value` as output-only and snapshots `initial` once at
-    mount, so this prop is the only way a prefilled admin code can come back.
-    A stub stands in for the real selector: the genuine one drives an async
-    pygaul/WFS cascade that a browserless render cannot resolve. The
-    signature assertion below guards the stub itself — without it, this test
-    would still pass even if the real component dropped `initial` entirely.
+    pysepal 4 documents `value` as output-only (one code cannot name its
+    parents) and has no `initial`, so the stored leaf is walked up to its
+    level-0 parent through aoi_io's pygaul helper. A stub stands in for the
+    real selector and takes exactly pysepal 4's keywords, so a keyword the real
+    one rejects fails here too; the signature assertion guards the stub.
     """
-    assert "initial" in inspect.signature(AdminLevelSelector.f).parameters
+    params = set(inspect.signature(AdminLevelSelector.f).parameters)
+    assert {"method", "gee", "value", "on_value", "codes", "on_codes"} <= params
+    assert "initial" not in params
 
     import gui.widget.borders_picker as borders_picker_module
 
+    lookups = []
+
+    def chain(code, level):
+        lookups.append((code, level))
+        return ("12", code)
+
+    monkeypatch.setattr(borders_picker_module, "admin_code_chain", chain)
     seen = {}
 
     @solara.component
-    def FakeSelector(method, gee=True, value=None, on_value=None, initial=None):
+    def FakeSelector(
+        method, gee=True, value=None, on_value=None, codes=(), on_codes=None
+    ):
         seen["method"] = method
-        seen["value"] = value
-        seen["initial"] = initial
+        seen["codes"] = codes
         solara.Text("stub")
 
     monkeypatch.setattr(borders_picker_module, "AdminLevelSelector", FakeSelector)
@@ -338,7 +349,131 @@ def test_borders_picker_passes_an_admin_restore_seed(monkeypatch):
         )
     )
     assert seen["method"] == "ADMIN1"
-    assert seen["initial"] == "1234"
+    assert seen["codes"] == ("12", "1234")
+    assert lookups == [("1234", 1)]
+
+
+# The genuine cascade, offline: pygaul's item lists and the leaf -> chain walk
+# are faked; everything in between is pysepal's own AdminLevelSelector.
+_ADMIN_ITEMS = {
+    (0, ""): [
+        {"text": "Algeria", "value": "101"},
+        {"text": "Paraguay", "value": "206"},
+    ],
+    (1, "101"): [{"text": "Adrar", "value": "1001"}],
+    (1, "206"): [{"text": "Amambay", "value": "2184"}],
+}
+_ADMIN_CHAINS = {"1001": ("101", "1001"), "2184": ("206", "2184")}
+
+
+def _drive_admin_picker(monkeypatch, stored, act=None, chains=_ADMIN_CHAINS):
+    """Render BordersPicker under a host that feeds its selection back.
+
+    ``act(root, held, published)`` runs while the picker is still mounted:
+    ``held`` is the host's current selection, ``published`` every selection
+    the picker handed it. Returns (root, held, published).
+    """
+    import pysepal.solara.components.aoi.admin as admin_mod
+
+    import gui.widget.borders_picker as borders_picker_module
+
+    monkeypatch.setattr(
+        admin_mod,
+        "fetch_admin_items",
+        lambda level, parent_code="": _ADMIN_ITEMS.get((level, str(parent_code)), []),
+    )
+    monkeypatch.setattr(
+        borders_picker_module,
+        "admin_code_chain",
+        lambda code, level: chains.get(str(code)),
+    )
+    held = solara.reactive(stored)
+    published = []
+
+    def on_value(selection):
+        published.append(selection)
+        held.set(selection)
+
+    @solara.component
+    def Host():
+        BordersPicker(value=held.value, on_value=on_value)
+
+    async def run():
+        root, rc = reacton.render(Host(), handle_error=False)
+        try:
+            if act is not None:
+                act(root, held, published)
+            return root
+        finally:
+            rc.close()
+
+    return asyncio.run(run()), held, published
+
+
+def _cascade_level(root, level):
+    label = msg(f"aoi_sel.adm.{level}")
+    return next(s for s in _find(root, vw.Select) if s.label == label)
+
+
+def test_a_restored_admin_selection_fills_every_level(monkeypatch):
+    """The prefilled ADMIN1 code comes back as the whole cascade, untouched."""
+    stored = BordersSelection(method="ADMIN1", admin_code="1001")
+    root, held, published = _drive_admin_picker(monkeypatch, stored)
+    assert _cascade_level(root, 0).v_model == "101"
+    assert _cascade_level(root, 1).v_model == "1001"
+    assert published == []
+    assert held.value == stored
+
+
+def test_an_underivable_chain_keeps_the_prefilled_code(monkeypatch):
+    """A code pygaul cannot place restores no cascade, but is not wiped.
+
+    The empty cascade publishes None on mount; forwarding it would silently
+    drop the failed run's borders. What the user then picks still goes
+    through, including the None of a parent picked without its child.
+    """
+    stored = BordersSelection(method="ADMIN1", admin_code="1001")
+    seen = {}
+
+    def act(root, held, published):
+        seen["mount"] = (list(published), held.value, _cascade_level(root, 0).v_model)
+        _cascade_level(root, 0).v_model = "206"
+        seen["parent_only"] = held.value
+        _cascade_level(root, 1).v_model = "2184"
+
+    _root, held, _published = _drive_admin_picker(
+        monkeypatch, stored, act=act, chains={}
+    )
+    assert seen["mount"] == ([], stored, None)
+    assert seen["parent_only"] == BordersSelection(method="ADMIN1", admin_code=None)
+    assert held.value == BordersSelection(method="ADMIN1", admin_code="2184")
+
+
+def test_picking_a_new_parent_keeps_it_in_the_cascade(monkeypatch):
+    """The restore seed is taken once: the user's own picks are never undone.
+
+    Picking another country clears the ADMIN1 code, and a cascade re-seeded
+    from that cleared code would drop the country the user just picked.
+    """
+    stored = BordersSelection(method="ADMIN1", admin_code="1001")
+    seen = {}
+
+    def act(root, held, published):
+        _cascade_level(root, 0).v_model = "206"
+        seen["after_parent"] = (
+            held.value,
+            _cascade_level(root, 0).v_model,
+            _cascade_level(root, 1).v_model,
+        )
+        _cascade_level(root, 1).v_model = "2184"
+
+    _root, held, _published = _drive_admin_picker(monkeypatch, stored, act=act)
+    assert seen["after_parent"] == (
+        BordersSelection(method="ADMIN1", admin_code=None),
+        "206",
+        None,
+    )
+    assert held.value == BordersSelection(method="ADMIN1", admin_code="2184")
 
 
 # --- tile wiring --------------------------------------------------------------

@@ -156,9 +156,9 @@ def AllocationFormDialog(
     years, set_years = solara.use_state("4")
     density_extent, set_density_extent = solara.use_state(_DENSITY_NONE)
 
-    # Bumped on every seed so the borders picker remounts: AdminLevelSelector
-    # only snapshots its `initial` restore seed at mount, so an admin code
-    # pushed into an already-mounted picker would be silently ignored.
+    # Bumped on every seed so the borders picker remounts. The admin cascade
+    # reads its restore chain only when it mounts, so an admin code pushed
+    # into an already-mounted picker would be silently ignored.
     borders_seed, set_borders_seed = solara.use_state(0)
 
     def seed_from_prefill():
