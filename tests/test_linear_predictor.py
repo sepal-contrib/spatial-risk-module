@@ -271,11 +271,13 @@ def test_chunks_reach_patsy_as_pandas_rows(monkeypatch):
 
 
 # tracemalloc also counts the Python objects patsy and pandas churn per chunk
-# (reference cycles in pandas' arithmetic, patsy's recompiled factor code)
-# until the cyclic GC takes them back: a few KiB per chunk, measured as up to
-# +0.08 B/row on the slope at the 32768-row chunk used below. Half a byte per
-# row is still less than the smallest per-pixel array eta() could leave behind
-# (a 1-byte bool mask).
+# (patsy's NA check runs pandas arithmetic on scale()'s output and leaves
+# reference cycles): a few KiB per chunk, measured in this test as +0.02 B/row
+# (golden) and +0.11 B/row (peru-like) on the slope at the 32768-row chunk used
+# below. A gc.collect() after every chunk still leaves a few hundred bytes that
+# vary from run to run, so the bare bound working_set_columns * 8 cannot be
+# asserted without flaking. Half a byte per row is still less than the smallest
+# per-pixel array eta() could leave behind (a 1-byte bool mask).
 _PY_CHURN_BYTES_PER_ROW = 0.5
 
 

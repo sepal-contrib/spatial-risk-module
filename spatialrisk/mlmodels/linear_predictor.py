@@ -193,7 +193,10 @@ class LinearPredictor:
                 # patsy build below.
                 del values, pos, miss
             if self.subset_design_info is not None:
-                # pandas Series, not numpy rows (see the module docstring).
+                # This chunk's rows of block_df, as pandas Series over the column
+                # views: not numpy rows (scale() would round differently) and
+                # not block_df.iloc (each view registers a weakref on
+                # block_df). See the module docstring.
                 rows = {
                     name: pd.Series(column[start:stop], name=name, copy=False)
                     for name, column in columns.items()
