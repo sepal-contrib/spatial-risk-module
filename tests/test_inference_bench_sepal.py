@@ -16,7 +16,8 @@ per run and the import baseline is shown separately:
 * the resources the planner can see -- affinity cores, the cgroup memory
   limit/usage, psutil's host view and which of them
   :func:`spatialrisk.parallel.free_memory_bytes` ended up using;
-* the plan :func:`spatialrisk.gdal_env.plan_inference` makes for this stack
+* the plan :func:`spatialrisk.gdal_env.plan_inference` makes for this stack,
+  one per model because each model's ``apply`` charges its own working width
   (workers, rows per stripe, the per-stripe working set and whether cores or
   memory bound it), and the engine's own plan log line from every stage;
 * one row per (model, workers): ``workers=1`` is the serial path on the
@@ -42,8 +43,9 @@ Two deliberate simplifications keep the measurement about the engine:
 
 * every feature enters the formula as a plain numeric term, never
   ``C(<name>)`` or ``scale(<name>)``, so the design width is
-  ``n_features + 1`` on any project (what
-  :func:`~spatialrisk.gdal_env.plan_inference` assumes by default), no
+  ``n_features + 1`` on any project (what a random forest is charged; a
+  GLM is charged its compiled linear predictor's working width, see
+  :func:`charged_design_cols`), no
   categorical level scan reads a whole raster before the clock starts, and a
   layer that is constant over its own domain -- a forest mask is all 1 inside
   the forest -- cannot make ``scale()`` divide by zero and drop every row;
@@ -253,14 +255,46 @@ def resource_readings() -> Dict:
     }
 
 
-def policy_plan(target: Path, features: List[Tuple[str, str, Optional[str]]]):
+def bench_formula(target_name: str, feature_names: List[str]) -> str:
+    """The formula every stage fits: each feature a plain numeric term."""
+    return f"I({target_name}) + trial ~ " + " + ".join(feature_names)
+
+
+def charged_design_cols(model: str, target_name: str, feature_names: List[str]) -> int:
+    """The ``n_design_cols`` ``model``'s ``apply`` charges for this formula.
+
+    What each ``apply`` hands the engine: the GLM (like iCAR) the compiled
+    linear predictor's ``working_set_columns``, the random forest the
+    design's full column count. Neither depends on fitted values, only on the
+    design, which is built here over a two-row frame so the parent process
+    never fits; the smoke test checks the GLM's figure against the plan line
+    of a real run.
+    """
+    from patsy import dmatrices
+
+    from spatialrisk.mlmodels.linear_predictor import compile_linear_predictor
+
+    frame = {name: [0.0, 1.0] for name in feature_names}
+    frame.update({target_name: [0, 1], "trial": [1, 1]})
+    _y, x = dmatrices(bench_formula(target_name, feature_names), frame)
+    n_cols = len(x.design_info.column_names)
+    if model == "rf":
+        return n_cols
+    predictor = compile_linear_predictor(x.design_info, np.zeros(n_cols))
+    return predictor.working_set_columns
+
+
+def policy_plan(
+    target: Path,
+    features: List[Tuple[str, str, Optional[str]]],
+    n_design_cols: int,
+):
     """The plan :func:`~spatialrisk.gdal_env.plan_inference` makes for this stack.
 
     The same arguments ``windowed_predict._plan_and_reserve`` assembles for a
-    run with no mask and no extra layer, and with the design width this
-    benchmark's formula produces (one ``scale()`` column per feature plus the
-    intercept). Nothing is reserved on the ledger, which is what a fresh
-    stage subprocess sees too.
+    run with no mask and no extra layer, charging ``n_design_cols`` -- the
+    model's own charge, from :func:`charged_design_cols`. Nothing is reserved
+    on the ledger, which is what a fresh stage subprocess sees too.
     """
     import rasterio
 
@@ -278,7 +312,7 @@ def policy_plan(target: Path, features: List[Tuple[str, str, Optional[str]]]):
         tile_rows=STRIPE_ROWS,
         n_features=len(features),
         feature_itemsizes=itemsizes,
-        n_design_cols=len(features) + 1,
+        n_design_cols=n_design_cols,
         with_mask=False,
         with_extra=False,
     )
@@ -385,8 +419,9 @@ def _fit(cfg: Dict, dataset, folder: Path):
 
     model.dataset = dataset
     model.sample = _Sample("bench", _draw_points(cfg, dataset.target.path))
-    terms = " + ".join(v.name for v in dataset.features)
-    model.formula = f"I({dataset.target.name}) + trial ~ {terms}"
+    model.formula = bench_formula(
+        dataset.target.name, [v.name for v in dataset.features]
+    )
     model.fit(folder=folder)
     if model._x_design_info is None:
         # The GLM rebuilds this lazily inside apply(); do it up front so the
@@ -873,18 +908,43 @@ def assess(
             )
             window = {"rows": rows, "offset": offset, "cropped": True}
 
-        plan, (pheight, pwidth) = policy_plan(
-            Path(inputs["target"][1]), inputs["features"]
-        )
-        n_stripes = -(-pheight // plan.rows_per_stripe)
+        models = _resolve_models(models_spec)
+        if not models:
+            raise ValueError("no model to benchmark")
+        # One plan per model: each apply() charges its own working width, so
+        # the workers the policy picks for an ``auto`` row differ by model.
+        policies = {}
+        for model in models:
+            n_cols = charged_design_cols(
+                model, inputs["target"][0], [f[0] for f in inputs["features"]]
+            )
+            plan, (pheight, pwidth) = policy_plan(
+                Path(inputs["target"][1]), inputs["features"], n_cols
+            )
+            n_stripes = -(-pheight // plan.rows_per_stripe)
+            policies[model] = {
+                "model": model,
+                "n_design_cols": n_cols,
+                "workers": plan.workers,
+                "by_cores": plan.by_cores,
+                "by_memory": plan.by_memory,
+                "rows_per_stripe": plan.rows_per_stripe,
+                "n_stripes": n_stripes,
+                "stripe_working_set": plan.stripe_bytes,
+                "memory_budget_bytes": plan.memory_budget_bytes,
+                "memory_source": plan.memory_source,
+                "plan": repr(plan),
+            }
+            print(
+                f"{model} policy ({n_cols} working cols): {plan.workers} workers "
+                f"(by cores {plan.by_cores}, by memory {plan.by_memory}), "
+                f"{n_stripes} x {plan.rows_per_stripe} rows of {pwidth} px = "
+                f"{fmt(plan.stripe_bytes)} working set each, "
+                f"{plan.gdal_threads} GDAL thread(s)"
+            )
         print(
-            f"stripes: {n_stripes} x {plan.rows_per_stripe} rows of {pwidth} px = "
-            f"{fmt(plan.stripe_bytes)} working set each"
-        )
-        print(
-            f"policy: {plan.workers} workers (by cores {plan.by_cores}, by memory "
-            f"{plan.by_memory}), budget {fmt(plan.memory_budget_bytes)} "
-            f"({plan.memory_source}), {plan.gdal_threads} GDAL thread(s)"
+            f"budget {fmt(plan.memory_budget_bytes)} ({plan.memory_source})",
+            flush=True,
         )
 
         base_cfg = {
@@ -904,7 +964,7 @@ def assess(
         print(header)
         print("-" * len(header), flush=True)
         records = []
-        for model in _resolve_models(models_spec):
+        for model in models:
             for workers in _resolve_workers(workers_spec, cores):
                 cfg = {**base_cfg, "stage": model}
                 if workers is not None:
@@ -929,20 +989,17 @@ def assess(
         "free": readings["free"],
         "free_source": readings["free_source"],
         "window": window,
+        # "stripes" and "policy" are the first model's plan, the shape
+        # scripts/sepal/compare_bench.py reads; "policies" has every model's.
         "stripes": {
             "shape": [pheight, pwidth],
-            "rows_per_stripe": plan.rows_per_stripe,
-            "n_stripes": n_stripes,
-            "stripe_working_set": plan.stripe_bytes,
+            **{
+                k: policies[models[0]][k]
+                for k in ("rows_per_stripe", "n_stripes", "stripe_working_set")
+            },
         },
-        "policy": {
-            "workers": plan.workers,
-            "by_cores": plan.by_cores,
-            "by_memory": plan.by_memory,
-            "memory_budget_bytes": plan.memory_budget_bytes,
-            "memory_source": plan.memory_source,
-            "plan": repr(plan),
-        },
+        "policy": policies[models[0]],
+        "policies": policies,
         "baseline_mib": base["peak_mib"],
         "records": records,
     }
@@ -1249,6 +1306,13 @@ def test_inference_bench_smoke(tmp_path):
     )
     stages = [(r["stage"], r["workers"]) for r in result["records"]]
     assert stages == [("glm", 1), ("glm", 2)]
+    # The policy charged what the runs charged: the GLM's working width in
+    # its plan line, not the design width the bench used to assume.
+    charged = {
+        int(re.search(r"(\d+) working cols", r["plan_log"])[1])
+        for r in result["records"]
+    }
+    assert charged == {result["policies"]["glm"]["n_design_cols"]}
     assert _digests_agree(result["records"]), "the pool changed the raster"
     assert all(r["predicted_px"] > 0 for r in result["records"])
     assert result["records"][1]["plan_workers"] == 2
