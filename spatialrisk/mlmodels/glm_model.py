@@ -147,8 +147,9 @@ class GLMModel(BaseRiskModel):
             Stripe worker threads. None lets the resource policy choose;
             1 runs serially on the calling thread.
         """
-        from patsy.highlevel import build_design_matrices
+        from scipy.special import expit
 
+        from spatialrisk.mlmodels.linear_predictor import compile_linear_predictor
         from spatialrisk.mlmodels.windowed_predict import predict_windowed
 
         if self._ml_model is None:
@@ -162,10 +163,19 @@ class GLMModel(BaseRiskModel):
 
         design_info = self._x_design_info
         estimator = self._ml_model
+        if list(estimator.classes_) != [0, 1]:
+            raise ValueError(
+                "GLM classes must be [0, 1] for the risk column, "
+                f"got {list(estimator.classes_)}"
+            )
+        predictor = compile_linear_predictor(design_info, estimator.coef_[0])
+        intercept = float(estimator.intercept_[0])
+        logger.info("GLM design: %s", predictor.describe())
 
         def predict_block(block_df, extras):
-            (x,) = build_design_matrices([design_info], block_df, NA_action="drop")
-            return estimator.predict_proba(np.asarray(x))[:, 1]
+            # expit(decision) is exactly what LogisticRegression.predict_proba
+            # applies for a binary model, so this equals predict_proba(...)[:, 1].
+            return expit(predictor.eta(block_df) + intercept)
 
         predict_windowed(
             active_dataset.target.path,
@@ -175,7 +185,7 @@ class GLMModel(BaseRiskModel):
             mask=mask,
             mask_values=_mask_values(mask_value),
             workers=workers,
-            n_design_cols=len(design_info.column_names),
+            n_design_cols=predictor.working_set_columns,
             log=logger,
         )
         logger.info("GLM raster written: %s", output_file)
