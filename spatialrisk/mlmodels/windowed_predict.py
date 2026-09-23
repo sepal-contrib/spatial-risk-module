@@ -14,6 +14,14 @@ one worker it shrinks further, halving below the tile height down to
 :data:`spatialrisk.gdal_env.INFERENCE_MIN_STRIPE_ROWS`; :func:`predict_windowed`
 logs a warning if even that stripe still overruns the budget.
 
+Because the grid is part of the output, a shrink below the tile height is
+not free for iCAR: its rho (like any extra layer) is bilinear-resampled from
+each stripe's bounds, so a memory-starved run on sub-tile stripes can move a
+handful of pixels by one uint16 step against a 256-row run -- measured at
+about 1e-8 to 1e-7 of the pixels with a coarse rho, none with the test
+fixture's fine one. That was accepted in favour of memory safety; a run
+whose tile-row stripe fits is unchanged.
+
 Memory per stripe is what :func:`spatialrisk.gdal_env.plan_inference`
 budgets (see its docstring); the body below is written to match that model,
 so a change here must be mirrored there and re-pinned by the memory probe.

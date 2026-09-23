@@ -554,6 +554,13 @@ def plan_inference(
     proceeds anyway (one worker) and ``over_budget_bytes`` reports by how
     much; the engine warns about it.
 
+    Stage 2 buys memory safety with iCAR's bit-reproducibility: rho is
+    bilinear-resampled per stripe from the stripe's bounds, so a sub-tile
+    stripe can move a handful of iCAR pixels by one uint16 step against a
+    256-row run (measured at about 1e-8 to 1e-7 of the pixels with a coarse
+    rho). Accepted: stage 2 only runs when one tile row does not fit, so any
+    run that fits keeps its 256-row output.
+
     ``cachemax_bytes`` is budgeted for only as the flat
     :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` subtracted from the memory budget
     above, never as the larger figure this returns, and it is not reserved on
