@@ -10,6 +10,12 @@ legacy manifest keeps ``aoi_spec`` null forever, until some later manual Save.
 DRAW heals only because its fresh result differs (a normalized name, a fresh
 GeoDataFrame).
 
+The heal is scoped to manifests with NO ``aoi_spec`` at all (missing or
+null): calling ``attach_aoi`` unconditionally would rewrite ANY manifest that
+differs from what this app version writes, including one saved by a newer
+app version (an ``aoi_spec`` schema/fields this one cannot read), silently
+downgrading it to a legacy-synthesized spec.
+
 ``ProjectPanel`` is directly coupled to the process-global ``app_state``
 singleton (unlike a tile, which receives it as an argument) and needs a real
 ``DATA_DIR`` to scan, so it cannot be rendered standalone without one; this is
@@ -23,16 +29,12 @@ import json
 
 import ipyvuetify as vw
 import pytest
+from _notification_host import render_under_notifications
 
+import gui.solara_app as app
+import spatialrisk.project as proj
 from gui.i18n import t
-
-t("common.load")  # warm the translator before the first render
-
-from _notification_host import render_under_notifications  # noqa: E402
-
-import gui.solara_app as app  # noqa: E402
-import spatialrisk.project as proj  # noqa: E402
-from gui.store.state_manager import app_state  # noqa: E402
+from gui.store.state_manager import app_state
 
 proj.Project._ensure_model_schemas()
 
@@ -53,6 +55,27 @@ def data_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(proj, "downloads_folder", tmp_path)
     monkeypatch.setattr(app, "DATA_DIR", tmp_path)
     return tmp_path
+
+
+@pytest.fixture
+def offline_pygaul(monkeypatch):
+    """Fake ``pygaul.Items``/``pygaul.Names`` so ADMIN AOIs need no network.
+
+    ``Items`` rebuilds the lazy EE FeatureCollection for any ADMIN load;
+    ``Names`` backs the GAUL code-chain lookup an ADMIN1/2 legacy synthesis
+    needs (unused at ADMIN0, harmless to fake anyway).
+    """
+    import pygaul
+
+    monkeypatch.setattr(pygaul, "Items", lambda admin: object())
+
+    def fake_names(admin="", complete=False, **_):
+        import pandas as pd
+
+        assert complete
+        return pd.DataFrame([{"gaul0_code": "col0", "gaul1_code": admin}])
+
+    monkeypatch.setattr(pygaul, "Names", fake_names)
 
 
 @pytest.fixture(autouse=True)
@@ -109,20 +132,8 @@ def _select_and_load(box):
     load_btn[0].fire_event("click", {})
 
 
-def test_load_heals_a_legacy_admin1_manifest(data_dir, monkeypatch):
+def test_load_heals_a_legacy_admin1_manifest(data_dir, offline_pygaul):
     """Loading a legacy ADMIN1 project writes aoi_spec and keeps legacy keys."""
-    import pygaul
-
-    monkeypatch.setattr(pygaul, "Items", lambda admin: object())
-
-    def fake_names(admin="", complete=False, **_):
-        import pandas as pd
-
-        assert complete
-        return pd.DataFrame([{"gaul0_code": "col0", "gaul1_code": admin}])
-
-    monkeypatch.setattr(pygaul, "Names", fake_names)
-
     _write_legacy_admin1_manifest(data_dir, "legacy_admin1")
 
     box, rc = render_under_notifications(lambda: app.ProjectPanel(), handle_error=False)
@@ -175,27 +186,54 @@ def test_load_heals_a_legacy_asset_manifest(data_dir, monkeypatch):
     assert manifest["aoi"]["method"] == "ASSET"
 
 
-def test_reloading_an_up_to_date_manifest_does_not_bump_its_mtime(
-    data_dir, monkeypatch
+def test_load_leaves_a_future_version_manifest_byte_identical(data_dir, offline_pygaul):
+    """A manifest saved by a NEWER app version must not be downgraded.
+
+    ``attach_aoi`` rewrites any manifest that differs from what THIS app
+    version would write; an ``aoi_spec`` with a ``schema_version`` (and an
+    extra field) this app cannot read would otherwise come back rewritten
+    with a legacy-synthesized spec, dropping the unknown field. The heal must
+    not even attempt this: it only runs when ``aoi_spec`` is absent.
+    """
+    name = "future_admin0"
+    p = proj.Project(project_name=name)
+    p.aoi = {
+        "method": "ADMIN0",
+        "name": "GUY",
+        "gee": True,
+        "admin": "197",
+        "aoi_spec": {
+            "schema_version": 99,
+            "method": "ADMIN0",
+            "admin_codes": ["197"],
+            "from_the_future": True,
+        },
+    }
+    p.save()
+
+    manifest = _manifest_path(data_dir, name)
+    before = manifest.read_bytes()
+
+    box, rc = render_under_notifications(lambda: app.ProjectPanel(), handle_error=False)
+    try:
+        _select_and_load(box)
+    finally:
+        rc.close()
+
+    assert manifest.read_bytes() == before
+
+
+def test_reloading_an_up_to_date_manifest_triggers_no_further_save(
+    data_dir, offline_pygaul, monkeypatch
 ):
     """A manifest that already carries a matching aoi_spec is left untouched.
 
     The heal call (``attach_current_aoi``) is idempotent, so a normal load of
     a project that was already healed (or saved under v4 from the start) must
-    not rewrite the manifest — otherwise every load would bump its mtime.
+    not save the manifest again. Counted via ``Project.save`` calls (exact)
+    rather than mtime (a millisecond-scale gap that could, in principle,
+    round to the same value even if a save did happen).
     """
-    import pygaul
-
-    monkeypatch.setattr(pygaul, "Items", lambda admin: object())
-
-    def fake_names(admin="", complete=False, **_):
-        import pandas as pd
-
-        assert complete
-        return pd.DataFrame([{"gaul0_code": "col0", "gaul1_code": admin}])
-
-    monkeypatch.setattr(pygaul, "Names", fake_names)
-
     name = "already_healed_admin1"
     _write_legacy_admin1_manifest(data_dir, name)
     manifest = _manifest_path(data_dir, name)
@@ -207,39 +245,35 @@ def test_reloading_an_up_to_date_manifest_does_not_bump_its_mtime(
     finally:
         rc.close()
     assert json.loads(manifest.read_text())["aoi"]["aoi_spec"] is not None
-    healed_mtime = manifest.stat().st_mtime_ns
 
-    # Second load of the now-healed manifest must be a no-op on disk.
+    save_calls = {"n": 0}
+    real_save = proj.Project.save
+
+    def counting_save(self, *a, **kw):
+        save_calls["n"] += 1
+        return real_save(self, *a, **kw)
+
+    monkeypatch.setattr(proj.Project, "save", counting_save)
+
+    # Second load of the now-healed manifest must not save it again.
     box, rc = render_under_notifications(lambda: app.ProjectPanel(), handle_error=False)
     try:
         _select_and_load(box)
     finally:
         rc.close()
 
-    assert manifest.stat().st_mtime_ns == healed_mtime
+    assert save_calls["n"] == 0, "an already-healed manifest must not be saved again"
 
 
 def test_a_failed_heal_does_not_turn_a_successful_load_into_a_load_error(
-    data_dir, monkeypatch
+    data_dir, offline_pygaul, monkeypatch, caplog
 ):
     """project.save() raising during the heal must not surface as a load error.
 
     The load itself already succeeded (the project and AOI are installed); a
-    heal failure is logged and swallowed, not raised through do_load's own
-    except-and-set-load-error handler.
+    heal failure is logged (naming the project) and swallowed, not raised
+    through do_load's own except-and-set-load-error handler.
     """
-    import pygaul
-
-    monkeypatch.setattr(pygaul, "Items", lambda admin: object())
-
-    def fake_names(admin="", complete=False, **_):
-        import pandas as pd
-
-        assert complete
-        return pd.DataFrame([{"gaul0_code": "col0", "gaul1_code": admin}])
-
-    monkeypatch.setattr(pygaul, "Names", fake_names)
-
     name = "heal_fails"
     _write_legacy_admin1_manifest(data_dir, name)
 
@@ -250,10 +284,17 @@ def test_a_failed_heal_does_not_turn_a_successful_load_into_a_load_error(
 
     box, rc = render_under_notifications(lambda: app.ProjectPanel(), handle_error=False)
     try:
-        _select_and_load(box)
+        with caplog.at_level("WARNING", logger="spatial_risk"):
+            _select_and_load(box)
         # The project still loaded: the Manage dialog closed, no load error banner.
         assert app_state.project.value is not None
         assert app_state.project.value.project_name == name
         assert not _find(box, vw.Alert)
     finally:
         rc.close()
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any(name in r.getMessage() for r in warnings), (
+        f"expected a warning naming {name!r}, got: "
+        f"{[r.getMessage() for r in warnings]}"
+    )

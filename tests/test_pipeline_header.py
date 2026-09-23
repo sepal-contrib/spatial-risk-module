@@ -88,51 +88,60 @@ def _theme_state(dark: bool):
     state = get_current_theme_state()
     before = (state.mode, state.dark)
     try:
+        # set_mode already keeps `dark` aligned with a fixed mode.
         state.set_mode("dark" if dark else "light")
-        state.dark = dark
         yield state
     finally:
         state.mode, state.dark = before
 
 
-def _render_ring_style(**kwargs):
-    """Render PipelineHeader and return the current-step segment's inline style.
+def _render_header_styles():
+    """Render PipelineHeader and return the ring and badge inline styles.
 
-    That is the one carrying the box-shadow "ring", with sentinel primaries
-    on ``solara.lab.theme.themes`` so the assertion does not depend on
-    whatever ``setup_theme_colors()`` last wrote at import/startup time.
+    The ring is the current-step segment's box-shadow; the badge is the
+    "1 / 9" pill's background. Sentinel primaries on
+    ``solara.lab.theme.themes`` keep the assertion immune to whatever
+    ``setup_theme_colors()`` last wrote at import/startup time.
     """
     from gui.widget.pipeline_header import PipelineHeader
 
-    kwargs.setdefault("active_step", 0)
     project = solara.reactive(None, equals=lambda a, b: a is b)
     aoi = solara.reactive(None)
     box, rc = reacton.render(
         PipelineHeader(
-            active_step=kwargs["active_step"],
+            active_step=0,
             on_navigate=lambda i: None,
             project=project,
             aoi_result=aoi,
         ),
         handle_error=False,
     )
-    ring = None
+    ring = badge = None
 
     def walk(widget):
-        nonlocal ring
+        nonlocal ring, badge
         style = getattr(widget, "style_", None) or ""
         if "box-shadow" in style:
             ring = style
+        if "color: #ffffff" in style:  # the badge pill, uniquely
+            badge = style
         for child in getattr(widget, "children", None) or []:
+            walk(child)
+        # solara.lab.Menu's activator is not a normal ipywidgets child: it is
+        # its own VuetifyTemplate trait (see gui/widget/pipeline_header.py's
+        # `as activator:` + `solara.lab.Menu(activator=activator, ...)`), so
+        # the badge — inside that activator — is unreachable via `.children`
+        # alone.
+        for child in getattr(widget, "activator", None) or []:
             walk(child)
 
     walk(box)
     rc.close()
-    return ring
+    return ring, badge
 
 
 def test_header_ring_and_badge_follow_pysepal_theme_state():
-    """The ring picks the primary of the ACTIVE ThemeState mode.
+    """The ring AND the badge pick the primary of the ACTIVE ThemeState mode.
 
     Not solara's own (unfed) ``dark_effective`` — the 2b32b93 regression.
     Sentinel primaries make the assertion immune to whatever
@@ -145,12 +154,14 @@ def test_header_ring_and_badge_follow_pysepal_theme_state():
     themes.dark.primary = "#222222"
     try:
         with _theme_state(dark=False):
-            ring = _render_ring_style()
+            ring, badge = _render_header_styles()
             assert "rgba(17, 17, 17, 0.55)" in ring
+            assert "background: #111111" in badge
 
         with _theme_state(dark=True):
-            ring = _render_ring_style()
+            ring, badge = _render_header_styles()
             assert "rgba(34, 34, 34, 0.55)" in ring
+            assert "background: #222222" in badge
     finally:
         themes.light.primary, themes.dark.primary = before_primaries
 
