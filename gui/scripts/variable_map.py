@@ -26,15 +26,28 @@ def add_raster_var_on_map(
 ):
     """Draw a local variable raster with the palette it had as a GEE layer.
 
-    Blocking (builds a ``TileClient`` and reads the file) — call it from a worker
-    thread, like the GEE / vector branches. Replaces any layer already registered
-    under ``key`` so re-toggling doesn't stack duplicates.
+    Blocking (builds the overview pyramid on first use, a ``TileClient``, and
+    reads the file) — call it from a worker thread, like the GEE / vector
+    branches. Replaces any layer already registered under ``key`` so
+    re-toggling doesn't stack duplicates.
     """
     from localtileserver import TileClient, get_leaflet_tile_layer
 
     from gui.scripts.variable_styles import resolve_variable_style
 
     path = str(path)
+    # Same pyramid predictions get (spatialrisk.overviews): without it a
+    # zoomed-out tile of a large raster decodes the whole file. Resampled with
+    # nearest, not average — variables are often categorical, and averaging
+    # would invent classes (3 and 5 -> 4) or fade a 0/1 mask away.
+    try:
+        import spatialrisk.overviews as overviews
+
+        overviews.ensure_overviews(
+            path, resampling="nearest", min_pixels=overviews.OVERVIEW_MIN_PIXELS
+        )
+    except Exception:
+        logger.exception("overview build failed for %s; adding un-optimised", path)
     style = resolve_variable_style(var)
     # Post-process styles (postprocess_styles.resolve_postprocess_style) carry their
     # own "nodata" key and are the authority when present: distance rasters declare a
