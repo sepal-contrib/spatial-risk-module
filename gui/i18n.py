@@ -30,6 +30,7 @@ def _current_locale() -> str:
 
 
 def get_translator() -> Translator:
+    """Return this session's translator, building it on first use."""
     if _translator.value is None:
         _translator.value = Translator(MESSAGES_DIR, target=_current_locale())
     return _translator.value
@@ -41,19 +42,24 @@ def set_app_locale(code: str) -> None:
 
 
 def reset_translator() -> None:
-    """Drop the cached translator; it lazily rebuilds from the session
-    LocaleState. Call from on_kernel_start."""
+    """Drop the cached translator.
+
+    It lazily rebuilds from the session LocaleState. Call from on_kernel_start.
+    """
     _translator.value = None
 
 
 def t(key: str, /, **fmt) -> str:
-    """Resolve a dotted key against the active catalog (es->en->key) and
-    str.format(**fmt). A key missing in both languages returns the key string
-    so a gap degrades visibly instead of crashing the GUI.
+    """Resolve a dotted key against the active catalog (es->en->key).
+
+    The value is interpolated with str.format(**fmt). A key missing in both
+    languages returns the key string so a gap degrades visibly instead of
+    crashing the GUI.
 
     ``key`` is positional-only so a catalog value may carry a ``{key}``
     placeholder passed as a keyword (``key=...``) without colliding with this
-    lookup parameter."""
+    lookup parameter.
+    """
     node = get_translator()
     try:
         for part in key.split("."):
@@ -68,7 +74,8 @@ def plural(n: int, one_key: str, other_key: str, /, **fmt) -> str:
     """Pick the singular vs plural key for a count and interpolate n.
 
     The selector args are positional-only so a catalog value may carry an
-    ``{n}``/``{one_key}``/``{other_key}`` placeholder without colliding."""
+    ``{n}``/``{one_key}``/``{other_key}`` placeholder without colliding.
+    """
     fmt.setdefault("n", n)
     return t(one_key if n == 1 else other_key, **fmt)
 
