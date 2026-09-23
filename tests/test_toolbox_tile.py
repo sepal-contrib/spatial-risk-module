@@ -32,16 +32,23 @@ def test_tile_takes_project_reactive_not_app_state():
 
 def test_tile_mounts_with_a_project():
     """The tile renders end to end without a map or a client."""
-    import reacton
+    from _notification_host import render_under_notifications
 
     from gui.i18n import t
     from spatialrisk.project import Project
 
     t("common.cancel")  # warm the translator before the first render
-    box, _rc = reacton.render(
-        toolbox_tile.ToolboxTile(project=solara.reactive(Project(project_name="p")))
+    box, rc = render_under_notifications(
+        lambda: toolbox_tile.ToolboxTile(
+            project=solara.reactive(Project(project_name="p"))
+        ),
+        handle_error=False,
     )
-    assert box is not None
+    try:
+        assert box is not None
+        assert t("toolbox.tool_allocation") in _all_text(box)
+    finally:
+        rc.close()
 
 
 # --- two-pane shell + latest-run card (mock fidelity) -------------------
