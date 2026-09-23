@@ -13,8 +13,8 @@ import time
 from pathlib import Path
 
 import ipyvuetify as vw
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.i18n import t
 from gui.tile import process_tile
@@ -185,8 +185,8 @@ def _project_with_base(n_vars: int = 2) -> Project:
 def _render_process_tile(project):
     """Mount the real ProcessTile; caller is responsible for ``rc.close()``."""
     processing = solara.reactive(False)
-    box, rc = reacton.render(
-        process_tile.ProcessTile(project=project, processing=processing),
+    box, rc = render_under_notifications(
+        lambda: process_tile.ProcessTile(project=project, processing=processing),
         handle_error=False,
     )
     return rc

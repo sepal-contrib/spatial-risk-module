@@ -163,8 +163,9 @@ def test_page_mounts_notification_provider_before_the_map_app():
     LogConso...
 
     It must mount before the MapApp element so the bus exists when the workflow
-    tiles first render — a tile whose use_notifications() resolves a NoopNotifier
-    would silently drop its task tracking.
+    tiles first render — pysepal 4's use_notifications() raises
+    NotificationProviderError instead of quietly handing back a NoopNotifier
+    when nothing is mounted yet.
     """
     import inspect
 

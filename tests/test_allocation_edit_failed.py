@@ -15,6 +15,8 @@ from gui.i18n import t
 # See test_manage_projects_render: warm the translator before the first render.
 t("common.cancel")
 
+from _notification_host import render_under_notifications  # noqa: E402
+
 from gui.scripts.allocation_runner import (  # noqa: E402
     AllocationForm,
     BordersSelection,
@@ -355,18 +357,26 @@ def _failed_job(job_id="j1", name="allocation_1"):
 def _render_tile(jobs):
     """Render ToolboxTile with `jobs` in the module-level reactive.
 
-    Returns (box, restore) — call restore() to put the reactive back, or the
-    jobs leak into every later test in the session.
+    Returns (box, restore) — call restore() to close the render context and
+    put the reactive back, or the jobs (and the notification bus) leak into
+    every later test in the session.
     """
     from gui.tile import toolbox_tile
     from spatialrisk.project import Project
 
     previous = toolbox_tile.allocation_jobs.value
     toolbox_tile.allocation_jobs.set(jobs)
-    box, _rc = reacton.render(
-        toolbox_tile.ToolboxTile(project=solara.reactive(Project(project_name="p")))
+    box, rc = render_under_notifications(
+        lambda: toolbox_tile.ToolboxTile(
+            project=solara.reactive(Project(project_name="p"))
+        )
     )
-    return box, lambda: toolbox_tile.allocation_jobs.set(previous)
+
+    def restore():
+        rc.close()
+        toolbox_tile.allocation_jobs.set(previous)
+
+    return box, restore
 
 
 def test_dismiss_removes_the_job_row():
@@ -390,11 +400,14 @@ def test_dismiss_leaves_saved_runs_alone():
     previous = toolbox_tile.allocation_jobs.value
     toolbox_tile.allocation_jobs.set([_failed_job()])
     try:
-        box, _rc = reacton.render(
-            toolbox_tile.ToolboxTile(project=solara.reactive(project))
+        box, rc = render_under_notifications(
+            lambda: toolbox_tile.ToolboxTile(project=solara.reactive(project))
         )
-        _icon_button(box, "mdi-close").fire_event("click", {})
-        assert project.allocations == {}
+        try:
+            _icon_button(box, "mdi-close").fire_event("click", {})
+            assert project.allocations == {}
+        finally:
+            rc.close()
     finally:
         toolbox_tile.allocation_jobs.set(previous)
 
@@ -459,17 +472,20 @@ def test_submitting_an_edit_removes_the_old_failed_job_row(monkeypatch, tmp_path
     previous = toolbox_tile.allocation_jobs.value
     toolbox_tile.allocation_jobs.set([job])
     try:
-        box, _rc = reacton.render(
-            toolbox_tile.ToolboxTile(project=solara.reactive(project))
+        box, rc = render_under_notifications(
+            lambda: toolbox_tile.ToolboxTile(project=solara.reactive(project))
         )
-        _icon_button(box, "mdi-pencil-outline").fire_event("click", {})
+        try:
+            _icon_button(box, "mdi-pencil-outline").fire_event("click", {})
 
-        run_label = t("toolbox.allocation.run")
-        run_btn = next(b for b in _find(box, vw.Btn) if run_label in b.children)
-        run_btn.fire_event("click", {})
+            run_label = t("toolbox.allocation.run")
+            run_btn = next(b for b in _find(box, vw.Btn) if run_label in b.children)
+            run_btn.fire_event("click", {})
 
-        jobs = toolbox_tile.allocation_jobs.value
-        assert "j1" not in [j["id"] for j in jobs]
-        assert len(jobs) == 1
+            jobs = toolbox_tile.allocation_jobs.value
+            assert "j1" not in [j["id"] for j in jobs]
+            assert len(jobs) == 1
+        finally:
+            rc.close()
     finally:
         toolbox_tile.allocation_jobs.set(previous)

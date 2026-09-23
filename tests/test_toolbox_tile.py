@@ -79,21 +79,26 @@ def test_tile_has_a_tool_registry():
 
 def test_tile_renders_the_tool_list_pane():
     """The dialog shows the tool list beside the selected tool's panel."""
-    import reacton
+    from _notification_host import render_under_notifications
 
     from gui.i18n import t
     from spatialrisk.project import Project
 
     t("common.cancel")
-    box, _rc = reacton.render(
-        toolbox_tile.ToolboxTile(project=solara.reactive(Project(project_name="p")))
+    box, rc = render_under_notifications(
+        lambda: toolbox_tile.ToolboxTile(
+            project=solara.reactive(Project(project_name="p"))
+        )
     )
-    assert t("toolbox.tool_allocation") in _all_text(box)
+    try:
+        assert t("toolbox.tool_allocation") in _all_text(box)
+    finally:
+        rc.close()
 
 
 def test_tile_has_no_latest_run_card():
     """Runs live in the table only; the headline card is gone (2026-07-30 spec)."""
-    import reacton
+    from _notification_host import render_under_notifications
 
     from gui.i18n import t
     from spatialrisk.allocations import AllocationRun
@@ -114,14 +119,17 @@ def test_tile_has_no_latest_run_card():
         csv_path="/out/defor_project.csv",
     )
 
-    box, _rc = reacton.render(
-        toolbox_tile.ToolboxTile(project=solara.reactive(project))
+    box, rc = render_under_notifications(
+        lambda: toolbox_tile.ToolboxTile(project=solara.reactive(project))
     )
 
-    assert "312.4" in _all_text(box)  # the run still renders, in the table
-    src = inspect.getsource(toolbox_tile)
-    assert "latest_result" not in src
-    assert "AllocationResultCard" not in src
+    try:
+        assert "312.4" in _all_text(box)  # the run still renders, in the table
+        src = inspect.getsource(toolbox_tile)
+        assert "latest_result" not in src
+        assert "AllocationResultCard" not in src
+    finally:
+        rc.close()
 
 
 def test_body_has_no_duplicated_heading():
@@ -164,57 +172,68 @@ def test_rail_icon_exists_in_the_bundled_mdi_font():
 
 def test_rail_is_icon_only_with_primary_selection():
     """The tool rail mirrors the app drawer: icon button, primary when active."""
-    import reacton
+    from _notification_host import render_under_notifications
 
     from gui.i18n import t
     from spatialrisk.project import Project
 
     t("common.cancel")
-    box, _rc = reacton.render(
-        toolbox_tile.ToolboxTile(project=solara.reactive(Project(project_name="p")))
+    box, rc = render_under_notifications(
+        lambda: toolbox_tile.ToolboxTile(
+            project=solara.reactive(Project(project_name="p"))
+        )
     )
 
-    btn = _rail_button(box)
-    assert btn is not None
-    assert btn.icon  # icon-only, no text label on the button
-    assert btn.color == "primary"  # the (only) tool is selected
-    assert not [c for c in (btn.children or []) if isinstance(c, str) and c.strip()]
+    try:
+        btn = _rail_button(box)
+        assert btn is not None
+        assert btn.icon  # icon-only, no text label on the button
+        assert btn.color == "primary"  # the (only) tool is selected
+        assert not [c for c in (btn.children or []) if isinstance(c, str) and c.strip()]
+    finally:
+        rc.close()
 
 
 def test_panel_header_carries_title_description_and_info_button():
     """Header = tool title + description under it; details live in the popup."""
     import ipyvuetify as vw
-    import reacton
+    from _notification_host import render_under_notifications
 
     from gui.i18n import t
     from spatialrisk.project import Project
 
     t("common.cancel")
-    box, _rc = reacton.render(
-        toolbox_tile.ToolboxTile(project=solara.reactive(Project(project_name="p")))
+    box, rc = render_under_notifications(
+        lambda: toolbox_tile.ToolboxTile(
+            project=solara.reactive(Project(project_name="p"))
+        )
     )
 
-    # Rail buttons announce their tool name via a tooltip pinned to the RIGHT:
-    # the rail hugs the dialog's left edge, so a bottom tooltip clips there.
-    tooltips = _find(box, vw.Tooltip)
-    tool_name = t("toolbox.tool_allocation")
-    assert len(tooltips) > 0, "No tooltips rendered"
-    tooltip_texts = []
-    for tooltip in tooltips:
-        if tooltip.children:
-            tooltip_texts.extend([str(c) for c in tooltip.children])
-    assert tool_name in tooltip_texts, f"{tool_name} not in tooltip texts"
-    assert any(tt.right for tt in tooltips), "rail tooltip must open to the right"
+    try:
+        # Rail buttons announce their tool name via a tooltip pinned to the
+        # RIGHT: the rail hugs the dialog's left edge, so a bottom tooltip
+        # clips there.
+        tooltips = _find(box, vw.Tooltip)
+        tool_name = t("toolbox.tool_allocation")
+        assert len(tooltips) > 0, "No tooltips rendered"
+        tooltip_texts = []
+        for tooltip in tooltips:
+            if tooltip.children:
+                tooltip_texts.extend([str(c) for c in tooltip.children])
+        assert tool_name in tooltip_texts, f"{tool_name} not in tooltip texts"
+        assert any(tt.right for tt in tooltips), "rail tooltip must open to the right"
 
-    # The header title AND the one-line description both render in the panel.
-    flat = _all_text(box)
-    assert tool_name in flat
-    assert t("toolbox.allocation.description") in flat
+        # The header title AND the one-line description both render in the panel.
+        flat = _all_text(box)
+        assert tool_name in flat
+        assert t("toolbox.allocation.description") in flat
 
-    # The info popup carries the method details/references, not the short blurb.
-    src = inspect.getsource(toolbox_tile)
-    assert "InfoButton" in src
-    assert 'markdown=t(tool["info_key"])' in src
+        # The info popup carries the method details/references, not the short blurb.
+        src = inspect.getsource(toolbox_tile)
+        assert "InfoButton" in src
+        assert 'markdown=t(tool["info_key"])' in src
+    finally:
+        rc.close()
 
 
 def test_tile_mounts_the_details_dialog():
@@ -227,7 +246,7 @@ def test_tile_mounts_the_details_dialog():
 def test_form_name_suggestion_skips_in_flight_jobs():
     """A running job's name is taken, so the form opens on allocation_2."""
     import ipyvuetify as vw
-    import reacton
+    from _notification_host import render_under_notifications
 
     from gui.i18n import t
     from spatialrisk.project import Project
@@ -238,12 +257,17 @@ def test_form_name_suggestion_skips_in_flight_jobs():
         [{"id": "j1", "name": "allocation_1", "status": "running", "error": None}]
     )
     try:
-        box, _rc = reacton.render(
-            toolbox_tile.ToolboxTile(project=solara.reactive(Project(project_name="p")))
+        box, rc = render_under_notifications(
+            lambda: toolbox_tile.ToolboxTile(
+                project=solara.reactive(Project(project_name="p"))
+            )
         )
-        label = t("toolbox.allocation.field_name")
-        fields = [f for f in _find(box, vw.TextField) if f.label == label]
-        assert fields, "the Run name field did not render"
-        assert fields[0].v_model == "allocation_2"
+        try:
+            label = t("toolbox.allocation.field_name")
+            fields = [f for f in _find(box, vw.TextField) if f.label == label]
+            assert fields, "the Run name field did not render"
+            assert fields[0].v_model == "allocation_2"
+        finally:
+            rc.close()
     finally:
         toolbox_tile.allocation_jobs.set(previous)

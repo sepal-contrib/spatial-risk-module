@@ -1063,8 +1063,9 @@ def Page():
 
     # Kernel-scoped notification bus + UI (toasts top-right, task pill
     # bottom-right). Mounted BEFORE the MapApp element so the bus exists by the
-    # time the workflow tiles first render — their use_notifications() then
-    # resolves a real Notifier instead of a first-render NoopNotifier.
+    # time the workflow tiles first render — pysepal 4's use_notifications()
+    # raises NotificationProviderError, not a first-render NoopNotifier, when
+    # nothing is mounted yet.
     NotificationProvider()
 
     # Floating layer legend (bottom-center over the map). Mounted before MapApp,

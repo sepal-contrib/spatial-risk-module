@@ -374,8 +374,8 @@ def _render_capturing_on_toggle_map(monkeypatch, project, map_, legend_port=None
     Hands back on_toggle_map, so a test can drive the toggle without a real
     table.
     """
-    import reacton
     import solara
+    from _notification_host import render_under_notifications
 
     from gui.tile import inference_tile
 
@@ -397,8 +397,8 @@ def _render_capturing_on_toggle_map(monkeypatch, project, map_, legend_port=None
 
     monkeypatch.setattr(inference_tile, "InferenceOutputList", _StubList)
 
-    box, rc = reacton.render(
-        inference_tile.InferenceTile(
+    box, rc = render_under_notifications(
+        lambda: inference_tile.InferenceTile(
             project=solara.reactive(project), map_=map_, legend_port=legend_port
         ),
         handle_error=False,
