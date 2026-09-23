@@ -225,8 +225,12 @@ def _is_numeric_domain(categories) -> bool:
 def compile_linear_predictor(design_info, coef) -> LinearPredictor:
     """Sort ``design_info``'s terms into constant, lookup and materialised buckets.
 
-    ``coef`` has one entry per ``design_info.column_names`` entry; trailing extra
-    entries are ignored (iCAR's ``betas`` carry more).
+    ``coef`` has one entry per ``design_info.column_names`` entry. Trailing
+    extra entries are tolerated and ignored (the spec's §4.1 contract, as
+    iCAR's old ``betas[:n_cols]`` slice did), so a caller that must catch a
+    model fitted on another design checks the width itself, as
+    ``GLMModel.apply`` does; iCAR's fitted betas match the design width in
+    practice.
     """
     coef = np.asarray(coef, dtype=np.float64)
     n_cols = len(design_info.column_names)

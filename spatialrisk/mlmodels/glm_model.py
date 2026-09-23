@@ -168,6 +168,16 @@ class GLMModel(BaseRiskModel):
                 "GLM classes must be [0, 1] for the risk column, "
                 f"got {list(estimator.classes_)}"
             )
+        # predict_proba used to catch a model fitted on another design with
+        # sklearn's feature-count check; compile_linear_predictor ignores
+        # trailing coefficients, so a wider coef_ would silently shift them
+        # onto the wrong columns.
+        n_cols = len(design_info.column_names)
+        if estimator.coef_.shape[1] != n_cols:
+            raise ValueError(
+                f"GLM has {estimator.coef_.shape[1]} coefficients but its design "
+                f"has {n_cols} columns: the model was fitted on another design"
+            )
         predictor = compile_linear_predictor(design_info, estimator.coef_[0])
         intercept = float(estimator.intercept_[0])
         logger.info("GLM design: %s", predictor.describe())

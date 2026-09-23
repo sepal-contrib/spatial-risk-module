@@ -166,7 +166,7 @@ def test_an_integer_lookup_column_matches_its_float_twin(monkeypatch):
 
 
 def test_trailing_coefficients_are_ignored():
-    """The iCAR betas carry extra entries after the design columns."""
+    """Coefficients past the design width are tolerated and ignored (spec §4.1)."""
     rng = np.random.default_rng(6)
     x = _design("y ~ scale(a) + C(pa, levels=[0, 1])", _frame(100, rng))
     coef = np.r_[rng.normal(size=x.shape[1]), 99.0, 98.0]
