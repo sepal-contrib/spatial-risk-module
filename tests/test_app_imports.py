@@ -123,19 +123,20 @@ def test_page_wires_project_summary_step():
 
 
 def test_workflow_tabs_wires_aoi_restore_signal():
-    """The AOI restore signal reaches the tabs."""
+    """The AOI restore signal and the spec channel reach the AOI tile."""
     import inspect
 
     import gui.solara_app as solara_app
 
     src = inspect.getsource(solara_app.WorkflowTabs)
     assert "restore_signal=app_state.project_loaded_signal.value" in src
+    assert "aoi_spec=app_state.aoi_spec" in src
 
 
 def test_aoi_tile_imports_pysepal_view():
     """The AOI tile builds on pysepal's AOI view."""
-    # The vendored restore fork was upstreamed into pysepal (AoiView
-    # restore-on-mount + AoiResult.asset); the tile must use the library.
+    # pysepal 4 restores the picker through AoiView(spec=) (the selection
+    # rides on AoiResult.spec); the tile must use the library.
     import inspect
 
     import gui.tile.aoi_tile as aoi_tile
@@ -143,6 +144,41 @@ def test_aoi_tile_imports_pysepal_view():
     src = inspect.getsource(aoi_tile)
     assert "from pysepal.solara.components.aoi import AoiView" in src
     assert "gui.widget.aoi_view" not in src
+
+
+def test_aoi_tile_restores_through_spec_not_a_remount():
+    """No keyed remount: v4 restores on a spec change, and resets via clear_ref.
+
+    The old ``.key(f"aoi-{restore_signal}")`` remount ran the new picker's
+    mount before the old one's cleanup, which wiped a restored drawing.
+    """
+    import inspect
+
+    import gui.tile.aoi_tile as aoi_tile
+
+    src = inspect.getsource(aoi_tile.AoiTile)
+    assert ".key(" not in src
+    assert "spec=aoi_spec" in src
+    assert "clear_ref=" in src
+
+
+def test_project_load_publishes_the_spec_after_the_switch():
+    """do_load writes aoi_spec only after load_project_state's signal bump.
+
+    The bump's render resets the picker and syncs the draw control first; the
+    spec write then restores it (v4 seeds the draw control synchronously).
+    Before the bump, the result must already be installed: AoiTile reads the
+    incoming spec off it, and the map redraw shows it.
+    """
+    import inspect
+
+    import gui.solara_app as solara_app
+
+    src = inspect.getsource(solara_app.ProjectPanel)
+    result_at = src.index("app_state.aoi_result.set(restored)")
+    bump_at = src.index("app_state.load_project_state(loaded, when)")
+    spec_at = src.index("app_state.aoi_spec.set(")
+    assert result_at < bump_at < spec_at
 
 
 def test_solara_app_installs_task_log_handler():

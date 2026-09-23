@@ -4,27 +4,87 @@ import json
 from types import SimpleNamespace
 
 import geopandas as gpd
+import pandas as pd
 import pytest
+from pysepal.solara.components.aoi import AoiResult, AoiSpec
 from shapely.geometry import box
 
 import spatialrisk.project as proj
 from gui.scripts.aoi_io import (
     AOI_GEOMETRY_FILENAME,
+    admin_code_chain,
     attach_aoi,
     load_aoi,
     persist_aoi,
     write_aoi,
 )
 
+# The legacy ``"asset"`` manifest dict (pre-AoiSpec manifests carry only this).
+LEGACY_ASSET = {
+    "asset_id": "users/me/aoi",
+    "type": "TABLE",
+    "column": "ALL",
+    "value": None,
+}
+
 
 def _gdf(bounds=(12.40, 43.89, 12.52, 43.99)):
     return gpd.GeoDataFrame({"name": ["aoi"]}, geometry=[box(*bounds)], crs="EPSG:4326")
 
 
-def _aoi(method="DRAW", name="san_marino", gee=True, admin=None, gdf=None, asset=None):
+def _aoi(method="DRAW", name="san_marino", gee=True, admin=None, gdf=None, spec=None):
     return SimpleNamespace(
-        method=method, name=name, gee=gee, admin=admin, gdf=gdf, asset=asset
+        method=method, name=name, gee=gee, admin=admin, gdf=gdf, spec=spec
     )
+
+
+def _draw_spec(name="san_marino", gdf=None):
+    """A DRAW spec shaped like the one ``process_draw`` records (JSON lists)."""
+    gdf = _gdf() if gdf is None else gdf
+    return AoiSpec(method="DRAW", name=name, geo_json=json.loads(gdf.to_json()))
+
+
+def _asset_spec():
+    return AoiSpec(
+        method="ASSET", asset_id="users/me/aoi", asset_type="TABLE", column="ALL"
+    )
+
+
+def _gaul_names(chains):
+    """Stand in for ``pygaul.Names(admin=..., complete=True)`` offline.
+
+    ``chains`` maps a leaf code to its level-0..n codes; an unknown code raises
+    the ``ValueError`` pygaul raises for a code outside GAUL 2024.
+    """
+
+    def names(admin="", complete=False, **_):
+        assert complete, "the chain lookup needs every level's columns"
+        if admin not in chains:
+            raise ValueError(f'The requested "{admin}" is not part of FAO GAUL 2024.')
+        row = {f"gaul{lvl}_code": code for lvl, code in enumerate(chains[admin])}
+        return pd.DataFrame([row])
+
+    return names
+
+
+@pytest.fixture
+def draw_aoi_result():
+    """A v4 DRAW selection: geometry plus the spec that produced it."""
+    gdf = _gdf()
+    return AoiResult(
+        method="DRAW", name="san_marino", gdf=gdf, gee=False, spec=_draw_spec(gdf=gdf)
+    )
+
+
+@pytest.fixture
+def legacy_admin_manifest(monkeypatch):
+    """A pre-AoiSpec ADMIN2 manifest; pygaul resolves its chain offline."""
+    import pygaul
+
+    monkeypatch.setattr(
+        pygaul, "Names", _gaul_names({"100001": ("101", "1001", "100001")})
+    )
+    return {"method": "ADMIN2", "name": "ABC_x_y", "gee": False, "admin": "100001"}
 
 
 # --- write_aoi --------------------------------------------------------------
@@ -245,43 +305,61 @@ def test_project_without_aoi_loads_none(tmp_path, monkeypatch):
 
 
 def test_write_includes_asset_for_asset_method(tmp_path):
-    """Write includes asset dict for ASSET method AOIs."""
-    # The picker inputs ride on AoiResult.asset (pysepal restore support).
-    asset = {
-        "asset_id": "users/me/aoi",
-        "type": "TABLE",
-        "column": "ALL",
-        "value": None,
-    }
-    meta = write_aoi(tmp_path, _aoi(method="ASSET", name="aoi", gdf=None, asset=asset))
-    assert meta["asset"] == asset
+    """An ASSET AOI still writes the legacy ``asset`` dict next to its spec.
+
+    The picker inputs now live on ``AoiResult.spec``; the legacy key is kept
+    for one release so an older app version still reads the manifest. It must
+    be the full dict, not ``spec.asset_id``: the rebuild does
+    ``(asset or {}).get(...)``, which a bare string would break silently.
+    """
+    meta = write_aoi(
+        tmp_path, _aoi(method="ASSET", name="aoi", gdf=None, spec=_asset_spec())
+    )
+
+    assert meta["asset"] == LEGACY_ASSET
+    assert meta["aoi_spec"]["asset_id"] == "users/me/aoi"
 
 
 def test_write_omits_asset_for_non_asset_method(tmp_path):
     """Write omits asset dict for non-ASSET method AOIs."""
-    asset = {
-        "asset_id": "users/me/aoi",
-        "type": "TABLE",
-        "column": "ALL",
-        "value": None,
-    }
+    spec = AoiSpec(method="ADMIN0", admin_codes=("197",))
     meta = write_aoi(
-        tmp_path, _aoi(method="ADMIN0", name="GUY", admin="197", gdf=None, asset=asset)
+        tmp_path, _aoi(method="ADMIN0", name="GUY", admin="197", gdf=None, spec=spec)
     )
     assert "asset" not in meta
 
 
-def test_load_attaches_asset_to_result(tmp_path):
-    """Load attaches asset dict to the restored AOI result."""
-    asset = {
-        "asset_id": "users/me/aoi",
-        "type": "TABLE",
-        "column": "ALL",
-        "value": None,
-    }
-    meta = write_aoi(tmp_path, _aoi(method="ASSET", name="aoi", gdf=None, asset=asset))
+def test_load_restores_the_asset_spec(tmp_path):
+    """The restored ASSET AOI carries its picker inputs on ``spec``."""
+    meta = write_aoi(
+        tmp_path, _aoi(method="ASSET", name="aoi", gdf=None, spec=_asset_spec())
+    )
     restored = load_aoi(tmp_path, meta)
-    assert restored.asset == asset
+
+    assert restored.spec == _asset_spec()
+    assert restored.spec.asset_data() == LEGACY_ASSET
+
+
+def test_load_asset_rebuilds_from_the_spec_alone(tmp_path, monkeypatch):
+    """A manifest carrying only ``aoi_spec`` (no legacy key) still rebuilds."""
+    import ee
+
+    sentinel = object()
+    captured = {}
+    monkeypatch.setattr(
+        ee, "FeatureCollection", lambda aid: captured.update({"aid": aid}) or sentinel
+    )
+    meta = {
+        "method": "ASSET",
+        "name": "aoi",
+        "gee": True,
+        "aoi_spec": _asset_spec().to_dict(),
+    }
+
+    restored = load_aoi(tmp_path, meta)
+
+    assert restored.feature_collection is sentinel
+    assert captured["aid"] == "users/me/aoi"
 
 
 def test_load_asset_rebuilds_feature_collection(tmp_path, monkeypatch):
@@ -339,6 +417,173 @@ def test_load_asset_degrades_when_rebuild_fails(tmp_path, monkeypatch):
     restored = aoi_io.load_aoi(tmp_path, meta)
     assert restored is not None
     assert restored.feature_collection is None
+
+
+# --- AoiSpec persistence: v4 restores the picker from ``AoiResult.spec`` ----
+
+
+def test_write_persists_the_spec(tmp_path, draw_aoi_result):
+    """The manifest carries ``aoi_spec`` next to the existing metadata."""
+    meta = write_aoi(tmp_path, draw_aoi_result)
+
+    assert meta["aoi_spec"]["method"] == "DRAW"
+    assert meta["aoi_spec"]["schema_version"] >= 1
+    assert meta["aoi_spec"] == draw_aoi_result.spec.to_dict()
+    assert meta["geometry_file"] == AOI_GEOMETRY_FILENAME  # existing keys kept
+
+
+def test_attach_persists_the_same_spec_as_write(tmp_path, monkeypatch, draw_aoi_result):
+    """Selection-time attach and manual save must agree, spec included.
+
+    Otherwise every attach after a save would look like a change and rewrite.
+    """
+    monkeypatch.setattr(proj, "downloads_folder", tmp_path)
+    p = proj.Project(project_name="attach_spec")
+
+    attach_aoi(p, draw_aoi_result, data_dir=tmp_path)
+
+    assert p.aoi["aoi_spec"] == draw_aoi_result.spec.to_dict()
+    assert p.aoi == write_aoi(tmp_path / "attach_spec", draw_aoi_result)
+
+
+def test_restore_spec_round_trip(tmp_path, draw_aoi_result):
+    """Write, then JSON manifest, then load gives back an equal spec."""
+    meta = json.loads(json.dumps(write_aoi(tmp_path, draw_aoi_result)))
+
+    restored = load_aoi(tmp_path, meta)
+
+    assert restored.spec == draw_aoi_result.spec
+    assert restored.method == "DRAW"
+    assert restored.gdf is not None
+
+
+def test_restore_admin_spec_round_trip_keeps_the_code_chain(tmp_path):
+    """Admin codes come back as the tuple the picker's cascade expects."""
+    spec = AoiSpec(method="ADMIN2", admin_codes=("101", "1001", "100001"))
+    aoi = _aoi(method="ADMIN2", name="ABC_x_y", gee=False, admin="100001", spec=spec)
+    meta = json.loads(json.dumps(write_aoi(tmp_path, aoi)))
+
+    assert load_aoi(tmp_path, meta).spec == spec
+
+
+def test_restore_legacy_admin2_manifest_derives_the_code_chain(
+    tmp_path, legacy_admin_manifest
+):
+    """A pre-spec ADMIN2 manifest restores its cascade from the leaf code."""
+    result = load_aoi(tmp_path, legacy_admin_manifest)
+
+    assert result.method == "ADMIN2"
+    assert result.admin == "100001"
+    assert result.spec == AoiSpec(
+        method="ADMIN2", admin_codes=("101", "1001", "100001")
+    )
+
+
+def test_restore_legacy_admin_manifest_without_a_resolvable_chain(
+    tmp_path, monkeypatch
+):
+    """When pygaul cannot place the code: no spec, but the AOI still loads."""
+    import pygaul
+
+    monkeypatch.setattr(pygaul, "Names", _gaul_names({}))
+    meta = {"method": "ADMIN1", "name": "ABC_x", "gee": False, "admin": "1001"}
+
+    result = load_aoi(tmp_path, meta)
+
+    assert result is not None
+    assert result.admin == "1001"
+    assert result.spec is None
+
+
+def test_restore_legacy_admin0_manifest_needs_no_lookup(tmp_path, monkeypatch):
+    """At level 0 the leaf is the whole chain, so pygaul is never asked."""
+    import pygaul
+
+    def no_lookup(**_):
+        raise AssertionError("ADMIN0 must not look its chain up")
+
+    monkeypatch.setattr(pygaul, "Names", no_lookup)
+    meta = {"method": "ADMIN0", "name": "GUY", "gee": False, "admin": "197"}
+
+    assert load_aoi(tmp_path, meta).spec == AoiSpec(
+        method="ADMIN0", admin_codes=("197",)
+    )
+
+
+def test_restore_legacy_draw_manifest_rebuilds_the_drawing(tmp_path):
+    """A pre-spec DRAW manifest seeds the draw control from its sidecar."""
+    meta = write_aoi(tmp_path, _aoi(gdf=_gdf()))
+    assert "aoi_spec" not in meta  # what every saved project holds today
+
+    spec = load_aoi(tmp_path, meta).spec
+
+    assert spec.method == "DRAW"
+    assert spec.name == "san_marino"
+    drawn = gpd.GeoDataFrame.from_features(spec.geo_json["features"])
+    assert drawn.total_bounds == pytest.approx([12.40, 43.89, 12.52, 43.99], abs=1e-6)
+
+
+def test_restore_legacy_draw_manifest_without_its_sidecar_has_no_spec(tmp_path):
+    """No geometry to seed the control from: nothing to restore the picker to."""
+    meta = {"method": "DRAW", "name": "x", "gee": False, "geometry_file": "gone.json"}
+
+    assert load_aoi(tmp_path, meta).spec is None
+
+
+def test_restore_legacy_asset_manifest_rebuilds_the_picker_inputs(tmp_path):
+    """The legacy ``asset`` dict maps back onto the spec field for field."""
+    meta = {"method": "ASSET", "name": "aoi", "gee": False, "asset": LEGACY_ASSET}
+
+    spec = load_aoi(tmp_path, meta).spec
+
+    assert spec.asset_data() == LEGACY_ASSET
+
+
+@pytest.mark.parametrize("method", ["SHAPE", "POINTS"])
+def test_restore_legacy_file_manifest_has_no_spec(tmp_path, method):
+    """Old manifests never stored the file path, so there is nothing to seed."""
+    meta = write_aoi(tmp_path, _aoi(method=method, gdf=_gdf()))
+
+    result = load_aoi(tmp_path, meta)
+
+    assert result.spec is None
+    assert result.gdf is not None  # the AOI itself is still restored
+
+
+def test_restore_newer_schema_falls_back_to_the_legacy_fields(tmp_path):
+    """A spec from a newer pysepal must not fail the project load."""
+    meta = write_aoi(tmp_path, _aoi(gdf=_gdf()))
+    meta["aoi_spec"] = {**_draw_spec().to_dict(), "schema_version": 99}
+
+    result = load_aoi(tmp_path, meta)
+
+    assert result.gdf is not None
+    assert result.spec.method == "DRAW"  # rebuilt from the sidecar instead
+    assert result.spec.schema_version == 1
+
+
+def test_restore_malformed_spec_falls_back_to_the_legacy_fields(tmp_path):
+    """A spec payload with no method is treated like a missing one."""
+    meta = {"method": "ADMIN0", "name": "GUY", "gee": False, "admin": "197"}
+    meta["aoi_spec"] = {"schema_version": 1}
+
+    assert load_aoi(tmp_path, meta).spec == AoiSpec(
+        method="ADMIN0", admin_codes=("197",)
+    )
+
+
+def test_admin_code_chain_walks_up_from_the_leaf(monkeypatch):
+    """The shared helper: levels 0..n for a leaf, derived from pygaul."""
+    import pygaul
+
+    monkeypatch.setattr(
+        pygaul, "Names", _gaul_names({"100001": ("101", "1001", "100001")})
+    )
+
+    assert admin_code_chain("100001", 2) == ("101", "1001", "100001")
+    assert admin_code_chain(100001, 2) == ("101", "1001", "100001")  # int code
+    assert admin_code_chain("197", 0) == ("197",)
+    assert admin_code_chain("999", 1) is None  # not in GAUL 2024
 
 
 # --- persist_aoi ------------------------------------------------------------
@@ -709,7 +954,9 @@ def test_attach_write_load_attach_roundtrip_is_a_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(proj, "downloads_folder", tmp_path)
     p = proj.Project(project_name="attach_roundtrip")
     p.save()
-    attach_aoi(p, _aoi(gdf=_gdf()), data_dir=tmp_path)
+    # With a spec, as every v4 selection has: the spec must survive the
+    # manifest round trip unchanged too, or each load would rewrite it.
+    attach_aoi(p, _aoi(gdf=_gdf(), spec=_draw_spec()), data_dir=tmp_path)
 
     manifest = tmp_path / "attach_roundtrip" / "attach_roundtrip_project.json"
     sidecar = tmp_path / "attach_roundtrip" / AOI_GEOMETRY_FILENAME
@@ -739,6 +986,31 @@ def test_attach_heals_legacy_manifest_without_digest_then_settles(
     assert "geometry_digest" in p.aoi
 
     assert attach_aoi(p, aoi, data_dir=tmp_path) is False  # now idempotent
+
+
+def test_attach_heals_legacy_manifest_without_spec_then_settles(tmp_path, monkeypatch):
+    """A pre-spec manifest gains its synthesized spec once, then stays put.
+
+    Loading a legacy project synthesizes a spec, so the first attach of the
+    restored AOI writes it; the next load reads that spec back unchanged and
+    the manifest is not touched again.
+    """
+    monkeypatch.setattr(proj, "downloads_folder", tmp_path)
+    p = proj.Project(project_name="attach_legacy_spec")
+    p.save()
+    attach_aoi(p, _aoi(gdf=_gdf()), data_dir=tmp_path)  # a pre-v4 selection
+    assert "aoi_spec" not in p.aoi
+
+    restored = load_aoi(tmp_path / "attach_legacy_spec", p.aoi)
+    assert attach_aoi(p, restored, data_dir=tmp_path) is True  # heals
+    assert p.aoi["aoi_spec"]["method"] == "DRAW"
+
+    manifest = tmp_path / "attach_legacy_spec" / "attach_legacy_spec_project.json"
+    reloaded = load_aoi(
+        tmp_path / "attach_legacy_spec",
+        json.loads(manifest.read_text(encoding="utf-8"))["aoi"],
+    )
+    assert attach_aoi(p, reloaded, data_dir=tmp_path) is False  # now idempotent
 
 
 def test_attach_retries_manifest_save_after_a_previous_failure(tmp_path, monkeypatch):
@@ -856,6 +1128,19 @@ def test_project_save_is_atomic_and_leaves_no_temp_file(tmp_path, monkeypatch):
         if f.name.startswith(".") and f.name.endswith(".tmp")
     ]
     assert leftovers == []
+
+
+def test_new_and_close_forget_the_picker_spec():
+    """New/Close leave no spec behind for the next project to inherit."""
+    state = _app_state()
+
+    state.aoi_spec.set(_draw_spec())
+    state.new_project_state(proj.Project(project_name="fresh_spec"))
+    assert state.aoi_spec.value is None
+
+    state.aoi_spec.set(_draw_spec())
+    state.close_project_state()
+    assert state.aoi_spec.value is None
 
 
 def test_restoring_flag_clears_even_when_load_raises(tmp_path):

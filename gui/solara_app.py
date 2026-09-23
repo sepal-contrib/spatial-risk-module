@@ -211,15 +211,20 @@ def ProjectPanel(on_close=None):
             when = next((i.modified for i in infos.value if i.name == name), None)
             # Restore the saved AOI (sidecar geometry + metadata) so the map can
             # frame it and the downstream tabs unlock. Set before installing the
-            # project so the load-zoom effect sees it on the same render.
-            # restoring_project(): Solara can render BETWEEN these two sets, and
+            # project so the load-zoom effect sees it on the same render, and
+            # so AoiTile reads the incoming spec off it on the switch.
+            # restoring_project(): Solara can render BETWEEN these sets, and
             # the attach-on-select effect must not persist the incoming AOI
             # into the outgoing project (see AppState.attach_current_aoi).
             with app_state.restoring_project():
-                app_state.aoi_result.set(
-                    load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
-                )
+                restored = load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
+                app_state.aoi_result.set(restored)
                 app_state.load_project_state(loaded, when)
+                # Only after the signal bump: its render resets the picker when
+                # needed (AoiTile) and syncs the draw control's visibility; this
+                # write then restores the picker, which seeds the draw control
+                # synchronously and re-runs the selection (autoselect).
+                app_state.aoi_spec.set(restored.spec if restored is not None else None)
             notifications.success(t("project.status_loaded", name=name))
             set_load_open(False)
             if on_close is not None:
@@ -616,11 +621,12 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
     # AoiView never gets to remove its draw control (toolbar + editable drawn
     # shape) from the shared map when the user moves to another step. Mirror
     # the tab state onto the map here. Also keyed on project_loaded_signal
-    # (a load remounts AoiView, whose restore may seed the control back onto
-    # the map while another tab is active) and on the AOI loading flag: the
-    # restore auto-select re-seeds the control from its async task — after
-    # the load-time effect run — and flips loading False right afterwards,
-    # so that flip is what re-hides a task-time re-add on a non-AOI tab.
+    # (the switch's picker reset in AoiTile puts the control back while DRAW
+    # stays selected; child effects run first, so this run re-hides it) and
+    # on the AOI loading flag: do_load writes the restored spec only after
+    # the bump, and AoiView's restore then seeds the control back onto the
+    # map and raises loading in the same pass (autoselect), so that flip is
+    # what re-hides a restore-time re-add on a non-AOI tab.
     dc_hidden = solara.use_ref(False)
     # Last project_loaded_signal this effect saw: the helper may only drop a
     # remembered hide on a project switch — any other re-run while away
@@ -661,6 +667,7 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
                 map_=map_,
                 gee_interface=gee_interface,
                 aoi_result=app_state.aoi_result,
+                aoi_spec=app_state.aoi_spec,
                 restore_signal=app_state.project_loaded_signal.value,
                 loading=app_state.loading,
             )

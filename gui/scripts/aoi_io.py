@@ -16,6 +16,11 @@ to rebuild the lazy EE ``feature_collection`` on load (see ``load_aoi``), so the
 AOI stays usable downstream without re-selection; asset AOIs remain
 geometry-less on load. See ``write_aoi`` for the boundary.
 
+The picker's own record of the selection is persisted too, as ``aoi_spec``
+(pysepal's ``AoiSpec.to_dict()``), so a load restores the picker through
+``AoiView(spec=)``. Manifests written before it get a spec synthesized from
+their legacy fields (see ``_legacy_spec``).
+
 Kept free of Solara/ipyvuetify so it can be unit-tested without a render
 harness; pysepal/geopandas are imported lazily inside the functions.
 """
@@ -26,7 +31,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger("spatial_risk")
 
@@ -39,6 +44,44 @@ _ADMIN_METHODS = ("ADMIN0", "ADMIN1", "ADMIN2")
 # precise to, and far coarser than the floating-point noise a GeoJSON
 # write -> read round-trip can introduce. See ``_geometry_digest``.
 _DIGEST_GRID_SIZE = 1e-6
+
+
+def admin_code_chain(admin_code: Any, level: int) -> Optional[Tuple[str, ...]]:
+    """Return every GAUL code from level 0 down to ``admin_code``, or None.
+
+    pysepal's admin cascade is restored from the whole chain
+    (``AoiSpec.admin_codes``, ``AdminLevelSelector(codes=)``), but a pre-v4
+    manifest (and a stored borders selection) records only the leaf. This
+    mirrors pysepal's own ``_derive_admin_chain``: a local pygaul parquet
+    lookup, no Earth Engine. At level 0 the leaf already is the whole chain,
+    so no lookup is made.
+
+    Args:
+        admin_code: The leaf GAUL 2024 code (str or int).
+        level: The admin level of ``admin_code`` (0, 1 or 2).
+
+    Returns:
+        The codes for levels ``0..level`` as strings, or None when pygaul cannot
+        place the code (not a GAUL 2024 code, lookup failure) — a caller then
+        restores without a cascade rather than failing.
+    """
+    code = str(admin_code)
+    if level == 0:
+        return (code,)
+    try:
+        import pygaul
+
+        row = pygaul.Names(admin=code, complete=True).iloc[0]
+        return tuple(str(row[f"gaul{lvl}_code"]) for lvl in range(level + 1))
+    except Exception:
+        logger.warning(
+            "Could not derive the GAUL code chain of ADMIN%s code %s; the "
+            "admin picker cannot be restored to it.",
+            level,
+            code,
+            exc_info=True,
+        )
+        return None
 
 
 def _rebuild_admin_feature_collection(admin_code: str) -> Optional[Any]:
@@ -171,6 +214,17 @@ def _aoi_metadata(
         meta["geometry_file"] = geometry_file
     if gdf is not None:
         meta["geometry_digest"] = _geometry_digest(gdf)
+
+    # The picker's own record of the selection: what load_aoi hands back to
+    # AoiView(spec=) so the picker shows (and re-runs) it.
+    spec = getattr(aoi, "spec", None)
+    if spec is not None:
+        meta["aoi_spec"] = spec.to_dict()
+        if spec.method == "ASSET":
+            # Legacy key, kept for one release so an older app still reads the
+            # manifest. The full dict, never spec.asset_id: the rebuild does
+            # ``(asset or {}).get(...)``, which a bare string silently breaks.
+            meta["asset"] = spec.asset_data()
     return meta
 
 
@@ -221,11 +275,7 @@ def write_aoi(project_dir: Path, aoi: Any) -> Optional[Dict[str, Any]]:
     if gdf is None:
         # Metadata-only AOI (e.g. GEE admin/asset): drop any stale geometry.
         sidecar.unlink(missing_ok=True)
-        meta = _aoi_metadata(aoi, geometry_file=None)
-        asset = getattr(aoi, "asset", None)
-        if asset and getattr(aoi, "method", None) == "ASSET":
-            meta["asset"] = asset
-        return meta
+        return _aoi_metadata(aoi, geometry_file=None)
 
     # Normalize to WGS84 so the sidecar matches what zoom_bounds expects.
     gdf = _to_wgs84(gdf)
@@ -354,9 +404,6 @@ def attach_aoi(project: Any, aoi: Any, data_dir: Path) -> bool:
     expected = _aoi_metadata(
         aoi, geometry_file=AOI_GEOMETRY_FILENAME if has_geometry else None, gdf=gdf
     )
-    asset = getattr(aoi, "asset", None)
-    if asset and getattr(aoi, "method", None) == "ASSET":
-        expected["asset"] = asset
 
     manifest_exists = manifest.exists()
     committed = _read_manifest_aoi(manifest) if manifest_exists else project.aoi
@@ -386,6 +433,72 @@ def attach_aoi(project: Any, aoi: Any, data_dir: Path) -> bool:
     return True
 
 
+def _legacy_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
+    """Synthesize an ``AoiSpec`` for a manifest written before specs existed.
+
+    Every project saved by the pysepal 3.x app is such a manifest, and that
+    app restored every method into the picker — so dropping the spec would
+    load them all with a blank picker. Rebuilt from what the old manifest has:
+
+    * DRAW: the drawing, from the sidecar geometry (``to_json``, not
+      ``__geo_interface__``: its tuple coordinates would never compare equal
+      to the JSON lists a round-tripped spec holds).
+    * ASSET: the legacy ``asset`` dict, field for field.
+    * ADMIN0/1/2: the GAUL code chain (:func:`admin_code_chain`).
+    * SHAPE/POINTS: None — the file path was never stored.
+
+    Returns None whenever the inputs are not there; the AOI still loads.
+    """
+    from pysepal.solara.components.aoi import AoiSpec
+
+    method = metadata.get("method")
+    if method == "DRAW" and gdf is not None:
+        return AoiSpec(
+            method="DRAW",
+            name=metadata.get("name") or None,
+            geo_json=json.loads(gdf.to_json()),
+        )
+    if method == "ASSET":
+        asset = metadata.get("asset")
+        if isinstance(asset, dict) and asset.get("asset_id"):
+            return AoiSpec(
+                method="ASSET",
+                asset_id=asset["asset_id"],
+                asset_type=asset.get("type"),
+                column=asset.get("column"),
+                value=asset.get("value"),
+            )
+        return None
+    admin = metadata.get("admin")
+    if method in _ADMIN_METHODS and admin:
+        codes = admin_code_chain(admin, int(method[-1]))
+        return AoiSpec(method=method, admin_codes=codes) if codes else None
+    return None
+
+
+def _restore_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
+    """Return the manifest's ``AoiSpec``, or a synthesized one for old manifests.
+
+    A spec this pysepal cannot read (a newer ``schema_version``, a payload with
+    no method) falls back to the legacy fields instead of failing the load: a
+    project must always open, even if its picker comes back blank.
+    """
+    payload = metadata.get("aoi_spec")
+    if payload:
+        from pysepal.solara.components.aoi import AoiSpec
+
+        try:
+            return AoiSpec.from_dict(payload)
+        except Exception:
+            logger.warning(
+                "Could not read the saved AOI selection (%r); rebuilding it from "
+                "the legacy AOI fields instead.",
+                payload.get("schema_version") if isinstance(payload, dict) else None,
+                exc_info=True,
+            )
+    return _legacy_spec(metadata, gdf)
+
+
 def load_aoi(project_dir: Path, metadata: Optional[Dict[str, Any]]) -> Optional[Any]:
     """Reconstruct an ``AoiResult`` from persisted metadata + sidecar geometry.
 
@@ -398,7 +511,10 @@ def load_aoi(project_dir: Path, metadata: Optional[Dict[str, Any]]) -> Optional[
         Vector AOIs carry their ``gdf`` (from the sidecar). GEE admin AOIs carry
         no sidecar — their lazy EE ``feature_collection`` is rebuilt from the
         persisted ``admin`` code (``gdf`` stays None). ``feature_collection`` is
-        None only when neither applies or the rebuild fails.
+        None only when neither applies or the rebuild fails. ``spec`` holds the
+        picker's selection for ``AoiView(spec=)`` — read from the manifest, or
+        synthesized for a pre-spec one (see :func:`_legacy_spec`) — and is None
+        when there is nothing to restore the picker to.
     """
     if not metadata:
         return None
@@ -417,16 +533,19 @@ def load_aoi(project_dir: Path, metadata: Optional[Dict[str, Any]]) -> Optional[
         if path.exists():
             gdf = gpd.read_file(path)
 
+    spec = _restore_spec(metadata, gdf)
+
     # GEE admin selections (ADMIN0/1/2) carry no geometry sidecar — only the
     # GAUL ``admin`` code is persisted. Rebuild the lazy EE FeatureCollection so
     # the restored AOI has usable geometry; otherwise it loads "present" but
     # empty and the Variables step fails with "no usable geometry — re-select
     # the area", forcing the user to reselect just to continue.
     feature_collection = None
+    asset = spec.asset_data() if spec is not None else metadata.get("asset")
     if gdf is None and gee and admin and method in _ADMIN_METHODS:
         feature_collection = _rebuild_admin_feature_collection(admin)
-    elif gee and method == "ASSET" and metadata.get("asset"):
-        feature_collection = _rebuild_asset_feature_collection(metadata["asset"])
+    elif gee and method == "ASSET" and asset:
+        feature_collection = _rebuild_asset_feature_collection(asset)
 
     return AoiResult(
         method=method,
@@ -435,7 +554,5 @@ def load_aoi(project_dir: Path, metadata: Optional[Dict[str, Any]]) -> Optional[
         feature_collection=feature_collection,
         admin=admin,
         gee=gee,
-        # ASSET picker inputs round-trip on the result so AoiView can restore
-        # the asset field on load.
-        asset=metadata.get("asset"),
+        spec=spec,
     )
