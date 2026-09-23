@@ -236,12 +236,13 @@ def test_notification_area_is_gone():
 
 
 def test_solara_test_flag_removed():
-    """The SOLARA_TEST flag has been replaced with PYSEPAL_DEV_AUTH."""
+    """The legacy dev flag is gone; PYSEPAL_DEV_AUTH replaces it."""
     from pathlib import Path
 
     src = Path(__file__).parent.parent / "gui" / "solara_app.py"
     content = src.read_text()
-    assert "SOLARA_TEST" not in content, "SOLARA_TEST should not appear in source"
+    legacy = "SOLARA" + "_TEST"
+    assert legacy not in content, f"{legacy} should not appear in source"
 
 
 def test_pysepal_dev_auth_flag_present():

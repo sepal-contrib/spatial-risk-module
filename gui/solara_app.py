@@ -97,9 +97,10 @@ install_task_log_handler()
 
 setup_solara_server(extra_asset_locations=[])
 
-# Prime the blocking dev login at startup: raises RuntimeError if armed without
-# valid credentials. The guard keeps the HTTP login off the render path — this
-# code runs only once at app startup, not on every render.
+# Prime the blocking developer login once at startup so the HTTP POST stays
+# off the render path. This function RAISES RuntimeError when PYSEPAL_DEV_AUTH
+# is not armed (it is not a no-op), hence the guard; when armed it raises
+# ValueError if the LOCAL_SEPAL_* credentials are unset.
 if _DEV_AUTH_ARMED:
     prime_dev_auth()
 
