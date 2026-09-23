@@ -59,7 +59,7 @@ dependencies:
       # conda-forge only has 0.11.x; the app needs the 1.x API
       - localtileserver>=1.0
       # pysepal 4.0: topology-driven sessions, AoiSpec restore, pysepal.i18n.
-      # Upstream release; the SerafiniJose fork is archived (tag spatial-risk-v3-final).
+      # Upstream release; replaces the SerafiniJose/pysepal@spatial-risk fork pin.
       - "pysepal==4.0.0"
       # jupyter-loopback fork: voila tile-404 fixes (probe 405 vs 404 +
       # localhost page-origin prefix match) — pending upstream PR

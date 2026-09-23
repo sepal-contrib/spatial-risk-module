@@ -50,7 +50,7 @@ dependencies = [
     # whose v1.1.5rc0 conflicts with pysepal's earthengine-api>1.6.0.
     "earthengine-api @ git+https://github.com/openforis/earthengine-api.git@v1.6.14#subdirectory=python",
     # pysepal 4.0: topology-driven sessions, AoiSpec restore, pysepal.i18n.
-    # Upstream release; the SerafiniJose fork is archived (tag spatial-risk-v3-final).
+    # Upstream release; replaces the SerafiniJose/pysepal@spatial-risk fork pin.
     "pysepal==4.0.0",
     # jupyter-loopback fork: voila tile-404 fixes, pending upstream PR.
     "jupyter-loopback @ git+https://github.com/SerafiniJose/jupyter-loopback.git@fix/voila-localhost-proxy-probe",
