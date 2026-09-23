@@ -363,16 +363,34 @@ def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path
 
     The policy sizes the pool as ``budget // stripe_bytes``, so the estimate
     must be at least what one extra worker really adds. Measured in fresh
-    processes (VmHWM) on a 4 x 3000x3000 float32 stack, mirroring
-    ``tests/test_sampling_pool.py``'s sampling-side probe.
+    processes (VmHWM) on a 7-feature 2048x3000 float32 stack, mirroring
+    ``tests/test_sampling_pool.py``'s sampling-side probe. Seven float32
+    features satisfy 8F > sum(itemsizes) + 24, the shape where the engine's
+    read phase, not the model, sets a GLM stripe's peak; the stack's 5 %
+    nodata per layer makes this a coarse check of that phase, whose exact
+    pin is ``test_read_phase_peak_fits_the_charge`` in
+    ``tests/test_windowed_predict.py``. The plan is made with the working
+    width the probe's run really charged, read off the engine's plan line,
+    so the pin follows the model's charge instead of a number copied here.
     """
     probe = Path(__file__).resolve().parents[1] / "benchmarks" / "_inference_probe.py"
+    height, width, n_features = 2048, 3000, 7
 
     def run(workers):
         d = tmp_path / f"w{workers}"
         d.mkdir()
         out = subprocess.run(
-            [sys.executable, str(probe), str(d), str(workers)],
+            [
+                sys.executable,
+                str(probe),
+                str(d),
+                str(workers),
+                "--size",
+                str(height),
+                str(width),
+                "--features",
+                str(n_features),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -381,12 +399,13 @@ def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path
         return json.loads(out.stdout.strip().splitlines()[-1])
 
     one, four = run(1), run(4)
+    assert one["n_design_cols"] == four["n_design_cols"]
     plan = plan_inference(
-        width=3000,
+        width=width,
         tile_rows=256,
-        n_features=4,
-        feature_itemsizes=[4, 4, 4, 4],
-        n_design_cols=5,
+        n_features=n_features,
+        feature_itemsizes=[4] * n_features,
+        n_design_cols=four["n_design_cols"],
         with_mask=False,
         with_extra=False,
         cores=8,
@@ -396,5 +415,6 @@ def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path
     extra_bytes = (four["peak_kib"] - one["peak_kib"]) * 1024
     assert extra_bytes <= 3 * plan.stripe_bytes, (
         f"one={one['peak_kib']} KiB four={four['peak_kib']} KiB "
-        f"stripe={plan.stripe_bytes / 1024:.0f} KiB"
+        f"stripe={plan.stripe_bytes / 1024:.0f} KiB "
+        f"({four['n_design_cols']} working cols charged)"
     )
