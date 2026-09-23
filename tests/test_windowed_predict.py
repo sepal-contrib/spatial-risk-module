@@ -186,6 +186,91 @@ def test_an_all_nodata_stripe_writes_zeros(tmp_path):
     assert len(calls) == 2  # stripe 0 never reaches predict_block
 
 
+#: (dtype, nodata) per feature: a Peru-like stack (7 float32, int16, uint8)
+#: and 15 uint8 layers, the two shapes the read phase was measured on.
+_READ_PHASE_STACKS = {
+    "peru_like": [("float32", -9999.0)] * 7 + [("int16", -32768), ("uint8", 255)],
+    "uint8_x15": [("uint8", 255)] * 15,
+}
+
+
+@pytest.mark.parametrize("stack", sorted(_READ_PHASE_STACKS))
+def test_read_phase_peak_fits_the_charge(tmp_path, stack):
+    """Reading a dense stripe peaks within the smallest charge any model makes.
+
+    GLM and iCAR are charged one working column, so the engine's own read
+    phase is their stripe's peak. Measured with tracemalloc on a stripe where
+    every pixel is valid (the worst case: the filtered frame is as large as
+    the full-stripe columns), against
+    :func:`spatialrisk.gdal_env.inference_working_set` with a mask and
+    ``n_design_cols=1``. Holding the full-stripe columns, a dict of filtered
+    copies and pandas' consolidated block at once (24 B per pixel per
+    feature) overran it on both stacks.
+    """
+    import tracemalloc
+
+    from _inference_fixture import write_tiles
+    from rasterio.windows import Window
+
+    from spatialrisk.gdal_env import inference_working_set
+    from spatialrisk.mlmodels.windowed_predict import _read_stripe
+
+    rows, width = 256, 1024
+    rng = np.random.default_rng(3)
+    paths, itemsizes = {}, []
+    for i, (dtype, nodata) in enumerate(_READ_PHASE_STACKS[stack]):
+        data = (rng.random((rows, width)) * 100).astype(dtype)  # no nodata pixel
+        paths[f"f{i}"] = write_tiles(tmp_path / f"f{i}.tif", data, nodata)
+        itemsizes.append(np.dtype(dtype).itemsize)
+    mask = write_tiles(tmp_path / "mask.tif", np.ones((rows, width), "uint8"), 255)
+
+    features = {name: rasterio.open(p) for name, p in paths.items()}
+    mask_src = rasterio.open(mask)
+    try:
+        transform = mask_src.transform
+
+        def read():
+            return _read_stripe(
+                (features, mask_src, {}),
+                Window(0, 0, width, rows),
+                transform,
+                list(paths),
+                (0,),
+                False,
+                None,
+            )
+
+        read()  # warm GDAL's block cache outside the measurement
+        tracemalloc.start()
+        try:
+            base, _ = tracemalloc.get_traced_memory()
+            tracemalloc.reset_peak()
+            valid, block_df, _ = read()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    finally:
+        for src in [*features.values(), mask_src]:
+            src.close()
+
+    assert valid.all() and len(block_df) == rows * width
+    assert list(block_df.columns) == list(paths)
+    assert (block_df.dtypes == np.float64).all()
+    charge = inference_working_set(
+        width,
+        rows,
+        n_features=len(itemsizes),
+        feature_itemsizes=itemsizes,
+        n_design_cols=1,
+        with_mask=True,
+        with_extra=False,
+    )
+    assert peak - base <= charge, (
+        f"read phase {(peak - base) / (rows * width):.1f} B/px > "
+        f"charge {charge / (rows * width):.1f} B/px"
+    )
+
+
 def test_output_is_atomic_and_a_failure_keeps_the_old_file(tmp_path):
     """A failing prediction leaves the previous output intact and no partial behind."""
     from spatialrisk.mlmodels.windowed_predict import predict_windowed

@@ -163,6 +163,19 @@ def _read_stripe(
     columns, which keeps the same rows in the same order as building the full
     frame and boolean-indexing it (what the serial loops did) with one
     full-stripe frame fewer.
+
+    The filtered columns go straight into one preallocated
+    ``(features, valid pixels)`` float64 array -- the layout pandas gives a
+    frame built from a dict of float64 columns -- and each full-stripe column
+    is dropped as soon as it is copied, so the frame is that array with no
+    further copy. At its peak (the first copy) this phase holds the
+    full-stripe columns, the array and one filtered column: 16 B per pixel
+    per feature plus 8, where a dict of filtered copies beside the
+    full-stripe columns, consolidated into a third copy by pandas, held 24
+    per feature. :func:`spatialrisk.gdal_env.inference_working_set` charges
+    16 per feature plus the raw bands and the output's fixed columns, which
+    covers it. The extra layers are read after the frame, once the
+    full-stripe columns are gone.
     """
     features, mask_src, extra_src = handles
     n_rows, n_cols = int(window.height), int(window.width)
@@ -186,6 +199,7 @@ def _read_stripe(
         if mask_src.nodata is not None:
             invalid |= mflat == mask_src.nodata
         valid &= ~invalid
+        del mblock, mflat, invalid
 
     columns = {}
     for name in feature_names:
@@ -196,6 +210,18 @@ def _read_stripe(
         col = arr.ravel()
         valid &= ~np.isnan(col)
         columns[name] = col
+        # The dict holds the column now: no loop name may keep the last one
+        # alive past its copy below.
+        del arr, col
+
+    filtered = np.empty((len(columns), int(np.count_nonzero(valid))), dtype=float)
+    for j, name in enumerate(feature_names):
+        filtered[j] = columns.pop(name)[valid]
+    # pandas stores a 2-D array's transpose as the frame's single block, so the
+    # (pixels, features) view ``filtered.T`` with ``copy=False`` makes
+    # ``filtered`` itself that block.
+    block_df = pd.DataFrame(filtered.T, columns=list(feature_names), copy=False)
+    del filtered
 
     extras = {}
     for name, layer in (extra_layers or {}).items():
@@ -209,7 +235,6 @@ def _read_stripe(
         )
         extras[name] = block.astype(float).ravel()[valid]
 
-    block_df = pd.DataFrame({name: col[valid] for name, col in columns.items()})
     return valid, block_df, extras
 
 
