@@ -282,6 +282,24 @@ def test_prime_dev_auth_guarded():
     ), "prime_dev_auth() must be guarded by _DEV_AUTH_ARMED"
 
 
+def test_page_shares_the_scope_theme_state_no_manual_toggle_wiring():
+    """v4 owns the theme toggle itself; Page only shares its scope's ThemeState.
+
+    No hand-rolled ThemeToggle memo, no _observe_theme effect mirroring the
+    widget into solara.lab.theme — SepalMap and MapApp.element both take
+    theme_state= directly, which pysepal 4 keeps in sync on its own.
+    """
+    import inspect
+
+    import gui.solara_app as app
+
+    src = inspect.getsource(app.Page.f)
+    assert "theme_state=theme_state" in src
+    assert "theme_toggle" not in src
+    assert "_observe_theme" not in src
+    assert "ThemeToggle" not in inspect.getsource(app)
+
+
 def test_conftest_guards_dev_auth():
     """Test isolation: conftest sets PYSEPAL_DEV_AUTH to 0 to prevent logins."""
     import os

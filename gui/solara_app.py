@@ -13,11 +13,12 @@ import reacton.ipyvuetify as rv
 import solara
 from pysepal import mapping as sm
 from pysepal.logger import setup_logging
-from pysepal.sepalwidgets.vue_app import MapApp, ThemeToggle
+from pysepal.sepalwidgets.vue_app import MapApp
 from pysepal.solara import (
     NotificationProvider,
     get_current_gee_interface,
     get_current_sepal_client,
+    get_current_theme_state,
     prime_dev_auth,
     setup_sessions,
     setup_solara_server,
@@ -25,7 +26,6 @@ from pysepal.solara import (
     use_notifications,
     with_sepal_sessions,
 )
-from solara.lab.components.theming import theme
 
 from gui.i18n import app_available_locales, reset_translator, t, use_app_locale
 from gui.scripts.aoi_io import load_aoi, persist_aoi
@@ -764,18 +764,11 @@ def Page():
 
     gee_interface = get_current_gee_interface()
     sepal_client = get_current_sepal_client()
-    theme_toggle = solara.use_memo(lambda: ThemeToggle(), [])
+    # v4 owns the theme toggle itself (scope-keyed ThemeState); the app just
+    # shares its scope's state with the map and MapApp.
+    theme_state = get_current_theme_state()
     # Follow the header language selector: pysepal's kernel locale drives t().
     use_app_locale()
-
-    def _observe_theme():
-        def handler(e):
-            return setattr(theme, "dark", e["new"])
-
-        theme_toggle.observe(handler, "dark")
-        return lambda: theme_toggle.unobserve(handler, "dark")
-
-    solara.use_effect(_observe_theme, [])
 
     def create_map():
         map_ = sm.SepalMap(
@@ -784,7 +777,7 @@ def Page():
             center=[0, 0],
             gee=True,
             gee_interface=gee_interface,
-            theme_toggle=theme_toggle,
+            theme_state=theme_state,
             fullscreen=True,
         )
         # Second basemap (hidden) so the layers control offers a satellite
@@ -1078,7 +1071,7 @@ def Page():
         main_map=[sepal_map],
         steps_data=steps_data,
         initial_step=1,  # auto-open the Project dialog (step id 1) at startup
-        theme_toggle=[theme_toggle],
+        theme_state=theme_state,
         locales=app_available_locales(),
         right_panel_config=right_panel_config,
         right_panel_content=right_panel_content,
