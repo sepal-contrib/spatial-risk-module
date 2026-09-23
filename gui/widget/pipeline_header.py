@@ -13,6 +13,7 @@ never "done". Segment/badge data all derives from the STEPS registry.
 import reacton.ipyvuetify as rv
 import solara
 import solara.lab
+from pysepal.solara import use_theme_dark
 
 from gui.i18n import plural, t
 from gui.store.workflow_steps import STEPS, StepStatus, nav_targets, step_states
@@ -114,6 +115,7 @@ def PipelineHeader(active_step: int, on_navigate, project, aoi_result):
     bailout would eat project-only changes) plus the active index and a navigate
     callback.
     """
+    dark = use_theme_dark()  # hook: unconditional, before any branch
     p = project.value
     aoi = aoi_result.value
     states = step_states(p, aoi)
@@ -123,10 +125,12 @@ def PipelineHeader(active_step: int, on_navigate, project, aoi_result):
     # Filled segments + the current-step ring use the app's theme "primary"
     # accent (green in light mode, gold in dark) — the same colour as the Next
     # button and every color="primary" control, so the strip matches the app.
+    # The dark/light choice follows pysepal's kernel-scoped `use_theme_dark()`
+    # (the ThemeState MapApp's ThemeToggle drives), not solara's own
+    # `use_dark_effective()`, which never observes that toggle (see commit
+    # 2b32b93, which dropped the mirror that used to keep them in sync).
     themes = solara.lab.theme.themes
-    primary = (
-        themes.dark.primary if solara.lab.use_dark_effective() else themes.light.primary
-    )
+    primary = themes.dark.primary if dark else themes.light.primary
     ring_css = f"box-shadow: 0 0 0 2px {_rgba(primary, 0.55)};"
 
     def _seg_style(i: int) -> str:
