@@ -211,11 +211,13 @@ COPY_CHUNK_ROWS = 1024
 #: configuration rather than to police a slow one.
 STAGE_TIMEOUT_S = 3600
 
-#: The engine's plan line, e.g. "pred_glm_1.tif: 8 worker(s), 256 rows/stripe,
-#: budget 24594 MiB (psutil.available), reserved 18072 MiB". Parsed only for
-#: the table; the line itself is kept verbatim in every record.
+#: The engine's plan line, e.g. "pred_glm_1.tif: 8 worker(s), 256 rows/stripe
+#: (2 MiB each, 4 design cols), budget 24594 MiB (psutil.available), reserved
+#: 18072 MiB". The parenthesised stripe-size/design-width detail is optional
+#: (older captures may lack it); parsed only for the table, the line itself is
+#: kept verbatim in every record.
 PLAN_LINE_RE = re.compile(
-    r"(?P<workers>\d+) worker\(s\), (?P<rows>\d+) rows/stripe, "
+    r"(?P<workers>\d+) worker\(s\), (?P<rows>\d+) rows/stripe(?: \([^)]*\))?, "
     r"budget (?P<budget>[\d.]+) MiB \((?P<source>[^)]*)\)"
 )
 
@@ -1065,12 +1067,21 @@ def test_digests_agree_compares_within_one_model():
 def test_plan_line_regex_reads_the_engines_own_log_line():
     """The record's worker/stripe columns come from the line the engine logged."""
     line = (
-        "pred_glm.tif: 8 worker(s), 256 rows/stripe, budget 24594 MiB "
-        "(psutil.available), reserved 18072 MiB"
+        "pred_glm.tif: 8 worker(s), 256 rows/stripe (2 MiB each, 4 design cols), "
+        "budget 24594 MiB (psutil.available), reserved 18072 MiB"
     )
     match = PLAN_LINE_RE.search(line)
     assert match["workers"] == "8" and match["rows"] == "256"
     assert match["source"] == "psutil.available"
+
+    # The pre-Task-2 format (no stripe-size/design-width detail) still parses.
+    old_line = (
+        "pred_glm.tif: 8 worker(s), 256 rows/stripe, budget 24594 MiB "
+        "(psutil.available), reserved 18072 MiB"
+    )
+    old_match = PLAN_LINE_RE.search(old_line)
+    assert old_match["workers"] == "8" and old_match["rows"] == "256"
+    assert old_match["source"] == "psutil.available"
 
 
 def _write_raster(path, array, *, nodata, dtype=None, north=None):

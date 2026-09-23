@@ -872,3 +872,54 @@ def test_no_pool_thread_builds_a_threadpool_controller(tmp_path, golden, monkeyp
     assert [n for n in built if n.startswith("predict")] == []
     arr, _ = read_raster(out)
     np.testing.assert_array_equal(arr, golden["glm"][0])
+
+
+# --------------------------------------------------------------------------- #
+# the plan line: stripe size, design width, and the over-budget warning
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("workers", [1, 2])
+def test_sub_tile_stripes_reproduce_the_glm_golden(tmp_path, golden, workers):
+    """64-row stripes on 256-row tiles write the same raster as the golden."""
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    out = _run_glm(
+        tmp_path,
+        ds,
+        model,
+        tmp_path / f"sub{workers}.tif",
+        workers=workers,
+        rows_per_stripe=64,
+    )
+    arr, meta = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["glm"][0])
+    assert meta == golden["glm"][1]
+
+
+def test_plan_line_reports_stripe_size_and_design_width(tmp_path, caplog):
+    """The INFO plan line carries the per-stripe MiB and the design column count."""
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    with caplog.at_level(logging.INFO, logger="spatial_risk"):
+        model.apply(tmp_path / "out" / "g.tif", ds, ds.mask_path, 0, workers=1)
+    line = next(
+        r.getMessage() for r in caplog.records if "rows/stripe" in r.getMessage()
+    )
+    assert "MiB each" in line and "design cols" in line
+
+
+def test_over_budget_plan_logs_a_warning(tmp_path, caplog, monkeypatch):
+    """A stripe the budget cannot hold is announced, not silently attempted."""
+    from spatialrisk import gdal_env
+
+    real = gdal_env.plan_inference
+
+    def cramped(**kw):
+        kw["free_bytes"] = 1 << 20  # 1 MiB free: nothing fits
+        return real(**kw)
+
+    monkeypatch.setattr("spatialrisk.mlmodels.windowed_predict.plan_inference", cramped)
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    with caplog.at_level(logging.WARNING, logger="spatial_risk"):
+        model.apply(tmp_path / "out" / "g.tif", ds, ds.mask_path, 0)
+    assert any("exceeds the memory budget" in r.getMessage() for r in caplog.records)

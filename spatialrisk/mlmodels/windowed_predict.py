@@ -9,8 +9,10 @@ grid is part of the output: iCAR resamples its rho and mask per stripe from
 geographic bounds, so stripes never switch to native TIFF blocks. The default
 height is the output tile height (:data:`spatialrisk.parallel.PREDICT_BAND_ROWS`
 = :data:`spatialrisk.raster_profile.BLOCK_SIZE`), which is what
-:func:`spatialrisk.gdal_env.plan_inference` starts from and the only unit it
-shrinks in.
+:func:`spatialrisk.gdal_env.plan_inference` starts from; if that does not fit
+one worker it shrinks further, halving below the tile height down to
+:data:`spatialrisk.gdal_env.INFERENCE_MIN_STRIPE_ROWS`, and logs a warning if
+even that stripe still overruns the budget.
 
 Memory per stripe is what :func:`spatialrisk.gdal_env.plan_inference`
 budgets (see its docstring); the body below is written to match that model,
@@ -264,9 +266,7 @@ def _plan_and_reserve(
         tile_rows=BLOCK_SIZE,
         n_features=len(feature_paths),
         feature_itemsizes=itemsizes,
-        n_design_cols=(
-            n_design_cols if n_design_cols is not None else len(feature_paths) + 1
-        ),
+        n_design_cols=n_design_cols,
         with_mask=mask is not None,
         with_extra=bool(extra_layers),
     )
@@ -482,6 +482,9 @@ def predict_windowed(
     part = output_file.with_name(output_file.stem + ".part.tif")
     feature_paths = {k: Path(v) for k, v in feature_paths.items()}
     feature_names = list(feature_paths)
+    n_design_cols = (
+        n_design_cols if n_design_cols is not None else len(feature_paths) + 1
+    )
 
     label = label or output_file.name
     plan, reservation = _plan_and_reserve(
@@ -503,14 +506,28 @@ def predict_windowed(
     handles = _Handles(feature_paths, mask, extra_layers)
     try:
         log.info(
-            "%s: %d worker(s), %d rows/stripe, budget %.0f MiB (%s), reserved %.0f MiB",
+            "%s: %d worker(s), %d rows/stripe (%.0f MiB each, %d design cols), "
+            "budget %.0f MiB (%s), reserved %.0f MiB",
             label,
             plan.workers,
             plan.rows_per_stripe,
+            plan.stripe_bytes / 2**20,
+            n_design_cols,
             plan.memory_budget_bytes / 2**20,
             plan.memory_source,
             reservation.bytes_ / 2**20,
         )
+        if plan.over_budget_bytes:
+            log.warning(
+                "%s: one %d-row stripe (%.0f MiB) exceeds the memory budget "
+                "(%.0f MiB) by %.0f MiB; running anyway with %d worker(s)",
+                label,
+                plan.rows_per_stripe,
+                plan.stripe_bytes / 2**20,
+                plan.memory_budget_bytes / 2**20,
+                plan.over_budget_bytes / 2**20,
+                plan.workers,
+            )
 
         with rasterio.open(target_path) as ref:
             profile = ref.profile.copy()
