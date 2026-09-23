@@ -34,6 +34,23 @@ from patsy.highlevel import build_design_matrices
 
 _PLAIN_C = re.compile(r"^C\(\s*([A-Za-z_]\w*)\s*(?:,.*)?\)$", re.S)
 
+# eta()'s peak working set, in float64 columns (8 B/px each). The figures come
+# from tracemalloc measurements (patsy 1.0.2, pandas 2.3), rounded up, and
+# tests/test_linear_predictor.py pins them. eta() runs two phases that never
+# overlap. Both hold the returned eta vector.
+_ETA_COLS = 1
+# Lookup phase: the column cast to float64 (a copy only when the frame holds
+# ints), the int64 searchsorted index, one gathered float64 vector and the bool
+# miss mask. Measured: 25 B/px on float columns, 33 B/px on int columns.
+_LOOKUP_COLS = 4
+# Materialised phase: until the matrix is built, patsy keeps each factor's
+# evaluated copy and its NA mask alive, and scale() copies once more. Measured:
+# 25 B/px per scale() factor with its matrix column included.
+_COLS_PER_FACTOR = 3
+# The in-flight factor's evaluation temporaries and the ``X @ coef`` product.
+# A single scale() factor peaks at 40 B/px inside patsy.
+_BUILD_COLS = 2
+
 
 @dataclass
 class _Lookup:
@@ -59,8 +76,31 @@ class LinearPredictor:
 
     @property
     def working_set_columns(self) -> int:
-        """Design columns the planner should charge per pixel (matrix + eta + index)."""
-        return self.materialised_columns + 2
+        """Design columns the planner should charge per pixel for one eta() call.
+
+        This is a conservative model of eta()'s measured peak in float64 columns,
+        not a count of design columns. It is the eta vector plus the larger of
+        two phases:
+
+        * the lookup phase, a fixed 4 columns whatever the level count;
+        * the materialised phase: the subset matrix, 3 columns per factor
+          patsy evaluates, and 2 columns of build transients.
+
+        The per-factor figure assumes single-column factors. Those are the
+        ``scale(x)``, plain numeric and ``C(...)`` factors that
+        ``generate_patsy_formula`` emits. A multi-column basis such as a spline
+        would need re-measuring.
+        ``test_working_set_columns_covers_the_measured_eta_peak`` pins the model
+        against tracemalloc.
+        """
+        lookup = _LOOKUP_COLS if self.lookups else 0
+        materialised = 0
+        if self.subset_design_info is not None:
+            n_factors = len(self.subset_design_info.factor_infos)
+            materialised = (
+                self.materialised_columns + _COLS_PER_FACTOR * n_factors + _BUILD_COLS
+            )
+        return _ETA_COLS + max(lookup, materialised)
 
     def describe(self) -> str:
         """One line for the plan log."""
@@ -84,6 +124,9 @@ class LinearPredictor:
                     f"{lk.code}: values not among the training levels: {bad}"
                 )
             out += lk.table_sorted[pos]
+            # Free the per-pixel transients now, not when the next lookup or the
+            # patsy build below rebinds or outlives them.
+            del values, pos, miss
         if self.subset_design_info is not None:
             (x,) = build_design_matrices(
                 [self.subset_design_info], block_df, NA_action="raise"

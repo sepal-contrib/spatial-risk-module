@@ -1,5 +1,7 @@
 # tests/test_linear_predictor.py
 """compile_linear_predictor: lookups for categoricals, a subset for the rest."""
+import tracemalloc
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -8,6 +10,11 @@ from patsy import dmatrices
 from spatialrisk.mlmodels.linear_predictor import compile_linear_predictor
 
 LEVELS = list(range(1, 61))
+L106 = list(range(1, 107))
+PERU_LIKE = (
+    " + ".join(f"scale(x{i})" for i in range(1, 8))
+    + f" + C(k, levels={L106}) + C(pa, levels=[0, 1])"
+)
 
 
 def _frame(n, rng, levels=LEVELS):
@@ -45,7 +52,8 @@ def test_eta_matches_the_full_design_product():
         pred.eta(new), np.asarray(x_new) @ coef, rtol=1e-12, atol=0
     )
     assert pred.materialised_columns == 2  # scale(a), b:scale(a)
-    assert pred.working_set_columns == 4
+    # eta + max(lookup 4, 2 matrix cols + 3 x 2 factors (scale(a), b) + 2 build)
+    assert pred.working_set_columns == 11
 
 
 def test_levels_absent_from_the_training_frame_still_look_up_their_coefficient():
@@ -142,3 +150,62 @@ def test_describe_counts_buckets():
     )
     pred = compile_linear_predictor(x.design_info, np.ones(x.shape[1]))
     assert pred.describe() == "2 lookup term(s), 1 materialised col(s)"
+
+
+def _float_frame(n, rng, n_numeric=7):
+    """All-float64 columns, built the way the inference engine builds block_df."""
+    cols = {f"x{i}": rng.normal(size=n) for i in range(1, n_numeric + 1)}
+    cols["pa"] = rng.integers(0, 2, n).astype(float)
+    cols["k"] = rng.choice(L106, n).astype(float)
+    cols["y"] = rng.integers(0, 2, n).astype(float)
+    return pd.DataFrame(cols)
+
+
+def _eta_peak_bytes(pred, df):
+    """Tracemalloc peak of one eta() call, above what was live before it."""
+    started = not tracemalloc.is_tracing()
+    if started:
+        tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        pred.eta(df)
+        return tracemalloc.get_traced_memory()[1] - base
+    finally:
+        if started:
+            tracemalloc.stop()
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        pytest.param(f"y ~ scale(x1) + C(k, levels={L106})", id="golden"),
+        pytest.param(f"y ~ {PERU_LIKE}", id="peru-like"),
+        pytest.param(
+            f"y ~ C(k, levels={L106}) + C(pa, levels=[0, 1])", id="lookup-only"
+        ),
+    ],
+)
+def test_working_set_columns_covers_the_measured_eta_peak(formula):
+    """The planner's charge covers eta()'s real peak without grossly overshooting."""
+    rng = np.random.default_rng(9)
+    x = _design(formula, _float_frame(2000, rng))
+    pred = compile_linear_predictor(x.design_info, rng.normal(size=x.shape[1]))
+    n_rows = 300_000
+    new = _float_frame(n_rows, rng)
+    pred.eta(new.iloc[:100])  # warm patsy's lazy state outside the measurement
+    measured = _eta_peak_bytes(pred, new)
+    charged = pred.working_set_columns * 8 * n_rows
+    assert measured <= charged, (measured / n_rows, pred.working_set_columns)
+    assert charged <= 2.5 * measured, (measured / n_rows, pred.working_set_columns)
+
+
+def test_working_set_columns_does_not_grow_with_the_level_count():
+    """A 106-level lookup is charged exactly what a 2-level one is."""
+    rng = np.random.default_rng(10)
+    train = _float_frame(2000, rng)
+    wide = _design(f"y ~ scale(x1) + C(k, levels={L106})", train)
+    narrow = _design("y ~ scale(x1) + C(pa, levels=[0, 1])", train)
+    pred_wide = compile_linear_predictor(wide.design_info, np.ones(wide.shape[1]))
+    pred_narrow = compile_linear_predictor(narrow.design_info, np.ones(narrow.shape[1]))
+    assert pred_wide.working_set_columns == pred_narrow.working_set_columns
