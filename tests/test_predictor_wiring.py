@@ -1,4 +1,4 @@
-"""GLM and iCAR predictors charge for the design, not every level."""
+"""GLM and iCAR apply(): the compiled linear predictor's charge, use and guards."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -105,6 +105,33 @@ def test_icar_apply_charges_materialised_columns_not_levels(tmp_path, monkeypatc
         x_two_level.design_info, betas_two_level
     ).working_set_columns
     assert captured["n_design_cols"] == two_level
+
+
+def test_icar_apply_evaluates_through_the_compiled_predictor(tmp_path, monkeypatch):
+    """A real iCAR apply() sends every predicted pixel through LinearPredictor.eta.
+
+    The one-column charge above holds only while the closure evaluates the
+    design through ``eta``; a closure that went back to building the full
+    design matrix would still be charged one column, and fails here instead.
+    """
+    from spatialrisk.mlmodels.linear_predictor import LinearPredictor
+
+    ds = build_dataset(tmp_path)
+    model = build_icar(tmp_path, ds)
+    rows = []
+    real_eta = LinearPredictor.eta
+
+    def spy_eta(self, block_df):
+        rows.append(len(block_df))
+        return real_eta(self, block_df)
+
+    monkeypatch.setattr(LinearPredictor, "eta", spy_eta)
+    out = model.apply(tmp_path / "out" / "i.tif", ds, ds.mask_path, 0, workers=1)
+
+    with rasterio.open(out) as src:
+        predicted = np.count_nonzero(src.read(1))
+    assert rows, "iCAR apply() never called LinearPredictor.eta"
+    assert sum(rows) == predicted > 0
 
 
 def test_glm_apply_rejects_coefficients_off_the_design_width(tmp_path):
