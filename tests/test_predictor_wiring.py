@@ -1,5 +1,6 @@
 """GLM and iCAR predictors charge for the design, not every level."""
 import numpy as np
+import pandas as pd
 import pytest
 
 rasterio = pytest.importorskip("rasterio")
@@ -122,3 +123,32 @@ def test_glm_apply_rejects_coefficients_off_the_design_width(tmp_path):
     with pytest.raises(ValueError, match="4 coefficients but its design has 3"):
         model.apply(out, ds, ds.mask_path, 0)
     assert not out.exists()
+
+
+def test_glm_closure_rejects_an_infinite_feature(tmp_path, monkeypatch):
+    """An infinite feature value raises, as sklearn's input check did.
+
+    Through the compiled predictor it would otherwise come out as a saturated
+    (or NaN) risk without a word.
+    """
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    captured = {}
+
+    def fake_predict_windowed(target, features, block, out, **kw):
+        captured["block"] = block
+        return out
+
+    monkeypatch.setattr(
+        "spatialrisk.mlmodels.windowed_predict.predict_windowed", fake_predict_windowed
+    )
+    model.apply(tmp_path / "out" / "g.tif", ds, ds.mask_path, 0)
+    predict_block = captured["block"]
+
+    frame = pd.DataFrame(
+        {"alt": [50.0, np.inf], "pa": [0.0, 1.0], "unused": [1.0, 1.0]}
+    )
+    with pytest.raises(ValueError, match="not finite for 1 pixel"):
+        predict_block(frame, {})
+    finite = predict_block(frame.iloc[:1], {})
+    assert np.isfinite(finite).all() and 0 < finite[0] < 1

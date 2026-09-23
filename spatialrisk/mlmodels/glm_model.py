@@ -185,7 +185,19 @@ class GLMModel(BaseRiskModel):
         def predict_block(block_df, extras):
             # expit(decision) is exactly what LogisticRegression.predict_proba
             # applies for a binary model, so this equals predict_proba(...)[:, 1].
-            return expit(predictor.eta(block_df) + intercept)
+            eta = predictor.eta(block_df)
+            eta += intercept
+            # sklearn's input check used to reject a +-inf feature; the
+            # compiled predictor would turn one into a saturated (or NaN) risk.
+            finite = np.isfinite(eta)
+            if not finite.all():
+                raise ValueError(
+                    "GLM linear predictor is not finite for "
+                    f"{finite.size - np.count_nonzero(finite)} pixel(s): a feature "
+                    "value is infinite or too large"
+                )
+            del finite
+            return expit(eta)
 
         predict_windowed(
             active_dataset.target.path,
