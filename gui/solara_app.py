@@ -225,6 +225,23 @@ def ProjectPanel(on_close=None):
                 # write then restores the picker, which seeds the draw control
                 # synchronously and re-runs the selection (autoselect).
                 app_state.aoi_spec.set(restored.spec if restored is not None else None)
+            # Heal a legacy manifest (ADMIN0/ADMIN1/ASSET, saved before
+            # aoi_spec existed) right away: the autoselect re-run below
+            # publishes an AoiResult that is often *equal* to `restored` (a
+            # frozen-dataclass comparison), so solara's equals_extra skip
+            # keeps aoi_result from changing and the attach-on-select effect
+            # (gui/solara_app.py, persist_aoi_on_select) never re-fires on its
+            # own. attach_aoi is idempotent, so a manifest that is already
+            # current is left untouched (no mtime bump on a normal load). A
+            # failed heal must not turn a successful load into a load error.
+            try:
+                app_state.attach_current_aoi(data_dir=DATA_DIR)
+            except Exception:
+                logger.warning(
+                    "Failed to heal AOI manifest for project %r on load",
+                    name,
+                    exc_info=True,
+                )
             notifications.success(t("project.status_loaded", name=name))
             set_load_open(False)
             if on_close is not None:
