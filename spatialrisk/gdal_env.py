@@ -417,6 +417,11 @@ INFERENCE_TARGET_STRIPE_ROWS = 256
 (:data:`spatialrisk.parallel.PREDICT_BAND_ROWS`), so a stripe write covers
 whole output tiles."""
 
+INFERENCE_MIN_STRIPE_ROWS = 32
+"""Floor for the second shrink stage of :func:`plan_inference`: a stripe that
+cannot fit one worker at one tile row halves (256 -> 128 -> 64 -> 32) and stops
+here. Below this, output tiles are rewritten too many times to be worth it."""
+
 
 class InferencePlan:
     """What :func:`plan_inference` decided, and the readings it decided from.
@@ -427,6 +432,10 @@ class InferencePlan:
     ``GDAL_CACHEMAX`` the run asks for, unreserved and -- GDAL latching the
     value on first use -- honoured only if this is the process's first job
     (see :func:`plan_inference`).
+
+    ``over_budget_bytes`` is how far one stripe at the final height exceeds
+    the memory budget, 0 when it fits; non-zero means the run proceeds
+    anyway (with one worker unless an explicit override set more).
     """
 
     __slots__ = (
@@ -438,6 +447,7 @@ class InferencePlan:
         "by_memory",
         "stripe_bytes",
         "memory_budget_bytes",
+        "over_budget_bytes",
         "free_bytes",
         "memory_source",
     )
@@ -513,20 +523,24 @@ def plan_inference(
     * ``workers = min(half the affinity cores - reserved_workers,
       budget // stripe_bytes)``, min 1;
     * the budget is :data:`INFERENCE_MEMORY_FRACTION` of the free memory minus
-      GDAL's block cache; if one worker does not fit the stripe shrinks in
-      whole tile rows, never below one, and the job runs serially;
+      GDAL's block cache; if one worker does not fit, the stripe shrinks in
+      two stages -- first in whole tile rows down to one tile row, then by
+      halving below the tile height (256 -> 128 -> 64 -> 32) down to
+      :data:`INFERENCE_MIN_STRIPE_ROWS` -- and the job runs serially;
     * pooled workers get one GDAL decode thread each, a single worker keeps
       :func:`sampling_num_threads`;
     * the cache grows to hold every in-flight stripe of every input.
 
-    The shrink is a floor rather than a lever as the engine calls this:
     :data:`INFERENCE_TARGET_STRIPE_ROWS` equals the
     :data:`spatialrisk.raster_profile.BLOCK_SIZE` passed as ``tile_rows``, so
-    the starting height is already one tile row and ``while rows > tile_rows``
-    never runs. On a raster wide enough that one stripe overruns the budget
-    the policy therefore drops to one worker and hands it that stripe whole;
-    it never trades stripe height for fit. Shrinking only happens for a
-    caller with ``tile_rows`` below the target.
+    the starting height is already one tile row and stage 1 (``while rows >
+    tile_rows``) never runs; only stage 2's halving applies. A caller with
+    ``tile_rows`` below the target starts taller, so stage 1 shrinks it in
+    whole tile rows first -- keeping stripes tile-aligned as long as possible
+    -- before stage 2 ever halves below one tile row. If a stripe at
+    :data:`INFERENCE_MIN_STRIPE_ROWS` still overruns the budget, the plan
+    proceeds anyway (one worker) and ``over_budget_bytes`` reports by how
+    much; the engine warns about it.
 
     ``cachemax_bytes`` is budgeted for only as the flat
     :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` subtracted from the memory budget
@@ -590,8 +604,13 @@ def plan_inference(
     stripe_bytes = _ws(rows)
     by_memory = budget // stripe_bytes
     if by_memory < 1 and not fixed_rows:
+        # Stage 1: whole tile rows, down to one tile row.
         while rows > tile_rows and _ws(rows) > budget:
             rows = max(tile_rows, ((rows // tile_rows) - 1) * tile_rows)
+        # Stage 2: below the tile height, halving so stripes still divide a
+        # tile row (256 -> 128 -> 64 -> 32); stops at INFERENCE_MIN_STRIPE_ROWS.
+        while rows > INFERENCE_MIN_STRIPE_ROWS and _ws(rows) > budget:
+            rows = max(INFERENCE_MIN_STRIPE_ROWS, rows // 2)
         stripe_bytes = _ws(rows)
         by_memory = budget // stripe_bytes
     workers = max(1, min(by_cores, by_memory))
@@ -618,6 +637,7 @@ def plan_inference(
         by_memory=int(max(0, by_memory)),
         stripe_bytes=int(stripe_bytes),
         memory_budget_bytes=int(budget),
+        over_budget_bytes=int(max(0, stripe_bytes - budget)),
         free_bytes=int(free_bytes),
         memory_source=memory_source,
     )
