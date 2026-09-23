@@ -530,6 +530,62 @@ def test_restore_legacy_draw_manifest_without_its_sidecar_has_no_spec(tmp_path):
     assert load_aoi(tmp_path, meta).spec is None
 
 
+def _dated_legacy_draw_manifest(project_dir):
+    """A pre-spec DRAW manifest whose sidecar carries an ISO-date attribute.
+
+    Like one a QGIS edit adds. GDAL's GeoJSON driver reads such a string back
+    as a datetime column, whose ``Timestamp`` values ``json`` cannot encode.
+    """
+    gdf = _gdf()
+    gdf["edited"] = ["2024-05-06"]
+    meta = write_aoi(project_dir, _aoi(gdf=gdf))
+    sidecar = gpd.read_file(project_dir / AOI_GEOMETRY_FILENAME)
+    assert pd.api.types.is_datetime64_any_dtype(sidecar["edited"])  # the trap
+    return meta
+
+
+def test_restore_legacy_draw_manifest_with_a_date_attribute_still_loads(tmp_path):
+    """A date in the sidecar must not fail the load or drop the drawing."""
+    meta = _dated_legacy_draw_manifest(tmp_path)
+
+    result = load_aoi(tmp_path, meta)
+
+    assert result is not None
+    assert result.gdf is not None
+    assert result.spec.method == "DRAW"
+    drawn = gpd.GeoDataFrame.from_features(result.spec.geo_json["features"])
+    assert drawn.total_bounds == pytest.approx([12.40, 43.89, 12.52, 43.99], abs=1e-6)
+
+
+def test_restore_unreadable_spec_over_a_dated_sidecar_still_loads(tmp_path):
+    """The newer-schema fallback reaches the same sidecar and must survive it."""
+    meta = _dated_legacy_draw_manifest(tmp_path)
+    meta["aoi_spec"] = {"schema_version": 99, "method": "DRAW"}
+
+    result = load_aoi(tmp_path, meta)
+
+    assert result is not None
+    assert result.gdf is not None
+    assert result.spec.method == "DRAW"
+
+
+def test_restore_survives_a_legacy_spec_that_cannot_be_built(tmp_path, monkeypatch):
+    """Whatever breaks the spec synthesis, the project opens with a blank picker."""
+    import gui.scripts.aoi_io as aoi_io
+
+    def broken(metadata, gdf):
+        raise TypeError("cannot synthesize")
+
+    monkeypatch.setattr(aoi_io, "_legacy_spec", broken)
+    meta = write_aoi(tmp_path, _aoi(gdf=_gdf()))
+
+    result = load_aoi(tmp_path, meta)
+
+    assert result is not None
+    assert result.gdf is not None
+    assert result.spec is None
+
+
 def test_restore_legacy_asset_manifest_rebuilds_the_picker_inputs(tmp_path):
     """The legacy ``asset`` dict maps back onto the spec field for field."""
     meta = {"method": "ASSET", "name": "aoi", "gee": False, "asset": LEGACY_ASSET}

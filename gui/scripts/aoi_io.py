@@ -442,7 +442,9 @@ def _legacy_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
 
     * DRAW: the drawing, from the sidecar geometry (``to_json``, not
       ``__geo_interface__``: its tuple coordinates would never compare equal
-      to the JSON lists a round-tripped spec holds).
+      to the JSON lists a round-tripped spec holds). ``default=str`` because
+      ``read_file`` parses an ISO-date-like attribute (a QGIS edit adds one)
+      into a ``Timestamp``, which ``json`` cannot encode.
     * ASSET: the legacy ``asset`` dict, field for field.
     * ADMIN0/1/2: the GAUL code chain (:func:`admin_code_chain`).
     * SHAPE/POINTS: None — the file path was never stored.
@@ -456,7 +458,7 @@ def _legacy_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
         return AoiSpec(
             method="DRAW",
             name=metadata.get("name") or None,
-            geo_json=json.loads(gdf.to_json()),
+            geo_json=json.loads(gdf.to_json(default=str)),
         )
     if method == "ASSET":
         asset = metadata.get("asset")
@@ -480,8 +482,9 @@ def _restore_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
     """Return the manifest's ``AoiSpec``, or a synthesized one for old manifests.
 
     A spec this pysepal cannot read (a newer ``schema_version``, a payload with
-    no method) falls back to the legacy fields instead of failing the load: a
-    project must always open, even if its picker comes back blank.
+    no method) falls back to the legacy fields instead of failing the load, and
+    a legacy synthesis that fails returns None: a project must always open,
+    even if its picker comes back blank.
     """
     payload = metadata.get("aoi_spec")
     if payload:
@@ -496,7 +499,16 @@ def _restore_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
                 payload.get("schema_version") if isinstance(payload, dict) else None,
                 exc_info=True,
             )
-    return _legacy_spec(metadata, gdf)
+    try:
+        return _legacy_spec(metadata, gdf)
+    except Exception:
+        logger.warning(
+            "Could not rebuild the AOI selection from the legacy %r fields; the "
+            "AOI loads with a blank picker.",
+            metadata.get("method"),
+            exc_info=True,
+        )
+        return None
 
 
 def load_aoi(project_dir: Path, metadata: Optional[Dict[str, Any]]) -> Optional[Any]:
