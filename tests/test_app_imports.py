@@ -176,22 +176,23 @@ def test_page_mounts_notification_provider_before_the_map_app():
     assert "LogConsole" not in src
 
 
-def test_page_wires_locale_state_to_locale_select():
-    """Live language switching is pure wiring.
+def test_page_sources_locale_from_pysepal():
+    """Live language switching is pure wiring on pysepal 4's locale.
 
-    nothing else asserts on it, so dropping...
-
-    Guard both halves of the handshake.
+    MapApp mounts pysepal's own selector when given ``locales=``; that selector
+    writes pysepal's kernel locale and ``use_app_locale()`` makes t() follow it.
+    Nothing else asserts on either half, and the fork's ``LocaleState`` wiring
+    must not creep back.
     """
     import inspect
 
     import gui.solara_app as app
 
     src = inspect.getsource(app.Page)
-    assert "locale_select.bind_locale_state(locale_state)" in src
-    assert 'set_app_locale(change["new"])' in src
-    assert 'locale_state.observe(handler, "locale")' in src
-    assert "solara.use_effect(_bind_locale, [id(locale_state)])" in src
+    assert "use_app_locale()" in src
+    assert "locales=app_available_locales()" in src
+    assert "language_selector=" not in src
+    assert "resolve_locale_state" not in inspect.getsource(app)
 
 
 def test_toolbox_is_a_third_left_rail_entry():

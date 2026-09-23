@@ -12,7 +12,7 @@ import reacton.ipyvuetify as rv
 import solara
 from pysepal import mapping as sm
 from pysepal.logger import setup_logging
-from pysepal.sepalwidgets.vue_app import LocaleSelect, MapApp, ThemeToggle
+from pysepal.sepalwidgets.vue_app import MapApp, ThemeToggle
 from pysepal.solara import (
     NotificationProvider,
     get_current_gee_interface,
@@ -23,10 +23,9 @@ from pysepal.solara import (
     use_notifications,
     with_sepal_sessions,
 )
-from pysepal.solara.locale import resolve_locale_state
 from solara.lab.components.theming import theme
 
-from gui.i18n import get_translator, reset_translator, set_app_locale, t
+from gui.i18n import app_available_locales, reset_translator, t, use_app_locale
 from gui.scripts.aoi_io import load_aoi, persist_aoi
 from gui.scripts.map_helpers import (
     add_satellite_basemap,
@@ -91,8 +90,8 @@ setup_solara_server(extra_asset_locations=[])
 @solara.lab.on_kernel_start
 def on_kernel_start():
     """Reset per-kernel state and open the SEPAL sessions."""
-    reset_translator()  # drop the cached translator; Page rebuilds it from the
-    # session LocaleState (the browser resolves the locale, not the config file)
+    reset_translator()  # drop the cached translator; Page rebuilds it in the
+    # kernel's pysepal locale (the browser selector resolves it, no config file)
     return setup_sessions()
 
 
@@ -748,24 +747,8 @@ def Page():
     gee_interface = get_current_gee_interface()
     sepal_client = get_current_sepal_client()
     theme_toggle = solara.use_memo(lambda: ThemeToggle(), [])
-    locale_state = resolve_locale_state()
-    locale_select = solara.use_memo(
-        lambda: LocaleSelect(translator=get_translator()), []
-    )
-
-    def _bind_locale():
-        # Wired here — NOT in on_kernel_start — because @with_sepal_sessions
-        # creates the session's LocaleState only when Page first renders;
-        # kernel-start would bind the process fallback (Codex review P1).
-        locale_select.bind_locale_state(locale_state)
-
-        def handler(change):
-            set_app_locale(change["new"])
-
-        locale_state.observe(handler, "locale")
-        return lambda: locale_state.unobserve(handler, "locale")
-
-    solara.use_effect(_bind_locale, [id(locale_state)])
+    # Follow the header language selector: pysepal's kernel locale drives t().
+    use_app_locale()
 
     def _observe_theme():
         def handler(e):
@@ -1081,7 +1064,7 @@ def Page():
         steps_data=steps_data,
         initial_step=1,  # auto-open the Project dialog (step id 1) at startup
         theme_toggle=[theme_toggle],
-        language_selector=[locale_select],
+        locales=app_available_locales(),
         right_panel_config=right_panel_config,
         right_panel_content=right_panel_content,
         right_panel_open=True,
