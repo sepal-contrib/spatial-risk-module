@@ -998,19 +998,48 @@ def test_plan_line_reports_stripe_size_and_working_width(tmp_path, caplog):
     assert "design cols" not in line
 
 
-def test_over_budget_plan_logs_a_warning(tmp_path, caplog, monkeypatch):
-    """A stripe the budget cannot hold is announced, not silently attempted."""
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("kind", ["glm", "icar"])
+def test_over_budget_plan_logs_a_warning(
+    tmp_path, caplog, monkeypatch, golden, kind, workers
+):
+    """A stripe the budget cannot hold is announced, and still predicted exactly.
+
+    With 1 MiB free nothing fits, so the plan halves down to
+    ``INFERENCE_MIN_STRIPE_ROWS`` and warns. The run goes through the real
+    ``apply()``, i.e. the production compiled-predictor closures, on those
+    sub-tile stripes, serially and pooled, and must still write the golden
+    raster -- the only test that runs GLM's and iCAR's own closures on
+    planner-chosen sub-tile stripes (the 64-row test above uses a patsy
+    closure of its own).
+    """
     from spatialrisk import gdal_env
+    from spatialrisk.gdal_env import INFERENCE_MIN_STRIPE_ROWS
 
     real = gdal_env.plan_inference
+    plans = []
 
     def cramped(**kw):
         kw["free_bytes"] = 1 << 20  # 1 MiB free: nothing fits
-        return real(**kw)
+        plan = real(**kw)
+        plans.append(plan)
+        return plan
 
     monkeypatch.setattr("spatialrisk.mlmodels.windowed_predict.plan_inference", cramped)
     ds = build_dataset(tmp_path)
-    model = build_glm(tmp_path, ds)
+    model = {"glm": build_glm, "icar": build_icar}[kind](tmp_path, ds)
+    out = tmp_path / "out" / f"{kind}.tif"
     with caplog.at_level(logging.WARNING, logger="spatial_risk"):
-        model.apply(tmp_path / "out" / "g.tif", ds, ds.mask_path, 0)
-    assert any("exceeds the memory budget" in r.getMessage() for r in caplog.records)
+        model.apply(out, ds, ds.mask_path, 0, workers=workers)
+
+    assert [(p.rows_per_stripe, p.workers) for p in plans] == [
+        (INFERENCE_MIN_STRIPE_ROWS, workers)
+    ]
+    assert plans[0].over_budget_bytes > 0
+    assert any(
+        r.levelno == logging.WARNING and "exceeds the memory budget" in r.getMessage()
+        for r in caplog.records
+    )
+    arr, meta = read_raster(out)
+    np.testing.assert_array_equal(arr, golden[kind][0])
+    assert meta == golden[kind][1]
