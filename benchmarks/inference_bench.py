@@ -1,13 +1,21 @@
-"""Benchmark the ML predictors' ``apply``: 128-row bands vs tile-aligned bands.
+"""Benchmark the ML predictors' ``apply``: serial vs pooled stripe engine.
 
 Runs the pre-optimisation block loop (``original``, inlined below verbatim:
-forestatrisk's default 128-row bands, BLAS threads left to OpenBLAS) and the
-current ``apply`` (``current``: 256-row bands aligned to the output tiles,
-BLAS pinned to one thread) on the same feature stack and the same fitted
-model, each in a fresh subprocess, and reports wall clock, CPU time
-(user + system) and peak RSS. Fitting happens before the clock starts. Both
-rasters are hashed and compared so a speed-up that changes results is
-reported as a failure, not a win.
+forestatrisk's default 128-row bands, BLAS threads left to OpenBLAS), the
+engine's serial path (``current``: ``apply(workers=1)``, 256-row bands
+aligned to the output tiles, BLAS pinned to one thread) and the engine's
+threaded pool (``pool``: ``apply(workers=N)``, ``N`` from ``--workers`` or
+the resource policy when unset) on the same feature stack and the same
+fitted model, each in a fresh subprocess, and reports wall clock, CPU time
+(user + system) and peak RSS. The pre-engine loop no longer exists in
+``apply`` itself; the golden tests prove the engine's serial path equals it,
+which is why ``current`` stands in for it here. Fitting happens before the
+clock starts. All rasters are hashed and compared so a speed-up that changes
+results is reported as a failure, not a win. The ``workers`` column is what
+the run actually used, read back from the engine's plan line rather than from
+``--workers``: the policy chooses when ``--workers`` is unset, and a forest's
+``apply`` defaults to serial whatever the policy says, so an RF ``pool`` row
+reads 1 unless ``--workers`` is given.
 
 A synthetic stack is written to a temporary directory: ``--layers`` tiled
 float32 GeoTIFFs of ``--size`` pixels with nodata holes, plus a uint8 target.
@@ -22,7 +30,9 @@ Output is a plain table on stdout.
 import argparse
 import hashlib
 import json
+import logging
 import os
+import re
 import resource
 import subprocess
 import sys
@@ -30,7 +40,13 @@ import tempfile
 import time
 from pathlib import Path
 
-IMPLS = ("original", "current")
+IMPLS = ("original", "current", "pool")
+
+#: The worker count in the engine's plan line, e.g. "pred.tif: 8 worker(s),
+#: 256 rows/stripe, budget ...". What the run really used, which is not what
+#: ``--workers`` asked for: RF's default is serial whatever the policy says,
+#: and an unset ``--workers`` leaves the choice to the policy.
+_PLAN_LINE_RE = re.compile(r"(?P<workers>\d+) worker\(s\), \d+ rows/stripe")
 
 # Measure the checkout this file lives in, not whichever one the editable
 # install points at: a script puts its own directory on sys.path, so without
@@ -175,6 +191,22 @@ def _fit(args, folder):
     return model, ds
 
 
+class _WorkerCapture(logging.Handler):
+    """Read the worker count the engine reports out of its plan line."""
+
+    def __init__(self):
+        """Start with nothing captured."""
+        super().__init__(level=logging.INFO)
+        self.workers = None
+
+    def emit(self, record):
+        """Keep the first plan line's worker count."""
+        if self.workers is None:
+            match = _PLAN_LINE_RE.search(record.getMessage())
+            if match:
+                self.workers = int(match["workers"])
+
+
 def _worker(args) -> dict:
     """Fit, then run one implementation in this process and return its metrics."""
     import numpy as np
@@ -184,15 +216,33 @@ def _worker(args) -> dict:
         model, ds = _fit(args, Path(out))
         pred = Path(out) / f"pred_{args.impl}.tif"
 
+        # The engine decides the worker count (the policy, or a model's own
+        # default overriding --workers), so the count is read back off its
+        # plan line instead of reported from the request. The logger is
+        # levelled up for the run because nothing configures logging here.
+        capture = _WorkerCapture()
+        engine_log = logging.getLogger("spatial_risk")
+        saved_level = engine_log.level
+        engine_log.setLevel(logging.INFO)
+        engine_log.addHandler(capture)
+
         base_mib, base_cpu = _peak_mib(), _cpu_s()
         t0 = time.perf_counter()
-        if args.impl == "original":
-            _original_apply(model, ds, pred)
-        else:
-            model.apply(output_file=pred)
+        try:
+            if args.impl == "original":
+                _original_apply(model, ds, pred)
+            elif args.impl == "current":
+                model.apply(output_file=pred, workers=1)
+            else:
+                model.apply(output_file=pred, workers=args.workers)
+        finally:
+            engine_log.removeHandler(capture)
+            engine_log.setLevel(saved_level)
         wall = time.perf_counter() - t0
         cpu = _cpu_s() - base_cpu
         peak = _peak_mib()
+        # The reference loop is this one thread and logs no plan line.
+        effective_workers = 1 if args.impl == "original" else capture.workers
         with rasterio.open(pred) as src:
             arr = src.read(1)
             blocks = src.block_shapes[0]
@@ -208,6 +258,7 @@ def _worker(args) -> dict:
         "setup_peak_mib": base_mib,
         "blocks": blocks,
         "digest": digest,
+        "workers": effective_workers,
     }
 
 
@@ -260,7 +311,7 @@ def _write_synthetic(tmp, size, layers, seed):
 
 
 def main():
-    """Parse arguments, build the fixture, run both implementations."""
+    """Parse arguments, build the fixture, run the requested implementations."""
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -272,6 +323,12 @@ def main():
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--impls", default=",".join(IMPLS))
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="pool workers (default: the resource policy)",
+    )
     # Internal subprocess entry point.
     ap.add_argument("--worker", choices=IMPLS, dest="impl")
     ap.add_argument("--rasters", nargs="+", help=argparse.SUPPRESS)
@@ -296,6 +353,8 @@ def main():
         "--rasters",
         *args.rasters,
     ]
+    if args.workers is not None:
+        common += ["--workers", str(args.workers)]
     rows = []
     for impl in args.impls.split(","):
         for _ in range(args.repeat):
@@ -308,15 +367,18 @@ def main():
         f"{os.cpu_count()} cpus (setup peak, i.e. imports + fit, in its own column)"
     )
     hdr = (
-        f"{'impl':<10} {'wall s':>8} {'cpu s':>8} {'peak MiB':>10} "
+        f"{'impl':<10} {'workers':>7} {'wall s':>8} {'cpu s':>8} {'peak MiB':>10} "
         f"{'setup MiB':>10} {'blocks':>10}  digest"
     )
     print(hdr)
     print("-" * len(hdr))
     for r in rows:
+        # "?" only if the engine logged no plan line, which would be a bug.
+        workers = "?" if r["workers"] is None else str(r["workers"])
         print(
-            f"{r['impl']:<10} {r['wall_s']:>8.2f} {r['cpu_s']:>8.2f} "
-            f"{r['peak_mib']:>10.0f} {r['setup_peak_mib']:>10.0f} "
+            f"{r['impl']:<10} {workers:>7} {r['wall_s']:>8.2f} "
+            f"{r['cpu_s']:>8.2f} {r['peak_mib']:>10.0f} "
+            f"{r['setup_peak_mib']:>10.0f} "
             f"{str(tuple(r['blocks'])):>10}  {r['digest']}"
         )
     digests = {r["digest"] for r in rows}

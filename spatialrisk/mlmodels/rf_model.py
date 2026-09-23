@@ -1,13 +1,15 @@
 """Random Forest risk model using sklearn with Patsy formulas."""
 
+import logging
 from pathlib import Path
 from typing import Any, Optional, Union
 
 import numpy as np
-import pandas as pd
 
-from spatialrisk.mlmodels.base import BaseRiskModel
+from spatialrisk.mlmodels.base import BaseRiskModel, _mask_values
 from spatialrisk.mlmodels.stats import RFStats
+
+logger = logging.getLogger("spatial_risk")
 
 
 class RFModel(BaseRiskModel):
@@ -128,11 +130,14 @@ class RFModel(BaseRiskModel):
         dataset: Optional[Any] = None,
         mask: Optional[Union[str, Path]] = None,
         mask_value: Union[int, float, list] = 0,
+        *,
+        workers: Optional[int] = None,
     ) -> Path:
         """Generate a deforestation probability GeoTIFF.
 
-        Processes the feature rasters block-by-block. Outputs a UInt16
-        raster scaled to [1, 65535] with 0 as nodata, using ``far.misc.rescale``.
+        Streams the feature rasters in full-width stripes through
+        :func:`spatialrisk.mlmodels.windowed_predict.predict_windowed`. Outputs
+        a UInt16 raster scaled to [1, 65535] with 0 as nodata.
 
         Parameters
         ----------
@@ -144,120 +149,80 @@ class RFModel(BaseRiskModel):
         mask : str or Path, optional
             Path to a mask raster. Pixels matching ``mask_value`` (or the
             raster's nodata) are set to nodata (0) in the output.
-            If omitted, prediction runs over the full raster stack.
         mask_value : int, float, or list of int/float, optional
             Value(s) in the mask raster that identify pixels to suppress.
             Defaults to 0. Ignored when ``mask`` is None.
+        workers : int, optional
+            Stripe worker threads. None -- the default -- runs serially on
+            the calling thread, keeping the estimator's own ``n_jobs``, which
+            is where a forest's parallelism already lives; unlike the other
+            predictors the resource policy is not consulted (the numbers
+            behind that are in the body). ``1`` is the same path. Any other
+            worker count pins the estimator to ``n_jobs=1`` for the run: with
+            a stripe pool the outer workers own the cores, so joblib's
+            per-call tree fan-out would multiply them (workers x n_jobs)
+            instead of adding parallelism.
         """
-        import forestatrisk as far
-        import rasterio
         from patsy.highlevel import build_design_matrices
 
-        from spatialrisk.parallel import PREDICT_BAND_ROWS, single_thread_math
-        from spatialrisk.raster_profile import rasterio_profile
+        from spatialrisk.mlmodels.windowed_predict import predict_windowed
 
         if self._ml_model is None:
             self.load_model()
-
         active_dataset = self._resolve_dataset(dataset)
-
-        if self._x_design_info is None:
-            if self.samples_path is not None and Path(self.samples_path).exists():
-                from patsy import dmatrices as _dmatrices
-
-                _df = pd.read_csv(self.samples_path).dropna()
-                _, x_ref = _dmatrices(self.formula, _df, NA_action="drop")
-                self._x_design_info = x_ref.design_info
-            else:
-                raise RuntimeError(
-                    "Cannot reconstruct design info: samples_path not set or "
-                    "file missing. Re-run fit() to regenerate samples."
-                )
+        self._ensure_design_info()
 
         output_file = Path(output_file)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-
         feature_paths = {var.name: var.path for var in active_dataset.features}
+        logger.info("Predicting RF raster -> %s", output_file)
 
-        print(f"\n🗺  Predicting RF raster → {output_file}")
+        design_info = self._x_design_info
+        estimator = self._ml_model
 
-        with rasterio.open(active_dataset.target.path) as ref:
-            profile = ref.profile.copy()
+        def predict_block(block_df, extras):
+            (x,) = build_design_matrices([design_info], block_df, NA_action="drop")
+            return estimator.predict_proba(np.asarray(x))[:, 1]
 
-        # Tiled + ZSTD (deflate fallback) rather than the target's own
-        # layout: see spatialrisk.raster_profile for the measurements.
-        profile.update(dtype="uint16", count=1, nodata=0)
-        profile.update(rasterio_profile("uint16"))
-
-        _mask_values = (
-            (mask_value if isinstance(mask_value, (list, tuple)) else [mask_value])
-            if mask is not None
-            else None
-        )
-
-        # Tile-aligned bands, BLAS/OpenMP on one thread: see spatialrisk.parallel.
-        with single_thread_math():
-            with rasterio.open(output_file, "w", **profile) as dst:
-                blockinfo = far.misc.makeblock(
-                    str(active_dataset.target.path), blk_rows=PREDICT_BAND_ROWS
-                )
-                nblock, nblock_x = blockinfo[0], blockinfo[1]
-                x_off, y_off, nx, ny = (
-                    blockinfo[3],
-                    blockinfo[4],
-                    blockinfo[5],
-                    blockinfo[6],
-                )
-
-                for b in range(nblock):
-                    px = b % nblock_x
-                    py = b // nblock_x
-                    col_start, row_start = x_off[px], y_off[py]
-                    n_cols, n_rows = nx[px], ny[py]
-                    window = rasterio.windows.Window(
-                        col_start, row_start, n_cols, n_rows
-                    )
-
-                    # Apply mask before prediction
-                    mask_invalid = np.zeros(n_rows * n_cols, dtype=bool)
-                    if mask is not None:
-                        with rasterio.open(mask) as mask_src:
-                            mask_block = mask_src.read(1, window=window)
-                            mask_nodata = mask_src.nodata
-                        mask_invalid = np.isin(mask_block.ravel(), _mask_values)
-                        if mask_nodata is not None:
-                            mask_invalid |= mask_block.ravel() == mask_nodata
-
-                    # Read feature data for this block, replacing nodata with NaN
-                    block_dict = {}
-                    for name, path in feature_paths.items():
-                        with rasterio.open(path) as src:
-                            arr = src.read(1, window=window).astype(float)
-                            if src.nodata is not None:
-                                arr[arr == src.nodata] = np.nan
-                        block_dict[name] = arr.ravel()
-
-                    block_df_full = pd.DataFrame(block_dict)
-                    valid_mask = (
-                        ~block_df_full.isnull().any(axis=1).to_numpy() & ~mask_invalid
-                    )
-                    block_df = block_df_full[valid_mask]
-
-                    out_arr = np.zeros(n_rows * n_cols, dtype=np.uint16)
-
-                    if not block_df.empty:
-                        (x_block,) = build_design_matrices(
-                            [self._x_design_info], block_df, NA_action="drop"
-                        )
-                        proba = self._ml_model.predict_proba(np.asarray(x_block))[:, 1]
-                        out_arr[valid_mask] = far.misc.rescale(proba).astype(np.uint16)
-
-                    dst.write(
-                        out_arr.reshape(n_rows, n_cols),
-                        1,
-                        window=window,
-                    )
-
-        print(f"✓ RF raster written: {output_file}")
+        # A forest is the one predictor whose default is NOT the resource
+        # policy: joblib already spreads its trees over every core, while a
+        # pooled run gives each stripe worker one joblib thread and is
+        # therefore capped at the worker count -- which the memory budget
+        # pins low on the machine that matters. Measured 2026-09-22 on a
+        # SEPAL c8 (8 cores, 13.9 GiB free, 62 Mpx of a 40412 px wide,
+        # 8-feature stack, where plan_inference chose 2 workers, memory-bound):
+        # serial 17.4 s, 2 workers 30.8 s (+77 %), 4 workers 21.2 s (+22 %) --
+        # every pooled count lost. Pooling only paid on a 16-core dev box,
+        # where the policy could afford 8 workers (15.6 s -> 12.2 s), and even
+        # there 2 workers cost 32.9 s. An explicit ``workers`` is still
+        # honoured and is the way to pool a forest deliberately; pinning it
+        # here does mean SPATIAL_RISK_INFERENCE_WORKERS, which plan_inference
+        # reads, no longer reaches one. Caveat on those c8 numbers: they were
+        # taken while an explicit worker count did not reach the plan's
+        # gdal_threads/cachemax, so the serial arm read with
+        # GDAL_NUM_THREADS=1 and a two-worker cache; serial RF is now, if
+        # anything, a little faster than recorded here.
+        workers = 1 if workers is None else workers
+        # With a stripe pool the outer workers own the cores: joblib's per-call
+        # tree fan-out would multiply them (workers x n_jobs). Serial keeps the
+        # pickled n_jobs (-1), which is where a single run's parallelism lives.
+        pooled = int(workers) > 1
+        saved_n_jobs = estimator.n_jobs
+        if pooled:
+            estimator.n_jobs = 1
+        try:
+            predict_windowed(
+                active_dataset.target.path,
+                feature_paths,
+                predict_block,
+                output_file,
+                mask=mask,
+                mask_values=_mask_values(mask_value),
+                workers=workers,
+                n_design_cols=len(design_info.column_names),
+                log=logger,
+            )
+        finally:
+            estimator.n_jobs = saved_n_jobs
+        logger.info("RF raster written: %s", output_file)
         self._register_prediction(output_file, dataset=active_dataset)
         return output_file

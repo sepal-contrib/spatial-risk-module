@@ -18,6 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 logger = logging.getLogger("spatial_risk")
 
 
+def _mask_values(mask_value) -> tuple:
+    """Normalise apply()'s ``mask_value`` (scalar or list) to a tuple."""
+    if isinstance(mask_value, (list, tuple)):
+        return tuple(mask_value)
+    return (mask_value,)
+
+
 class BaseRiskModel(BaseModel):
     """Generic base class for risk probability ML models.
 
@@ -175,6 +182,27 @@ class BaseRiskModel(BaseModel):
                 )
         return active
 
+    def _ensure_design_info(self) -> None:
+        """Rebuild patsy design info from the training CSV when the pickle lost it.
+
+        patsy's DesignInfo is not picklable, so a loaded model re-derives it
+        from the formula and the saved samples. Raises when neither is there.
+        """
+        if self._x_design_info is not None:
+            return
+        if self.samples_path is not None and Path(self.samples_path).exists():
+            import pandas as pd
+            from patsy import dmatrices
+
+            df = pd.read_csv(self.samples_path).dropna()
+            _, x_ref = dmatrices(self.formula, df, NA_action="drop")
+            self._x_design_info = x_ref.design_info
+            return
+        raise RuntimeError(
+            "Cannot reconstruct design info: samples_path not set or "
+            "file missing. Re-run fit() to regenerate samples."
+        )
+
     def _stamp_now(self) -> str:
         """Return current datetime as ISO string and set trained_at."""
         self.trained_at = datetime.now().isoformat()
@@ -264,6 +292,8 @@ class BaseRiskModel(BaseModel):
         dataset: Optional[Any] = None,
         mask: Optional[Union[str, Path]] = None,
         mask_value: Union[int, float, list] = 0,
+        *,
+        workers: Optional[int] = None,
     ) -> Path:
         """Generate a probability raster from a Dataset object.
 
@@ -282,6 +312,11 @@ class BaseRiskModel(BaseModel):
         mask_value : int, float, or list of int/float, optional
             Value(s) in the mask raster that identify pixels to suppress.
             Defaults to 0. Ignored when ``mask`` is None.
+        workers : int, optional
+            Stripe worker threads for
+            :func:`spatialrisk.mlmodels.windowed_predict.predict_windowed`.
+            None lets each predictor apply its own default (the resource
+            policy, except RF's serial one); 1 runs on the calling thread.
 
         Returns:
         --------
