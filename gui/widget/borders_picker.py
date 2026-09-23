@@ -22,6 +22,7 @@ from pysepal.solara.components.inputs import (
 from gui.i18n import t
 from gui.scripts.allocation_runner import BordersSelection
 from gui.scripts.aoi_io import admin_code_chain
+from gui.scripts.picker_paths import resolve_picked_path
 from gui.widget.text_style import MUTED, TIGHT_FIELD, FieldHint
 
 _VECTOR_EXTENSIONS = [".gpkg", ".shp", ".geojson", ".json"]
@@ -133,6 +134,15 @@ def BordersPicker(value, on_value, sepal_client=None):
         # one rather than carrying a stale admin code into an ASSET selection.
         on_value(BordersSelection(method=new or "FILE"))
 
+    def set_file_path(picked):
+        # See picker_paths: a sepal_client's picks come back home-relative.
+        resolved = resolve_picked_path(picked, sepal_client)
+        on_value(
+            BordersSelection(method="FILE", file_path=str(resolved))
+            if resolved
+            else None
+        )
+
     with solara.Div(classes=[TIGHT_FIELD]):
         rv.Select(
             label=t("toolbox.allocation.field_borders"),
@@ -150,9 +160,7 @@ def BordersPicker(value, on_value, sepal_client=None):
             FileInputComponent(
                 label=t("toolbox.allocation.field_borders_file"),
                 value=(value.file_path if value else "") or "",
-                on_value=lambda p: on_value(
-                    BordersSelection(method="FILE", file_path=str(p)) if p else None
-                ),
+                on_value=set_file_path,
                 sepal_client=sepal_client,
                 root="",
                 extensions=_VECTOR_EXTENSIONS,
