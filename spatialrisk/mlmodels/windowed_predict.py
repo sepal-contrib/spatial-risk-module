@@ -512,7 +512,7 @@ def predict_windowed(
     (1: ``eta`` walks the stripe in row chunks, so nothing scales with stripe
     size except its own output vector), while RF passes
     ``len(design_info.column_names)`` because its trees consume the full
-    one-hot matrix at once. That is why the plan log's "design cols" field
+    one-hot matrix at once. That is why the plan log's "working cols" field
     prints 1 for GLM/iCAR while their own "GLM design: ... lookup term(s),
     ... materialised col(s)" / "iCAR design: ..." line carries the real
     counts. Defaults to ``len(feature_paths) + 1`` when omitted.
@@ -547,7 +547,7 @@ def predict_windowed(
     handles = _Handles(feature_paths, mask, extra_layers)
     try:
         log.info(
-            "%s: %d worker(s), %d rows/stripe (%.0f MiB each, %d design cols), "
+            "%s: %d worker(s), %d rows/stripe (%.0f MiB each, %d working cols), "
             "budget %.0f MiB (%s), reserved %.0f MiB",
             label,
             plan.workers,

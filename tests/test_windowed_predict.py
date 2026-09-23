@@ -960,7 +960,7 @@ def test_no_pool_thread_builds_a_threadpool_controller(tmp_path, golden, monkeyp
 
 
 # --------------------------------------------------------------------------- #
-# the plan line: stripe size, design width, and the over-budget warning
+# the plan line: stripe size, working width, and the over-budget warning
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("workers", [1, 2])
 def test_sub_tile_stripes_reproduce_the_glm_golden(tmp_path, golden, workers):
@@ -980,8 +980,13 @@ def test_sub_tile_stripes_reproduce_the_glm_golden(tmp_path, golden, workers):
     assert meta == golden["glm"][1]
 
 
-def test_plan_line_reports_stripe_size_and_design_width(tmp_path, caplog):
-    """The INFO plan line carries the per-stripe MiB and the design column count."""
+def test_plan_line_reports_stripe_size_and_working_width(tmp_path, caplog):
+    """The INFO plan line carries the per-stripe MiB and the charged working width.
+
+    The field reads "working cols": for GLM and iCAR it is the charged
+    per-pixel width (1), not the design's column count, which their own
+    "design: ..." line reports.
+    """
     ds = build_dataset(tmp_path)
     model = build_glm(tmp_path, ds)
     with caplog.at_level(logging.INFO, logger="spatial_risk"):
@@ -989,7 +994,8 @@ def test_plan_line_reports_stripe_size_and_design_width(tmp_path, caplog):
     line = next(
         r.getMessage() for r in caplog.records if "rows/stripe" in r.getMessage()
     )
-    assert "MiB each" in line and "design cols" in line
+    assert "MiB each, 1 working cols)" in line
+    assert "design cols" not in line
 
 
 def test_over_budget_plan_logs_a_warning(tmp_path, caplog, monkeypatch):
