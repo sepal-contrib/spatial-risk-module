@@ -68,7 +68,7 @@ from gui.tile.variables_tile import VariablesTile, vars_on_map
 from gui.widget.manage_projects import ConfirmDeleteProjectDialog, ManageProjectsDialog
 from gui.widget.pipeline_header import PipelineHeader
 from gui.widget.text_style import MUTED
-from spatialrisk.gdal_env import keep_gdal_sidecars_visible
+from spatialrisk.gdal_env import keep_gdal_sidecars_visible, pin_gdal_num_threads
 from spatialrisk.project import DATA_DIR, Project
 
 # On SEPAL, reuse the raster tiles' jupyter-server-proxy route for the PMTiles
@@ -81,6 +81,9 @@ borrow_localtileserver_prefix()
 # map layer on, which makes large rasters render from full resolution — see
 # keep_gdal_sidecars_visible. Order-independent, so after imports is fine.
 keep_gdal_sidecars_visible()
+# It also sets GDAL_NUM_THREADS=ALL_CPUS from that layer on; pin half the cores
+# instead so processing speed doesn't depend on whether the map was used.
+pin_gdal_num_threads()
 
 logger = setup_logging(logger_name="spatial_risk")
 logger.setLevel(logging.DEBUG)

@@ -234,6 +234,26 @@ def keep_gdal_sidecars_visible() -> None:
     os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "FALSE"
 
 
+def pin_gdal_num_threads() -> None:
+    """Give GDAL half the cores app-wide, whether or not a map layer is drawn.
+
+    localtileserver's app setup does
+    ``os.environ.setdefault("GDAL_NUM_THREADS", "ALL_CPUS")``, so GDAL ran on
+    one thread until the first map layer and on every core after it: the same
+    harmonization write took 28.5 s or 9.5 s depending on that. Pyramid builds
+    and processing writes gain from threads (a 2.2 Gpx pyramid: 82 s at one,
+    39 s at four); tile drawing does not, the browser's concurrent requests
+    already parallelise it. Half the cores is the policy for every raster scan
+    (:func:`spatialrisk.parallel.worker_threads`, ``SPATIAL_RISK_NUM_THREADS``
+    overrides it); sampling and inference still set their own through
+    ``rasterio.Env``.
+
+    Sets the variable outright, in the environment, for the same reasons as
+    :func:`keep_gdal_sidecars_visible`.
+    """
+    os.environ["GDAL_NUM_THREADS"] = str(worker_threads(cores=_available_cores()))
+
+
 def sampling_gdal_env(
     cachemax_bytes: Optional[int] = None, num_threads: Optional[int] = None
 ) -> rasterio.Env:
