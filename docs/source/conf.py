@@ -14,7 +14,6 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.abspath("."))
 sys.path.insert(0, os.path.abspath("../.."))
-sys.path.insert(0, os.path.abspath("../../component"))
 
 package_path = os.path.abspath("../..")
 os.environ["PYTHONPATH"] = ":".join((package_path, os.environ.get("PYTHONPATH", "")))
@@ -104,7 +103,7 @@ html_theme_options = {
     "icon_links": [
         {
             "name": "GitHub",
-            "url": "https://github.com/SerafiniJose/deforisk-jupyter-nb-v2",
+            "url": "https://github.com/sepal-contrib/spatial-risk-module",
             "icon": "fa-brands fa-github",
         },
     ],
@@ -115,8 +114,8 @@ html_theme_options = {
 }
 
 html_context = {
-    "github_user": "SerafiniJose",
-    "github_repo": "deforisk-jupyter-nb-v2",
+    "github_user": "sepal-contrib",
+    "github_repo": "spatial-risk-module",
     "github_version": "main",
     "doc_path": "docs/source",
 }
