@@ -214,6 +214,46 @@ def configure_gdal_tmpdir() -> Optional[Path]:
         return None
 
 
+def keep_gdal_sidecars_visible() -> None:
+    """Let GDAL find ``.ovr`` sidecars even after the map's tile server starts.
+
+    localtileserver's app setup does
+    ``os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")``, which
+    is process-wide: from the first map layer on, GDAL stops looking for the
+    external overview pyramids :mod:`spatialrisk.overviews` builds. The tile
+    server then renders every tile of a large raster from full resolution (its
+    per-tile statistics read the whole file; ~50 s a tile on a 2.2 Gpx raster
+    instead of ~1 s), and ``ensure_overviews`` rebuilds pyramids already on disk.
+
+    Sets the variable outright rather than as a default, so it holds whether it
+    runs before the tile server (whose ``setdefault`` then leaves it alone) or
+    after it. The environment variable, not ``gdal.SetConfigOption``, because
+    rasterio's wheel bundles its own libgdal and only the environment reaches
+    both.
+    """
+    os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "FALSE"
+
+
+def pin_gdal_num_threads() -> None:
+    """Give GDAL half the cores app-wide, whether or not a map layer is drawn.
+
+    localtileserver's app setup does
+    ``os.environ.setdefault("GDAL_NUM_THREADS", "ALL_CPUS")``, so GDAL ran on
+    one thread until the first map layer and on every core after it: the same
+    harmonization write took 28.5 s or 9.5 s depending on that. Pyramid builds
+    and processing writes gain from threads (a 2.2 Gpx pyramid: 82 s at one,
+    39 s at four); tile drawing does not, the browser's concurrent requests
+    already parallelise it. Half the cores is the policy for every raster scan
+    (:func:`spatialrisk.parallel.worker_threads`, ``SPATIAL_RISK_NUM_THREADS``
+    overrides it); sampling and inference still set their own through
+    ``rasterio.Env``.
+
+    Sets the variable outright, in the environment, for the same reasons as
+    :func:`keep_gdal_sidecars_visible`.
+    """
+    os.environ["GDAL_NUM_THREADS"] = str(worker_threads(cores=_available_cores()))
+
+
 def sampling_gdal_env(
     cachemax_bytes: Optional[int] = None, num_threads: Optional[int] = None
 ) -> rasterio.Env:
