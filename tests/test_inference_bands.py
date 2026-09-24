@@ -95,6 +95,7 @@ def test_glm_apply_streams_tile_aligned_stripes_under_single_thread_math(
     from threadpoolctl import threadpool_info
 
     from spatialrisk.mlmodels import windowed_predict as wp
+    from spatialrisk.mlmodels.linear_predictor import LinearPredictor
     from spatialrisk.parallel import PREDICT_BAND_ROWS
 
     rng = np.random.default_rng(7)
@@ -109,19 +110,19 @@ def test_glm_apply_streams_tile_aligned_stripes_under_single_thread_math(
 
     monkeypatch.setattr(wp, "_stripes", spy_stripes)
     blas_threads = []
-    real_predict = model._ml_model.predict_proba
+    real_eta = LinearPredictor.eta
 
-    def spy_predict(x):
+    def spy_eta(self, block_df):
         blas_threads.extend(i["num_threads"] for i in threadpool_info())
-        return real_predict(x)
+        return real_eta(self, block_df)
 
-    monkeypatch.setattr(model._ml_model, "predict_proba", spy_predict)
+    monkeypatch.setattr(LinearPredictor, "eta", spy_eta)
 
     pred = model.apply(output_file=tmp_path / "out" / "pred.tif", workers=1)
 
     assert seen["rows"] == PREDICT_BAND_ROWS
-    if blas_threads:
-        assert set(blas_threads) == {1}
+    assert blas_threads  # the spy must have fired
+    assert set(blas_threads) == {1}
     with rasterio.open(pred) as src:
         out = src.read(1)
     assert out.shape == (600, 300)

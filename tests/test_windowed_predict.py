@@ -186,6 +186,91 @@ def test_an_all_nodata_stripe_writes_zeros(tmp_path):
     assert len(calls) == 2  # stripe 0 never reaches predict_block
 
 
+#: (dtype, nodata) per feature: a Peru-like stack (7 float32, int16, uint8)
+#: and 15 uint8 layers, the two shapes the read phase was measured on.
+_READ_PHASE_STACKS = {
+    "peru_like": [("float32", -9999.0)] * 7 + [("int16", -32768), ("uint8", 255)],
+    "uint8_x15": [("uint8", 255)] * 15,
+}
+
+
+@pytest.mark.parametrize("stack", sorted(_READ_PHASE_STACKS))
+def test_read_phase_peak_fits_the_charge(tmp_path, stack):
+    """Reading a dense stripe peaks within the smallest charge any model makes.
+
+    GLM and iCAR are charged one working column, so the engine's own read
+    phase is their stripe's peak. Measured with tracemalloc on a stripe where
+    every pixel is valid (the worst case: the filtered frame is as large as
+    the full-stripe columns), against
+    :func:`spatialrisk.gdal_env.inference_working_set` with a mask and
+    ``n_design_cols=1``. Holding the full-stripe columns, a dict of filtered
+    copies and pandas' consolidated block at once (24 B per pixel per
+    feature) overran it on both stacks.
+    """
+    import tracemalloc
+
+    from _inference_fixture import write_tiles
+    from rasterio.windows import Window
+
+    from spatialrisk.gdal_env import inference_working_set
+    from spatialrisk.mlmodels.windowed_predict import _read_stripe
+
+    rows, width = 256, 1024
+    rng = np.random.default_rng(3)
+    paths, itemsizes = {}, []
+    for i, (dtype, nodata) in enumerate(_READ_PHASE_STACKS[stack]):
+        data = (rng.random((rows, width)) * 100).astype(dtype)  # no nodata pixel
+        paths[f"f{i}"] = write_tiles(tmp_path / f"f{i}.tif", data, nodata)
+        itemsizes.append(np.dtype(dtype).itemsize)
+    mask = write_tiles(tmp_path / "mask.tif", np.ones((rows, width), "uint8"), 255)
+
+    features = {name: rasterio.open(p) for name, p in paths.items()}
+    mask_src = rasterio.open(mask)
+    try:
+        transform = mask_src.transform
+
+        def read():
+            return _read_stripe(
+                (features, mask_src, {}),
+                Window(0, 0, width, rows),
+                transform,
+                list(paths),
+                (0,),
+                False,
+                None,
+            )
+
+        read()  # warm GDAL's block cache outside the measurement
+        tracemalloc.start()
+        try:
+            base, _ = tracemalloc.get_traced_memory()
+            tracemalloc.reset_peak()
+            valid, block_df, _ = read()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    finally:
+        for src in [*features.values(), mask_src]:
+            src.close()
+
+    assert valid.all() and len(block_df) == rows * width
+    assert list(block_df.columns) == list(paths)
+    assert (block_df.dtypes == np.float64).all()
+    charge = inference_working_set(
+        width,
+        rows,
+        n_features=len(itemsizes),
+        feature_itemsizes=itemsizes,
+        n_design_cols=1,
+        with_mask=True,
+        with_extra=False,
+    )
+    assert peak - base <= charge, (
+        f"read phase {(peak - base) / (rows * width):.1f} B/px > "
+        f"charge {charge / (rows * width):.1f} B/px"
+    )
+
+
 def test_output_is_atomic_and_a_failure_keeps_the_old_file(tmp_path):
     """A failing prediction leaves the previous output intact and no partial behind."""
     from spatialrisk.mlmodels.windowed_predict import predict_windowed
@@ -872,3 +957,89 @@ def test_no_pool_thread_builds_a_threadpool_controller(tmp_path, golden, monkeyp
     assert [n for n in built if n.startswith("predict")] == []
     arr, _ = read_raster(out)
     np.testing.assert_array_equal(arr, golden["glm"][0])
+
+
+# --------------------------------------------------------------------------- #
+# the plan line: stripe size, working width, and the over-budget warning
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("workers", [1, 2])
+def test_sub_tile_stripes_reproduce_the_glm_golden(tmp_path, golden, workers):
+    """64-row stripes on 256-row tiles write the same raster as the golden."""
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    out = _run_glm(
+        tmp_path,
+        ds,
+        model,
+        tmp_path / f"sub{workers}.tif",
+        workers=workers,
+        rows_per_stripe=64,
+    )
+    arr, meta = read_raster(out)
+    np.testing.assert_array_equal(arr, golden["glm"][0])
+    assert meta == golden["glm"][1]
+
+
+def test_plan_line_reports_stripe_size_and_working_width(tmp_path, caplog):
+    """The INFO plan line carries the per-stripe MiB and the charged working width.
+
+    The field reads "working cols": for GLM and iCAR it is the charged
+    per-pixel width (1), not the design's column count, which their own
+    "design: ..." line reports.
+    """
+    ds = build_dataset(tmp_path)
+    model = build_glm(tmp_path, ds)
+    with caplog.at_level(logging.INFO, logger="spatial_risk"):
+        model.apply(tmp_path / "out" / "g.tif", ds, ds.mask_path, 0, workers=1)
+    line = next(
+        r.getMessage() for r in caplog.records if "rows/stripe" in r.getMessage()
+    )
+    assert "MiB each, 1 working cols)" in line
+    assert "design cols" not in line
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("kind", ["glm", "icar"])
+def test_over_budget_plan_logs_a_warning(
+    tmp_path, caplog, monkeypatch, golden, kind, workers
+):
+    """A stripe the budget cannot hold is announced, and still predicted exactly.
+
+    With 1 MiB free nothing fits, so the plan halves down to
+    ``INFERENCE_MIN_STRIPE_ROWS`` and warns. The run goes through the real
+    ``apply()``, i.e. the production compiled-predictor closures, on those
+    sub-tile stripes, serially and pooled, and must still write the golden
+    raster -- the only test that runs GLM's and iCAR's own closures on
+    planner-chosen sub-tile stripes (the 64-row test above uses a patsy
+    closure of its own).
+    """
+    from spatialrisk import gdal_env
+    from spatialrisk.gdal_env import INFERENCE_MIN_STRIPE_ROWS
+
+    real = gdal_env.plan_inference
+    plans = []
+
+    def cramped(**kw):
+        kw["free_bytes"] = 1 << 20  # 1 MiB free: nothing fits
+        plan = real(**kw)
+        plans.append(plan)
+        return plan
+
+    monkeypatch.setattr("spatialrisk.mlmodels.windowed_predict.plan_inference", cramped)
+    ds = build_dataset(tmp_path)
+    model = {"glm": build_glm, "icar": build_icar}[kind](tmp_path, ds)
+    out = tmp_path / "out" / f"{kind}.tif"
+    with caplog.at_level(logging.WARNING, logger="spatial_risk"):
+        model.apply(out, ds, ds.mask_path, 0, workers=workers)
+
+    assert [(p.rows_per_stripe, p.workers) for p in plans] == [
+        (INFERENCE_MIN_STRIPE_ROWS, workers)
+    ]
+    assert plans[0].over_budget_bytes > 0
+    assert any(
+        r.levelno == logging.WARNING and "exceeds the memory budget" in r.getMessage()
+        for r in caplog.records
+    )
+    arr, meta = read_raster(out)
+    np.testing.assert_array_equal(arr, golden[kind][0])
+    assert meta == golden[kind][1]

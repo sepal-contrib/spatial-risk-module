@@ -502,8 +502,7 @@ class ICARModel(BaseRiskModel):
             Stripe worker threads. None lets the resource policy choose;
             1 runs serially on the calling thread.
         """
-        from patsy.highlevel import build_design_matrices
-
+        from spatialrisk.mlmodels.linear_predictor import compile_linear_predictor
         from spatialrisk.mlmodels.windowed_predict import ExtraLayer, predict_windowed
 
         if self._ml_model is None:
@@ -522,12 +521,12 @@ class ICARModel(BaseRiskModel):
 
         design_info = self._x_design_info
         betas = np.array(self._ml_model["betas"])
+        predictor = compile_linear_predictor(design_info, betas)
+        logger.info("iCAR design: %s", predictor.describe())
 
         def predict_block(block_df, extras):
-            (x,) = build_design_matrices([design_info], block_df, NA_action="drop")
-            x_arr = np.asarray(x)
             # iCAR prediction: logit(p) = X @ betas + rho
-            linear_pred = x_arr @ betas[: x_arr.shape[1]] + extras["rho"]
+            linear_pred = predictor.eta(block_df) + extras["rho"]
             return 1.0 / (1.0 + np.exp(-linear_pred))
 
         predict_windowed(
@@ -542,7 +541,7 @@ class ICARModel(BaseRiskModel):
             mask_by_bounds=True,
             extra_layers={"rho": ExtraLayer(Path(self.rho_path), "bilinear")},
             workers=workers,
-            n_design_cols=len(design_info.column_names),
+            n_design_cols=predictor.working_set_columns,
             log=logger,
         )
         logger.info("iCAR raster written: %s", output_file)

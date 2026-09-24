@@ -9,12 +9,25 @@ grid is part of the output: iCAR resamples its rho and mask per stripe from
 geographic bounds, so stripes never switch to native TIFF blocks. The default
 height is the output tile height (:data:`spatialrisk.parallel.PREDICT_BAND_ROWS`
 = :data:`spatialrisk.raster_profile.BLOCK_SIZE`), which is what
-:func:`spatialrisk.gdal_env.plan_inference` starts from and the only unit it
-shrinks in.
+:func:`spatialrisk.gdal_env.plan_inference` starts from; if that does not fit
+one worker it shrinks further, halving below the tile height down to
+:data:`spatialrisk.gdal_env.INFERENCE_MIN_STRIPE_ROWS`; :func:`predict_windowed`
+logs a warning if even that stripe still overruns the budget.
+
+Because the grid is part of the output, a shrink below the tile height is
+not free for iCAR: its rho (like any extra layer) is bilinear-resampled from
+each stripe's bounds, so a memory-starved run on sub-tile stripes can move a
+handful of pixels by one uint16 step against a 256-row run -- measured at
+about 1e-8 to 1e-7 of the pixels with a coarse rho, none with the test
+fixture's fine one. That was accepted in favour of memory safety; a run
+whose tile-row stripe fits is unchanged.
 
 Memory per stripe is what :func:`spatialrisk.gdal_env.plan_inference`
 budgets (see its docstring); the body below is written to match that model,
 so a change here must be mirrored there and re-pinned by the memory probe.
+Its ``n_design_cols`` is the per-pixel float64 working width the closure is
+charged, documented next to :func:`predict_windowed`'s ``n_design_cols``
+kwarg below.
 """
 
 import logging
@@ -158,6 +171,19 @@ def _read_stripe(
     columns, which keeps the same rows in the same order as building the full
     frame and boolean-indexing it (what the serial loops did) with one
     full-stripe frame fewer.
+
+    The filtered columns go straight into one preallocated
+    ``(features, valid pixels)`` float64 array -- the layout pandas gives a
+    frame built from a dict of float64 columns -- and each full-stripe column
+    is dropped as soon as it is copied, so the frame is that array with no
+    further copy. At its peak (the first copy) this phase holds the
+    full-stripe columns, the array and one filtered column: 16 B per pixel
+    per feature plus 8, where a dict of filtered copies beside the
+    full-stripe columns, consolidated into a third copy by pandas, held 24
+    per feature. :func:`spatialrisk.gdal_env.inference_working_set` charges
+    16 per feature plus the raw bands and the output's fixed columns, which
+    covers it. The extra layers are read after the frame, once the
+    full-stripe columns are gone.
     """
     features, mask_src, extra_src = handles
     n_rows, n_cols = int(window.height), int(window.width)
@@ -181,6 +207,7 @@ def _read_stripe(
         if mask_src.nodata is not None:
             invalid |= mflat == mask_src.nodata
         valid &= ~invalid
+        del mblock, mflat, invalid
 
     columns = {}
     for name in feature_names:
@@ -191,6 +218,18 @@ def _read_stripe(
         col = arr.ravel()
         valid &= ~np.isnan(col)
         columns[name] = col
+        # The dict holds the column now: no loop name may keep the last one
+        # alive past its copy below.
+        del arr, col
+
+    filtered = np.empty((len(columns), int(np.count_nonzero(valid))), dtype=float)
+    for j, name in enumerate(feature_names):
+        filtered[j] = columns.pop(name)[valid]
+    # pandas stores a 2-D array's transpose as the frame's single block, so the
+    # (pixels, features) view ``filtered.T`` with ``copy=False`` makes
+    # ``filtered`` itself that block.
+    block_df = pd.DataFrame(filtered.T, columns=list(feature_names), copy=False)
+    del filtered
 
     extras = {}
     for name, layer in (extra_layers or {}).items():
@@ -204,7 +243,6 @@ def _read_stripe(
         )
         extras[name] = block.astype(float).ravel()[valid]
 
-    block_df = pd.DataFrame({name: col[valid] for name, col in columns.items()})
     return valid, block_df, extras
 
 
@@ -264,9 +302,7 @@ def _plan_and_reserve(
         tile_rows=BLOCK_SIZE,
         n_features=len(feature_paths),
         feature_itemsizes=itemsizes,
-        n_design_cols=(
-            n_design_cols if n_design_cols is not None else len(feature_paths) + 1
-        ),
+        n_design_cols=n_design_cols,
         with_mask=mask is not None,
         with_extra=bool(extra_layers),
     )
@@ -475,6 +511,19 @@ def predict_windowed(
     only writer and writes them in stripe order, which changes no pixel.
     The file is written as ``<output>.part.tif`` and renamed on success; on
     failure the partial file is removed and a previous output is untouched.
+
+    ``n_design_cols`` is the per-pixel float64 working width ``predict_block``
+    is charged for in :func:`spatialrisk.gdal_env.plan_inference`'s memory
+    budget -- not necessarily the fitted formula's column count. GLM and iCAR
+    pass
+    :attr:`spatialrisk.mlmodels.linear_predictor.LinearPredictor.working_set_columns`
+    (1: ``eta`` walks the stripe in row chunks, so nothing scales with stripe
+    size except its own output vector), while RF passes
+    ``len(design_info.column_names)`` because its trees consume the full
+    one-hot matrix at once. That is why the plan log's "working cols" field
+    prints 1 for GLM/iCAR while their own "GLM design: ... lookup term(s),
+    ... materialised col(s)" / "iCAR design: ..." line carries the real
+    counts. Defaults to ``len(feature_paths) + 1`` when omitted.
     """
     log = log or logger
     output_file = Path(output_file)
@@ -482,6 +531,9 @@ def predict_windowed(
     part = output_file.with_name(output_file.stem + ".part.tif")
     feature_paths = {k: Path(v) for k, v in feature_paths.items()}
     feature_names = list(feature_paths)
+    n_design_cols = (
+        n_design_cols if n_design_cols is not None else len(feature_paths) + 1
+    )
 
     label = label or output_file.name
     plan, reservation = _plan_and_reserve(
@@ -503,14 +555,28 @@ def predict_windowed(
     handles = _Handles(feature_paths, mask, extra_layers)
     try:
         log.info(
-            "%s: %d worker(s), %d rows/stripe, budget %.0f MiB (%s), reserved %.0f MiB",
+            "%s: %d worker(s), %d rows/stripe (%.0f MiB each, %d working cols), "
+            "budget %.0f MiB (%s), reserved %.0f MiB",
             label,
             plan.workers,
             plan.rows_per_stripe,
+            plan.stripe_bytes / 2**20,
+            n_design_cols,
             plan.memory_budget_bytes / 2**20,
             plan.memory_source,
             reservation.bytes_ / 2**20,
         )
+        if plan.over_budget_bytes:
+            log.warning(
+                "%s: one %d-row stripe (%.0f MiB) exceeds the memory budget "
+                "(%.0f MiB) by %.0f MiB; running anyway with %d worker(s)",
+                label,
+                plan.rows_per_stripe,
+                plan.stripe_bytes / 2**20,
+                plan.memory_budget_bytes / 2**20,
+                plan.over_budget_bytes / 2**20,
+                plan.workers,
+            )
 
         with rasterio.open(target_path) as ref:
             profile = ref.profile.copy()
