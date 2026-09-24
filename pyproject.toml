@@ -106,4 +106,4 @@ convention = "google"
 # "determine"). Extend this when adding a locale, after checking each hit is a
 # genuine word and not a real typo. "reencode" is ours: the identifier
 # reencode_in_place, which codespell reads as a misspelling of "re-encode".
-ignore-words-list = "absolue,absorve,ajustement,alignement,ans,anual,approche,attendent,bloc,bord,celles,clases,classe,complet,considere,conter,continuos,continus,convient,eles,erro,espaces,exemple,existant,explicite,fixe,fonction,formule,formules,garantie,gere,hace,initiales,interprete,itens,limite,medias,momento,nome,pares,persistant,posible,projet,projets,reencode,relie,requiere,ressource,ser,somme,termine,termo,transforme,valide,vetor"
+ignore-words-list = "absolue,absorve,ajustement,alignement,ans,anual,approche,attendent,bloc,bord,celles,clases,classe,complet,considere,conter,continuos,continus,convient,eles,erro,espaces,exemple,existant,explicite,fixe,fonction,formule,formules,garantie,gere,hace,initiales,interprete,itens,limite,medias,momento,nome,nomes,pares,persistant,posible,projet,projets,reencode,relie,requiere,ressource,ser,somme,termine,termo,transforme,valide,vetor"

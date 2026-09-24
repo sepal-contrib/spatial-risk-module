@@ -25,6 +25,31 @@ def _mask_values(mask_value) -> tuple:
     return (mask_value,)
 
 
+# ``cell`` is appended to the formula internally by the iCAR model; it is never
+# a dataset variable.
+_INTERNAL_FORMULA_VARIABLES = {"cell"}
+
+
+class MissingModelVariablesError(ValueError):
+    """The dataset handed to apply() lacks variables the model's formula uses.
+
+    Carries the pieces separately so the GUI can render its own translated
+    message instead of this English one.
+    """
+
+    def __init__(self, missing, dataset_name=None, model_name=None):
+        """Record what is missing, where, and for which model."""
+        self.missing = list(missing)
+        self.dataset_name = dataset_name
+        self.model_name = model_name
+        super().__init__(
+            f"Dataset '{dataset_name}' is missing variable(s) used by model "
+            f"'{model_name}': {', '.join(self.missing)}. Add them to the dataset "
+            "(with the same names used at training), or choose a dataset that "
+            "has them."
+        )
+
+
 class BaseRiskModel(BaseModel):
     """Generic base class for risk probability ML models.
 
@@ -164,22 +189,50 @@ class BaseRiskModel(BaseModel):
         self.formula = resolved
         return df, resolved
 
+    def required_variables(self) -> List[str]:
+        """Sorted dataset variables apply() needs: the formula's RHS names.
+
+        A formula edited at training time may use fewer variables than the
+        training dataset had, so the formula — not ``feature_names`` — is the
+        contract. ``feature_names`` is only the fallback when there is no
+        parsable formula.
+        """
+        from spatialrisk.far_helpers import formula_variables
+
+        if self.formula:
+            try:
+                _, rhs = formula_variables(self.formula)
+            except Exception:  # unparsable: let patsy report it at apply()
+                rhs = None
+            if rhs is not None:
+                return sorted(rhs - _INTERNAL_FORMULA_VARIABLES)
+        return sorted(self.feature_names)
+
+    def missing_variables(self, dataset: Any) -> List[str]:
+        """Sorted :meth:`required_variables` that *dataset* has no feature for."""
+        available = {v.name for v in getattr(dataset, "features", None) or []}
+        return [v for v in self.required_variables() if v not in available]
+
     def _resolve_dataset(self, dataset: Optional[Any]) -> Any:
-        """Return dataset to use for apply(), validating feature compatibility."""
+        """Return dataset to use for apply(), validating feature compatibility.
+
+        Always validated, even when it is ``self.dataset``: the inference
+        runner rebinds ``model.dataset`` to the prediction dataset before
+        calling apply(), so identity says nothing about compatibility.
+        """
         active = dataset if dataset is not None else self.dataset
         if active is None:
             raise ValueError(
                 "No dataset available. Pass dataset= or set model.dataset"
                 " before calling apply()."
             )
-        # Validate features when a different dataset is provided
-        if dataset is not None and dataset is not self.dataset and self.feature_names:
-            available = {v.name for v in dataset.features}
-            missing = [f for f in self.feature_names if f not in available]
-            if missing:
-                raise ValueError(
-                    f"Provided dataset is missing required feature(s): {missing}"
-                )
+        missing = self.missing_variables(active)
+        if missing:
+            raise MissingModelVariablesError(
+                missing,
+                dataset_name=getattr(active, "name", None),
+                model_name=self.name or self.model_type,
+            )
         return active
 
     def _ensure_design_info(self) -> None:

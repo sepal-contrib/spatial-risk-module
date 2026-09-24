@@ -25,6 +25,7 @@ from gui.scripts.inference_runner import (
     is_ml_family,
     is_mw_family,
     mask_layer_candidates,
+    missing_model_variables,
     mw_window_options,
     suggested_mask_layer,
 )
@@ -290,6 +291,14 @@ def PredictionFormDialog(
             return t("tiles.inference.error_invalid_model")
         if not selected_dataset or selected_dataset not in p.datasets:
             return t("tiles.inference.error_invalid_dataset")
+        missing = missing_model_variables(p, selected_model, selected_dataset)
+        if missing:
+            return t(
+                "tiles.inference.error_missing_variables",
+                dataset=selected_dataset,
+                model=selected_model,
+                names=", ".join(missing),
+            )
         if ml_family and not mask_layer:
             return t("tiles.inference.error_mask_required")
         # Gated on window_options: an MW model exposing none (untrained legacy

@@ -217,6 +217,7 @@
       "error_invalid_model": "Select a valid trained model.",
       "error_invalid_dataset": "Select a valid dataset.",
       "error_mask_required": "Assign a mask layer, or pick 'No mask'.",
+      "error_missing_variables": "Dataset '{dataset}' is missing variable(s) used by model '{model}': {names}. Add them to the dataset with the same names used for training, or choose another dataset.",
       "error_name_required": "Enter a prediction name (letters, numbers, - or _).",
       "error_name_running": "A prediction named '{name}' is currently being generated — wait for it to finish or pick another name.",
       "confirm_delete_predictions_title": "Delete predictions?",

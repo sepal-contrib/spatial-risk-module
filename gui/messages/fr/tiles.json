@@ -217,6 +217,7 @@
       "error_invalid_model": "Sélectionnez un modèle entraîné valide.",
       "error_invalid_dataset": "Sélectionnez un jeu de données valide.",
       "error_mask_required": "Attribuez une couche de masque, ou choisissez « Aucun masque ».",
+      "error_missing_variables": "Le jeu de données « {dataset} » ne contient pas la ou les variables utilisées par le modèle « {model} » : {names}. Ajoutez-les au jeu de données avec les mêmes noms qu'à l'entraînement, ou choisissez un autre jeu de données.",
       "error_name_required": "Saisissez un nom de prédiction (lettres, chiffres, - ou _).",
       "error_name_running": "Une prédiction nommée '{name}' est en cours de génération — attendez la fin ou choisissez un autre nom.",
       "confirm_delete_predictions_title": "Supprimer les prédictions ?",

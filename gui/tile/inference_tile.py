@@ -94,6 +94,20 @@ def _drop_pred_layers(row, map_, legend_port) -> None:
         legend_port.unregister(*[_pred_layer_key(k) for k in storage_keys])
 
 
+def _inference_error_message(exc, model_key, dataset_key) -> str:
+    """User-facing text for a failed run: translated when the cause is known."""
+    from spatialrisk.mlmodels.base import MissingModelVariablesError
+
+    if isinstance(exc, MissingModelVariablesError):
+        return t(
+            "tiles.inference.error_missing_variables",
+            dataset=dataset_key,
+            model=model_key,
+            names=", ".join(exc.missing),
+        )
+    return str(exc)
+
+
 def _run_inference(
     job_id,
     model_key,
@@ -113,9 +127,13 @@ def _run_inference(
     MW family's subset of trained window sizes; None means every window.
     """
     try:
-        with tracked_job(notifier, task_title or f"Predicting: {model_key}"), writing(
-            project.project_name
-        ):
+        with tracked_job(
+            notifier,
+            task_title or f"Predicting: {model_key}",
+            error_format=lambda exc: _inference_error_message(
+                exc, model_key, dataset_key
+            ),
+        ), writing(project.project_name):
             from gui.scripts.inference_runner import run_inference
 
             run_inference(
@@ -146,7 +164,12 @@ def _run_inference(
 
     except Exception as exc:
         logger.exception("Inference failed for %s on %s", model_key, dataset_key)
-        update_job(inference_jobs, job_id, status="failed", error=str(exc))
+        update_job(
+            inference_jobs,
+            job_id,
+            status="failed",
+            error=_inference_error_message(exc, model_key, dataset_key),
+        )
 
 
 def _run_import(
