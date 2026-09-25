@@ -70,9 +70,10 @@ _MAX_CHUNK_ROWS = 1 << 18
 _LOOKUP_BYTES_PER_ROW = 32
 # Materialised phase: the same patsy build as linear_predictor's materialised
 # phase (measured there): the float64 subset matrix, 3 float64 columns per
-# factor patsy evaluates, 2 float64 columns of build transients.
+# factor patsy evaluates, 4 float64 columns of build transients (pandas 3.0
+# needs all 4 for a single scale() factor).
 _COLS_PER_FACTOR = 3
-_BUILD_COLS = 2
+_BUILD_COLS = 4
 
 
 def _chunk_rows(n_columns: int) -> int:
@@ -119,7 +120,7 @@ class DesignBuilder:
         ``chunk_rows`` times the float32 chunk (4 B per column) plus the larger
         of the one-hot phase (``_LOOKUP_BYTES_PER_ROW`` + 4 B per column of the
         widest one-hot term) and the materialised phase (float64 subset matrix,
-        3 columns per patsy factor, 2 build columns). The caller's ``fn`` runs
+        3 columns per patsy factor, 4 build columns). The caller's ``fn`` runs
         after the build and keeps only the chunk alive, so its own scratch is
         the caller's to account for (sklearn's forest: at most about
         16 + 24 x n_jobs B/row, measured 40 B/row at ``n_jobs=1`` and 302 B/row

@@ -29,6 +29,7 @@ FORMULAS = {
         f" + C(k + 0, levels={L106})"
     ),
     "plain-numeric": "y ~ x1 + x2 + np.log(np.abs(x3) + 1)",
+    "one-scale": "y ~ scale(x1)",
     "only-categorical": f"y ~ C(k, levels={L106})",
     "intercept-only": "y ~ 1",
     "same-column-in-two-C-terms": (
@@ -286,7 +287,9 @@ def _two_peaks(builder, run, rng, levels):
     return {n: _peak_bytes(run, df) for n, df in frames.items()}
 
 
-@pytest.mark.parametrize("name", ["bol-like", "plain-numeric", "only-categorical"])
+@pytest.mark.parametrize(
+    "name", ["bol-like", "plain-numeric", "one-scale", "only-categorical"]
+)
 def test_chunk_scratch_bytes_covers_the_measured_build_peak(name):
     """One output column per pixel plus the bounded chunk scratch cover the peak.
 

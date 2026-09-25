@@ -67,8 +67,9 @@ from spatialrisk.mlmodels.design_terms import level_positions, plain_categorical
 _ETA_CHUNK_ROWS = 1 << 17
 
 # eta()'s memory in float64 columns (8 B each). The figures come from
-# tracemalloc measurements (patsy 1.0.2, pandas 2.3, numpy 2.2), rounded up,
-# and tests/test_linear_predictor.py pins them.
+# tracemalloc measurements (patsy 1.0.2, pandas 2.3, numpy 2.2 locally; patsy
+# 1.0.3, pandas 3.0.5, numpy 2.2.6 in SEPAL's venv), rounded up, and
+# tests/test_linear_predictor.py pins them.
 #
 # Per pixel: the returned eta vector is the only allocation that scales with
 # the stripe.
@@ -83,8 +84,12 @@ _LOOKUP_COLS = 4
 # 25 B/row per scale() factor with its matrix column included.
 _COLS_PER_FACTOR = 3
 # The in-flight factor's evaluation temporaries and the ``X @ coef`` product.
-# A single scale() factor peaks at 40 B/row inside patsy.
-_BUILD_COLS = 2
+# patsy's scale() transform alone peaks at 40 B/row under pandas 2.3 and at
+# 56 B/row under pandas 3.0 (patsy's code is the same in both), so a formula
+# with one scale() factor peaks at 41 and 57 B/row inside eta(). From four
+# scale() factors on, the per-factor columns set the peak and both pandas
+# versions measure the same.
+_BUILD_COLS = 4
 
 
 @dataclass
@@ -135,7 +140,7 @@ class LinearPredictor:
 
         * the lookup phase, a fixed 4 columns whatever the level count;
         * the materialised phase: the subset matrix, 3 columns per factor
-          patsy evaluates, and 2 columns of build transients.
+          patsy evaluates, and 4 columns of build transients.
 
         The per-factor figure assumes single-column factors. Those are the
         ``scale(x)``, plain numeric and ``C(...)`` factors that
