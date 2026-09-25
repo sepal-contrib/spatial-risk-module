@@ -32,11 +32,19 @@ Series over row views of the columns, for the rounding reason
 
 Speed on the stripe above: patsy's whole matrix took 30.2 s, the builder
 3.8 s. The whole RF closure went from 39.2 s to 12.0 s.
+
+Memory: :meth:`DesignBuilder.evaluate` keeps one float64 output per row
+(:attr:`DesignBuilder.working_set_columns` is 1). Everything else lives for
+one chunk and is bounded by :attr:`DesignBuilder.chunk_scratch_bytes`. The
+chunk height (:func:`_chunk_rows`) keeps one float32 chunk near 128 MiB. On
+the stripe above the 124-column design got 2^18 rows. The closure took
+22.6 / 14.5 / 12.9 / 12.0 / 11.7 s at 2^15 .. 2^19 rows, so 2^18 is the
+smallest power of two within 5% of the fastest, and it is also the cap.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -51,6 +59,20 @@ _CHUNK_TARGET_BYTES = 128 * 2**20
 #: chunk near the target, however slow.
 _MIN_CHUNK_ROWS = 1
 _MAX_CHUNK_ROWS = 1 << 18
+
+# chunk_scratch_bytes' per-row model, on top of the float32 chunk itself.
+# One-hot phase: the value column cast to float64 (a copy only for int
+# columns), the int64 searchsorted index, the bool miss mask, plus the gathered
+# float32 contrast rows (4 B per term column), which numpy materialises before
+# copying them into the chunk. Measured 17 B/row on float columns and 25 B/row
+# on int columns before the gather, rounded up to 4 float64 columns as in
+# linear_predictor.
+_LOOKUP_BYTES_PER_ROW = 32
+# Materialised phase: the same patsy build as linear_predictor's materialised
+# phase (measured there): the float64 subset matrix, 3 float64 columns per
+# factor patsy evaluates, 2 float64 columns of build transients.
+_COLS_PER_FACTOR = 3
+_BUILD_COLS = 2
 
 
 def _chunk_rows(n_columns: int) -> int:
@@ -79,6 +101,41 @@ class DesignBuilder:
     subset_design_info: Optional[object]  # patsy DesignInfo or None
     subset_positions: np.ndarray  # intp: full-design column of each subset column
     chunk_rows: int
+
+    @property
+    def working_set_columns(self) -> int:
+        """Float64 columns per pixel the planner charges for one evaluate() call.
+
+        Only the returned vector scales with the stripe; the chunk and its
+        transients are :attr:`chunk_scratch_bytes`, which the planner leaves to
+        the memory budget's headroom, as it does for the linear predictor.
+        """
+        return 1
+
+    @property
+    def chunk_scratch_bytes(self) -> int:
+        """Upper bound on one chunk's build transients, in bytes.
+
+        ``chunk_rows`` times the float32 chunk (4 B per column) plus the larger
+        of the one-hot phase (``_LOOKUP_BYTES_PER_ROW`` + 4 B per column of the
+        widest one-hot term) and the materialised phase (float64 subset matrix,
+        3 columns per patsy factor, 2 build columns). The caller's ``fn`` runs
+        after the build and keeps only the chunk alive, so its own scratch is
+        the caller's to account for (sklearn's forest: at most about
+        16 + 24 x n_jobs B/row, measured 40 B/row at ``n_jobs=1`` and 302 B/row
+        at 16).
+        """
+        lookup = 0
+        if self.one_hots:
+            widest = max(oh.rows_sorted.shape[1] for oh in self.one_hots)
+            lookup = _LOOKUP_BYTES_PER_ROW + 4 * widest
+        materialised = 0
+        if self.subset_design_info is not None:
+            n_factors = len(self.subset_design_info.factor_infos)
+            materialised = 8 * (
+                len(self.subset_positions) + _COLS_PER_FACTOR * n_factors + _BUILD_COLS
+            )
+        return self.chunk_rows * (4 * self.n_columns + max(lookup, materialised))
 
     def describe(self) -> str:
         """One line for the prediction log."""
@@ -126,6 +183,18 @@ class DesignBuilder:
                 del rows, xs
             yield start, stop, x
             del x
+
+    def evaluate(self, block_df, fn: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+        """``fn`` over every chunk's design, as one float64 vector of ``len(block_df)``.
+
+        ``fn(x)`` receives each float32 chunk from :meth:`chunks` and returns
+        one value per row. It is not called for an empty frame.
+        """
+        out = np.empty(len(block_df), dtype=np.float64)
+        for start, stop, x in self.chunks(block_df):
+            out[start:stop] = fn(x)
+            del x
+        return out
 
 
 def compile_design_builder(design_info) -> DesignBuilder:

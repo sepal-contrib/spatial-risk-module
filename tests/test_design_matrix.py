@@ -1,10 +1,13 @@
 # tests/test_design_matrix.py
 """compile_design_builder: patsy's design matrix as float32 row chunks."""
+import tracemalloc
+
 import numpy as np
 import pandas as pd
 import pytest
 from patsy import dmatrices
 from patsy.highlevel import build_design_matrices
+from sklearn.ensemble import RandomForestClassifier
 
 from spatialrisk.mlmodels import design_matrix
 from spatialrisk.mlmodels.design_matrix import compile_design_builder
@@ -162,3 +165,120 @@ def test_describe_counts_the_buckets():
 def test_chunk_rows_keep_one_float32_chunk_near_128_mib(n_columns, rows):
     """The power of two below 128 MiB / (4 B x columns), within [1, 2^18]."""
     assert design_matrix._chunk_rows(n_columns) == rows
+
+
+# --------------------------------------------------------------------------- #
+# evaluate() and its memory
+# --------------------------------------------------------------------------- #
+def test_evaluate_runs_fn_per_chunk_into_one_float64_vector():
+    """Each chunk reaches fn once, in order; an empty frame never calls it."""
+    rng = np.random.default_rng(21)
+    design_info, builder = _builder(FORMULAS["bol-like"], rng, L117)
+    builder.chunk_rows = 1000
+    new = _frame(4321, rng)
+    calls = []
+
+    def fn(x):
+        """Record each chunk's row count and return a scaled column."""
+        calls.append(x.shape[0])
+        return x[:, 1] * 2
+
+    got = builder.evaluate(new, fn)
+    (whole,) = build_design_matrices([design_info], new, NA_action="raise")
+    assert got.dtype == np.float64
+    assert np.array_equal(got, np.asarray(whole, dtype=np.float32)[:, 1] * 2)
+    assert calls == [1000, 1000, 1000, 1000, 321]
+    empty = builder.evaluate(new.iloc[:0], fn)
+    assert empty.shape == (0,) and empty.dtype == np.float64
+    assert calls == [1000, 1000, 1000, 1000, 321]
+    assert builder.working_set_columns == 1
+
+
+def _peak_bytes(run, df):
+    """Tracemalloc peak of ``run(df)``, above what was live before it."""
+    started = not tracemalloc.is_tracing()
+    if started:
+        tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        run(df)
+        return tracemalloc.get_traced_memory()[1] - base
+    finally:
+        if started:
+            tracemalloc.stop()
+
+
+# Python objects patsy and pandas churn per chunk (see the same allowance in
+# tests/test_linear_predictor.py): well under one byte per row.
+_PY_CHURN_BYTES_PER_ROW = 0.5
+_CHUNK = 32768  # smaller than production, so the frames stay small
+
+
+def _two_peaks(builder, run, rng, levels):
+    """Peaks at 4 and 16 chunks, after one warm-up run of each."""
+    n1, n2 = 4 * _CHUNK, 16 * _CHUNK
+    frames = {n1: _frame(n1, rng, levels), n2: _frame(n2, rng, levels)}
+    for df in frames.values():
+        run(df)  # warm patsy's lazy state, pandas' caches and free lists
+    return {n: _peak_bytes(run, df) for n, df in frames.items()}
+
+
+@pytest.mark.parametrize("name", ["bol-like", "plain-numeric", "only-categorical"])
+def test_chunk_scratch_bytes_covers_the_measured_build_peak(name):
+    """One output column per pixel plus the bounded chunk scratch cover the peak.
+
+    (a) each peak fits working_set_columns per pixel plus chunk_scratch_bytes;
+    (b) the peak grows by no more than one float64 per added row, so nothing
+    but the output scales with the stripe; (c) the charge does not grossly
+    overshoot the peak.
+    """
+    rng = np.random.default_rng(9)
+    levels = L117 if name == "bol-like" else L106
+    _, builder = _builder(FORMULAS[name], rng, levels)
+    builder.chunk_rows = _CHUNK
+    peaks = _two_peaks(
+        builder, lambda df: builder.evaluate(df, lambda x: x[:, 0]), rng, levels
+    )
+    n1, n2 = sorted(peaks)
+    per_px = builder.working_set_columns * 8
+    for n, peak in peaks.items():
+        assert peak <= per_px * n + builder.chunk_scratch_bytes, (n, peak / n)
+    slope = (peaks[n2] - peaks[n1]) / (n2 - n1)
+    assert slope <= per_px + _PY_CHURN_BYTES_PER_ROW, slope
+    charged = per_px * n2 + builder.chunk_scratch_bytes
+    assert charged <= 2.5 * peaks[n2], (charged, peaks[n2])
+
+
+@pytest.mark.parametrize("n_jobs", [1, 4])
+def test_a_forest_over_the_chunks_holds_one_float64_per_pixel(n_jobs):
+    """RF's closure shape: nothing but the output vector scales with the stripe.
+
+    sklearn's predict phase keeps the chunk plus all_proba (16 B/row) and, per
+    running joblib worker, one tree's proba and leaf ids (24 B/row), whatever
+    the stripe size; RFModel.apply's serial default keeps the pickled n_jobs=-1.
+    """
+    rng = np.random.default_rng(10)
+    design_info, builder = _builder(FORMULAS["bol-like"], rng, L117)
+    builder.chunk_rows = _CHUNK
+    train = _frame(3000, rng, L117)
+    (xt,) = build_design_matrices([design_info], train, NA_action="raise")
+    forest = RandomForestClassifier(
+        n_estimators=20,
+        max_depth=15,
+        min_samples_leaf=2,
+        n_jobs=n_jobs,
+        random_state=0,
+    ).fit(np.asarray(xt, dtype=np.float32), train["y"].to_numpy())
+
+    def proba(x):
+        """Return the forest's positive-class probability for a chunk."""
+        return forest.predict_proba(x)[:, 1]
+
+    peaks = _two_peaks(builder, lambda df: builder.evaluate(df, proba), rng, L117)
+    n1, n2 = sorted(peaks)
+    slope = (peaks[n2] - peaks[n1]) / (n2 - n1)
+    assert slope <= 8 + _PY_CHURN_BYTES_PER_ROW, slope
+    predict_phase = builder.chunk_rows * (4 * builder.n_columns + 16 + 24 * n_jobs)
+    bound = 8 * n2 + max(builder.chunk_scratch_bytes, predict_phase)
+    assert peaks[n2] <= bound, (peaks[n2], bound)
