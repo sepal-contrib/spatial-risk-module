@@ -212,9 +212,9 @@ class RFModel(BaseRiskModel):
         # gdal_threads/cachemax, so the serial arm read with
         # GDAL_NUM_THREADS=1 and a two-worker cache; serial RF is now, if
         # anything, a little faster than recorded here. Those runs also
-        # charged a forest its full design width per pixel; since the design
-        # builder it charges one column, so the budget no longer pins a pooled
-        # forest low. The serial default stands until a c8 re-measure.
+        # charged a forest its full design width per pixel; now that the
+        # design builder charges one column, the budget no longer pins a
+        # pooled forest low. The serial default stands until a c8 re-measure.
         workers = 1 if workers is None else workers
         # With a stripe pool the outer workers own the cores: joblib's per-call
         # tree fan-out would multiply them (workers x n_jobs). Serial keeps the

@@ -10,7 +10,10 @@ from patsy.highlevel import build_design_matrices
 from sklearn.ensemble import RandomForestClassifier
 
 from spatialrisk.mlmodels import design_matrix
-from spatialrisk.mlmodels.design_matrix import compile_design_builder
+from spatialrisk.mlmodels.design_matrix import (
+    _check_full_coverage,
+    compile_design_builder,
+)
 
 L106 = list(range(1, 107))
 L117 = list(range(1, 118))
@@ -57,7 +60,10 @@ def _builder(formula, rng, levels=L106):
 
 def _stack(builder, df):
     """Every chunk of ``df``'s design, stacked back into one matrix."""
-    parts = [x.copy() for _, _, x in builder.chunks(df)]
+    parts = []
+    for _, _, x in builder.chunks(df):
+        assert x.dtype == np.float32 and x.flags.c_contiguous
+        parts.append(x.copy())
     if not parts:
         return np.empty((0, builder.n_columns), dtype=np.float32)
     return np.concatenate(parts)
@@ -76,7 +82,6 @@ def test_chunks_are_patsys_matrix_cast_to_float32_bit_for_bit(name):
         builder.chunk_rows = rows
         got = _stack(builder, new)
         assert got.dtype == np.float32
-        assert got.flags.c_contiguous
         assert np.array_equal(got, expected), rows
 
 
@@ -128,6 +133,63 @@ def test_an_integer_categorical_column_matches_its_float_twin():
     as_float = _frame(1000, rng)
     as_int = as_float.astype({"k": np.int64, "pa": np.int64})
     assert np.array_equal(_stack(builder, as_int), _stack(builder, as_float))
+
+
+def test_a_bare_c_design_rebuilt_from_a_samples_csv_matches_patsy(tmp_path):
+    """RFModel._ensure_design_info's path: pd.read_csv types codes as int64.
+
+    A model reloaded from its pickle rebuilds design info with
+    ``pd.read_csv(samples)``, which types integer categorical codes as
+    numpy/Python ``int64`` rather than the float64 the live training frame
+    used, so patsy's categories come back as Python ``int``. A bare ``C(k)``
+    (no ``levels=``) must still route through the one-hot lookup bucket, not
+    the patsy fallback, and give a bit-exact match.
+    """
+    rng = np.random.default_rng(23)
+    n = 3000
+    train = pd.DataFrame(
+        {
+            "y": rng.integers(0, 2, n),
+            "k": rng.integers(1, 6, n),
+            "pa": rng.integers(0, 2, n),
+            "x1": rng.normal(size=n),
+        }
+    )
+    csv_path = tmp_path / "samples.csv"
+    train.to_csv(csv_path, index=False)
+    reloaded = pd.read_csv(csv_path)
+
+    _, x_ref = dmatrices("y ~ C(k) + C(pa) + scale(x1)", reloaded, NA_action="drop")
+    design_info = x_ref.design_info
+    builder = compile_design_builder(design_info)
+    builder.chunk_rows = 7
+
+    new = _frame(2001, rng, levels=[1, 2, 3, 4, 5])
+    got = _stack(builder, new)
+    (expected,) = build_design_matrices([design_info], new, NA_action="raise")
+    assert np.array_equal(got, np.asarray(expected, dtype=np.float32))
+    assert len(builder.one_hots) == 2
+
+
+def test_check_full_coverage_catches_a_gap():
+    """A column no bucket claims is a missing column, not silent garbage."""
+    with pytest.raises(RuntimeError, match=r"missing columns \[2\]"):
+        _check_full_coverage(4, [slice(0, 2)], [], np.array([3], dtype=np.intp))
+
+
+def test_check_full_coverage_catches_an_overlap():
+    """A column two buckets claim is a duplicate, not a silent overwrite."""
+    with pytest.raises(RuntimeError, match=r"duplicated columns \[1\]"):
+        _check_full_coverage(
+            3, [slice(0, 2)], [slice(1, 2)], np.array([2], dtype=np.intp)
+        )
+
+
+def test_check_full_coverage_accepts_a_valid_partition():
+    """Every column claimed exactly once raises nothing."""
+    _check_full_coverage(
+        5, [slice(0, 1)], [slice(1, 3)], np.array([3, 4], dtype=np.intp)
+    )
 
 
 def test_an_empty_frame_yields_no_chunk():

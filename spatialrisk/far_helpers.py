@@ -163,8 +163,9 @@ def get_categorical_levels(var) -> "list | None":
     value that never appeared in the training sample: GLM, iCAR and RF
     prediction raise ``ValueError`` (message ``"<factor code>: values not
     among the training levels: [...]"``) from the compiled linear predictor
-    or the RF design builder. A categorical patsy still builds itself -- an
-    expression such as ``C(x + 0)``, or string levels -- raises ``PatsyError``.
+    or the RF design builder. A categorical that patsy still builds itself --
+    an expression such as ``C(x + 0)``, or string levels -- raises
+    ``PatsyError``.
 
     Parameters
     ----------
@@ -246,8 +247,8 @@ def generate_patsy_formula(dataset: "Dataset", include_levels: bool = True) -> s
     value that never appeared in the training sample: GLM, iCAR and RF raise
     ``ValueError`` (message ``"<factor code>: values not among the training
     levels: [...]"``) from the compiled linear predictor or the RF design
-    builder. A categorical patsy still builds itself -- an expression such as
-    ``C(x + 0)``, or string levels -- raises ``PatsyError``.
+    builder. A categorical that patsy still builds itself -- an expression
+    such as ``C(x + 0)``, or string levels -- raises ``PatsyError``.
     """
     # Validate dataset configuration
     if not dataset.target:

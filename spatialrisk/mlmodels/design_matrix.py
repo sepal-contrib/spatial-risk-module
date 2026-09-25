@@ -197,6 +197,38 @@ class DesignBuilder:
         return out
 
 
+def _check_full_coverage(
+    n_columns: int,
+    constant_slices: List[slice],
+    one_hot_slices: List[slice],
+    subset_positions: np.ndarray,
+) -> None:
+    """Raise unless the buckets write every column of ``range(n_columns)`` once.
+
+    ``chunks()`` fills its output array bucket by bucket without ever zeroing
+    it first, so a bucketing bug that dropped or double-claimed a column would
+    otherwise leave uninitialised memory in the array sklearn reads, or
+    silently overwrite one bucket's column with another's. A plain ``assert``
+    would be stripped by ``python -O``, so this raises ``RuntimeError``
+    instead. Cost is O(``n_columns``), paid once per :func:`compile_design_builder`
+    call, not per chunk.
+    """
+    counts = np.zeros(n_columns, dtype=np.int64)
+    for sl in constant_slices:
+        counts[sl] += 1
+    for sl in one_hot_slices:
+        counts[sl] += 1
+    counts[subset_positions] += 1
+    missing = np.flatnonzero(counts == 0)
+    duplicated = np.flatnonzero(counts > 1)
+    if missing.size or duplicated.size:
+        raise RuntimeError(
+            "design builder column coverage is broken: "
+            f"missing columns {missing.tolist()}, "
+            f"duplicated columns {duplicated.tolist()}"
+        )
+
+
 def compile_design_builder(design_info) -> DesignBuilder:
     """Sort ``design_info``'s terms into constant, one-hot and materialised buckets."""
     n_columns = len(design_info.column_names)
@@ -232,6 +264,9 @@ def compile_design_builder(design_info) -> DesignBuilder:
         )
     else:
         subset, positions = None, np.zeros(0, dtype=np.intp)
+    _check_full_coverage(
+        n_columns, constant_slices, [oh.dest for oh in one_hots], positions
+    )
     return DesignBuilder(
         n_columns=n_columns,
         constant_slices=constant_slices,
