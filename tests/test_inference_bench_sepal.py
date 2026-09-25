@@ -43,9 +43,8 @@ Two deliberate simplifications keep the measurement about the engine:
 
 * every feature enters the formula as a plain numeric term, never
   ``C(<name>)`` or ``scale(<name>)``, so the design width is
-  ``n_features + 1`` on any project (what a random forest is charged; a
-  GLM is charged its compiled linear predictor's working width, see
-  :func:`charged_design_cols`), no
+  ``n_features + 1`` on any project (every model is charged one working
+  column whatever that width, see :func:`charged_design_cols`), no
   categorical level scan reads a whole raster before the clock starts, and a
   layer that is constant over its own domain -- a forest mask is all 1 inside
   the forest -- cannot make ``scale()`` divide by zero and drop every row;
@@ -264,14 +263,15 @@ def charged_design_cols(model: str, target_name: str, feature_names: List[str]) 
     """The ``n_design_cols`` ``model``'s ``apply`` charges for this formula.
 
     What each ``apply`` hands the engine: the GLM (like iCAR) the compiled
-    linear predictor's ``working_set_columns``, the random forest the
-    design's full column count. Neither depends on fitted values, only on the
-    design, which is built here over a two-row frame so the parent process
-    never fits; the smoke test checks the GLM's figure against the plan line
-    of a real run.
+    linear predictor's ``working_set_columns``, the random forest its design
+    builder's ``working_set_columns``. Neither depends on fitted values, only
+    on the design, which is built here over a two-row frame so the parent
+    process never fits; the smoke test checks the GLM's figure against the
+    plan line of a real run.
     """
     from patsy import dmatrices
 
+    from spatialrisk.mlmodels.design_matrix import compile_design_builder
     from spatialrisk.mlmodels.linear_predictor import compile_linear_predictor
 
     frame = {name: [0.0, 1.0] for name in feature_names}
@@ -279,7 +279,7 @@ def charged_design_cols(model: str, target_name: str, feature_names: List[str]) 
     _y, x = dmatrices(bench_formula(target_name, feature_names), frame)
     n_cols = len(x.design_info.column_names)
     if model == "rf":
-        return n_cols
+        return compile_design_builder(x.design_info).working_set_columns
     predictor = compile_linear_predictor(x.design_info, np.zeros(n_cols))
     return predictor.working_set_columns
 
@@ -1012,6 +1012,13 @@ def assess(
 # --------------------------------------------------------------------------- #
 # tests
 # --------------------------------------------------------------------------- #
+def test_every_model_is_charged_one_working_column():
+    """The bench plans RF and GLM with what their apply() now charges: 1."""
+    names = ["a", "b", "c"]
+    assert charged_design_cols("rf", "t", names) == 1
+    assert charged_design_cols("glm", "t", names) == 1
+
+
 def test_resolve_workers_expands_half_all_and_auto():
     """``half``/``all`` scale with the cores, ``auto`` sorts last as None."""
     assert _resolve_workers("1,2,half,all,auto", 8) == [1, 2, 4, 8, None]

@@ -525,13 +525,14 @@ def inference_working_set(
     charged for, not necessarily the fitted formula's column count: GLM and
     iCAR pass
     :attr:`spatialrisk.mlmodels.linear_predictor.LinearPredictor.working_set_columns`
-    (1 -- its ``eta()`` walks the stripe in row chunks bounded by its own
-    ``chunk_scratch_bytes``, which this budget leaves to headroom instead of
-    charging per pixel; see that module's docstring and
-    ``tests/test_linear_predictor.py``), while RF passes
-    ``len(design_info.column_names)`` because its trees consume the full
-    one-hot matrix at once. See the spec §4; pinned by the memory probe in
-    ``tests/test_inference_plan.py``.
+    and RF passes
+    :attr:`spatialrisk.mlmodels.design_matrix.DesignBuilder.working_set_columns`
+    (both 1 -- ``eta()`` and the RF design builder walk the stripe in row
+    chunks bounded by their own ``chunk_scratch_bytes``, which this budget
+    leaves to headroom instead of charging per pixel; see those modules'
+    docstrings, ``tests/test_linear_predictor.py`` and
+    ``tests/test_design_matrix.py``). See the spec §4; pinned by the memory
+    probe in ``tests/test_inference_plan.py``.
     """
     per_px = (
         sum(int(s) for s in feature_itemsizes)

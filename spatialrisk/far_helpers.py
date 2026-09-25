@@ -160,10 +160,11 @@ def get_categorical_levels(var) -> "list | None":
     These levels are intended to be injected into a Patsy ``C(var, levels=...)``
     term so that the design matrix declares its complete categorical domain up
     front — preventing an unseen-level error when prediction encounters a
-    value that never appeared in the training sample: GLM and iCAR prediction
-    raise ``ValueError`` from the compiled linear predictor (message
-    ``"<factor code>: values not among the training levels: [...]"``), while
-    RF still goes through patsy and raises ``PatsyError``.
+    value that never appeared in the training sample: GLM, iCAR and RF
+    prediction raise ``ValueError`` (message ``"<factor code>: values not
+    among the training levels: [...]"``) from the compiled linear predictor
+    or the RF design builder. A categorical patsy still builds itself -- an
+    expression such as ``C(x + 0)``, or string levels -- raises ``PatsyError``.
 
     Parameters
     ----------
@@ -242,10 +243,11 @@ def generate_patsy_formula(dataset: "Dataset", include_levels: bool = True) -> s
     Categorical terms declare their full level domain via ``levels=...``, read
     from each categorical raster with :func:`get_categorical_levels`. This
     prevents an unseen-level error at prediction time when a pixel carries a
-    value that never appeared in the training sample: GLM and iCAR raise
-    ``ValueError`` from the compiled linear predictor (message ``"<factor
-    code>: values not among the training levels: [...]"``), while RF still
-    goes through patsy and raises ``PatsyError``.
+    value that never appeared in the training sample: GLM, iCAR and RF raise
+    ``ValueError`` (message ``"<factor code>: values not among the training
+    levels: [...]"``) from the compiled linear predictor or the RF design
+    builder. A categorical patsy still builds itself -- an expression such as
+    ``C(x + 0)``, or string levels -- raises ``PatsyError``.
     """
     # Validate dataset configuration
     if not dataset.target:

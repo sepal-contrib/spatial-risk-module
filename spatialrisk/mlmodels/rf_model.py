@@ -136,8 +136,12 @@ class RFModel(BaseRiskModel):
         """Generate a deforestation probability GeoTIFF.
 
         Streams the feature rasters in full-width stripes through
-        :func:`spatialrisk.mlmodels.windowed_predict.predict_windowed`. Outputs
-        a UInt16 raster scaled to [1, 65535] with 0 as nodata.
+        :func:`spatialrisk.mlmodels.windowed_predict.predict_windowed`, and
+        each stripe's design through
+        :class:`spatialrisk.mlmodels.design_matrix.DesignBuilder` in float32
+        row chunks, so a many-level categorical costs neither patsy's per-value
+        level loop nor a whole-stripe one-hot matrix. Outputs a UInt16 raster
+        scaled to [1, 65535] with 0 as nodata.
 
         Parameters
         ----------
@@ -163,8 +167,7 @@ class RFModel(BaseRiskModel):
             per-call tree fan-out would multiply them (workers x n_jobs)
             instead of adding parallelism.
         """
-        from patsy.highlevel import build_design_matrices
-
+        from spatialrisk.mlmodels.design_matrix import compile_design_builder
         from spatialrisk.mlmodels.windowed_predict import predict_windowed
 
         if self._ml_model is None:
@@ -176,12 +179,20 @@ class RFModel(BaseRiskModel):
         feature_paths = {var.name: var.path for var in active_dataset.features}
         logger.info("Predicting RF raster -> %s", output_file)
 
-        design_info = self._x_design_info
         estimator = self._ml_model
+        builder = compile_design_builder(self._x_design_info)
+        logger.info("RF design: %s", builder.describe())
+
+        def predict_chunk(x):
+            # Looked up per call, not bound once: the n_jobs pin below and the
+            # tests' spies act on the estimator the closure reads.
+            return estimator.predict_proba(x)[:, 1]
 
         def predict_block(block_df, extras):
-            (x,) = build_design_matrices([design_info], block_df, NA_action="drop")
-            return estimator.predict_proba(np.asarray(x))[:, 1]
+            # Each float32 chunk is exactly what sklearn made of patsy's whole
+            # float64 matrix, and every tree reads each row on its own, so the
+            # chunking changes no probability (tests/test_rf_direct_design.py).
+            return builder.evaluate(block_df, predict_chunk)
 
         # A forest is the one predictor whose default is NOT the resource
         # policy: joblib already spreads its trees over every core, while a
@@ -200,7 +211,10 @@ class RFModel(BaseRiskModel):
         # taken while an explicit worker count did not reach the plan's
         # gdal_threads/cachemax, so the serial arm read with
         # GDAL_NUM_THREADS=1 and a two-worker cache; serial RF is now, if
-        # anything, a little faster than recorded here.
+        # anything, a little faster than recorded here. Those runs also
+        # charged a forest its full design width per pixel; since the design
+        # builder it charges one column, so the budget no longer pins a pooled
+        # forest low. The serial default stands until a c8 re-measure.
         workers = 1 if workers is None else workers
         # With a stripe pool the outer workers own the cores: joblib's per-call
         # tree fan-out would multiply them (workers x n_jobs). Serial keeps the
@@ -218,7 +232,7 @@ class RFModel(BaseRiskModel):
                 mask=mask,
                 mask_values=_mask_values(mask_value),
                 workers=workers,
-                n_design_cols=len(design_info.column_names),
+                n_design_cols=builder.working_set_columns,
                 log=logger,
             )
         finally:
