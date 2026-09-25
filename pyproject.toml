@@ -52,8 +52,8 @@ dependencies = [
     # pysepal fork, spatial-risk integration branch (browser locale, AOI restore,
     # PMTiles layers, GEE event-loop fixes on top of v3.8.0).
     "pysepal @ git+https://github.com/SerafiniJose/pysepal.git@spatial-risk",
-    # jupyter-loopback fork: voila tile-404 fixes, pending upstream PR.
-    "jupyter-loopback @ git+https://github.com/SerafiniJose/jupyter-loopback.git@fix/voila-localhost-proxy-probe",
+    # Stock release; tiles use jupyter-server-proxy, not its comm bridge.
+    "jupyter-loopback[comm]==0.3.3",
 ]
 
 [tool.setuptools.packages.find]

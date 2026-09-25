@@ -50,7 +50,11 @@ from gui.scripts.project_ui_helpers import (
     overwrite_needed,
     validate_project_name,
 )
-from gui.scripts.tile_proxy import borrow_localtileserver_prefix
+from gui.scripts.tile_proxy import (
+    borrow_localtileserver_prefix,
+    loopback_bridge_needed,
+    prefer_http_proxy,
+)
 from gui.store.project_writers import is_writing
 from gui.store.state_manager import app_state
 from gui.tile.aoi_tile import AoiTile
@@ -74,8 +78,11 @@ from spatialrisk.project import DATA_DIR, Project
 # On SEPAL, reuse the raster tiles' jupyter-server-proxy route for the PMTiles
 # vector-tile server (vectortileserver never autodetects one). Must run before
 # any vectortileserver TileClient is built — they are only constructed lazily
-# when a sample layer is added, so after imports is early enough.
+# when a sample layer is added, so after imports is early enough. With a proxy
+# route in place, keep both tile servers off the jupyter-loopback comm bridge
+# (its prefix probe misreads the tile server's 404 and tunnels every tile).
 borrow_localtileserver_prefix()
+prefer_http_proxy()
 
 # localtileserver hides .ovr sidecars process-wide (EMPTY_DIR) from the first
 # map layer on, which makes large rasters render from full resolution — see
@@ -112,8 +119,11 @@ def _loopback_bridge_widget():
     worker threads, but under voila a ``display()`` outside the initial cell
     execution never reaches the browser — the widget must be mounted in the
     app's own widget tree so its JS half installs the tile-URL interceptors
-    before any local tile layer renders.
+    before any local tile layer renders. ``None`` when both tile servers go
+    through an HTTP proxy instead (SEPAL; see ``prefer_http_proxy``).
     """
+    if not loopback_bridge_needed():
+        return None
     try:
         import jupyter_loopback
 
