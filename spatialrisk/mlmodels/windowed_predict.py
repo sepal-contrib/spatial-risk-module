@@ -517,13 +517,14 @@ def predict_windowed(
     budget -- not necessarily the fitted formula's column count. GLM and iCAR
     pass
     :attr:`spatialrisk.mlmodels.linear_predictor.LinearPredictor.working_set_columns`
-    (1: ``eta`` walks the stripe in row chunks, so nothing scales with stripe
-    size except its own output vector), while RF passes
-    ``len(design_info.column_names)`` because its trees consume the full
-    one-hot matrix at once. That is why the plan log's "working cols" field
-    prints 1 for GLM/iCAR while their own "GLM design: ... lookup term(s),
-    ... materialised col(s)" / "iCAR design: ..." line carries the real
-    counts. Defaults to ``len(feature_paths) + 1`` when omitted.
+    and RF passes
+    :attr:`spatialrisk.mlmodels.design_matrix.DesignBuilder.working_set_columns`,
+    both 1: ``eta`` and the RF design builder walk the stripe in row chunks,
+    so nothing scales with stripe size except their output vector. That is
+    why the plan log's "working cols" field prints 1 for all three while
+    their own "GLM design: ...", "iCAR design: ..." and "RF design: ..."
+    lines carry the real counts. Defaults to ``len(feature_paths) + 1`` when
+    omitted.
     """
     log = log or logger
     output_file = Path(output_file)

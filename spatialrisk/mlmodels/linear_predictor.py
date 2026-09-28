@@ -52,7 +52,6 @@ boundaries and is not reproducible across thread counts even unchunked.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -60,7 +59,7 @@ import numpy as np
 import pandas as pd
 from patsy.highlevel import build_design_matrices
 
-_PLAIN_C = re.compile(r"^C\(\s*([A-Za-z_]\w*)\s*(?:,.*)?\)$", re.S)
+from spatialrisk.mlmodels.design_terms import level_positions, plain_categorical
 
 # eta() walks block_df in chunks of this many rows: the smallest power of two
 # within 5% of the fastest (2^18) on 7 scale() numerics + two lookups over 4M
@@ -68,8 +67,9 @@ _PLAIN_C = re.compile(r"^C\(\s*([A-Za-z_]\w*)\s*(?:,.*)?\)$", re.S)
 _ETA_CHUNK_ROWS = 1 << 17
 
 # eta()'s memory in float64 columns (8 B each). The figures come from
-# tracemalloc measurements (patsy 1.0.2, pandas 2.3, numpy 2.2), rounded up,
-# and tests/test_linear_predictor.py pins them.
+# tracemalloc measurements (patsy 1.0.2, pandas 2.3, numpy 2.2 locally; patsy
+# 1.0.3, pandas 3.0.5, numpy 2.2.6 in SEPAL's venv), rounded up, and
+# tests/test_linear_predictor.py pins them.
 #
 # Per pixel: the returned eta vector is the only allocation that scales with
 # the stripe.
@@ -84,8 +84,12 @@ _LOOKUP_COLS = 4
 # 25 B/row per scale() factor with its matrix column included.
 _COLS_PER_FACTOR = 3
 # The in-flight factor's evaluation temporaries and the ``X @ coef`` product.
-# A single scale() factor peaks at 40 B/row inside patsy.
-_BUILD_COLS = 2
+# patsy's scale() transform alone peaks at 40 B/row under pandas 2.3 and at
+# 56 B/row under pandas 3.0 (patsy's code is the same in both), so a formula
+# with one scale() factor peaks at 41 and 57 B/row inside eta(). From four
+# scale() factors on, the per-factor columns set the peak and both pandas
+# versions measure the same.
+_BUILD_COLS = 4
 
 
 @dataclass
@@ -136,7 +140,7 @@ class LinearPredictor:
 
         * the lookup phase, a fixed 4 columns whatever the level count;
         * the materialised phase: the subset matrix, 3 columns per factor
-          patsy evaluates, and 2 columns of build transients.
+          patsy evaluates, and 4 columns of build transients.
 
         The per-factor figure assumes single-column factors. Those are the
         ``scale(x)``, plain numeric and ``C(...)`` factors that
@@ -179,19 +183,11 @@ class LinearPredictor:
         for start in range(0, n, step):
             stop = min(start + step, n)
             for lk, column in zip(self.lookups, lookup_columns):
-                values = np.asarray(column[start:stop], dtype=np.float64)
-                pos = np.searchsorted(lk.levels_sorted, values)
-                np.minimum(pos, lk.levels_sorted.shape[0] - 1, out=pos)
-                miss = lk.levels_sorted[pos] != values
-                if miss.any():
-                    bad = np.unique(values[miss])[:10].tolist()
-                    raise ValueError(
-                        f"{lk.code}: values not among the training levels: {bad}"
-                    )
+                pos = level_positions(lk.levels_sorted, column[start:stop], lk.code)
                 out[start:stop] += lk.table_sorted[pos]
                 # Free the chunk's transients before the next lookup or the
                 # patsy build below.
-                del values, pos, miss
+                del pos
             if self.subset_design_info is not None:
                 # This chunk's rows of block_df, as pandas Series over the column
                 # views: not numpy rows (scale() would round differently) and
@@ -208,18 +204,6 @@ class LinearPredictor:
                 # Do not carry the matrix into the next chunk's lookups.
                 del rows, x
         return out
-
-
-def _is_numeric_domain(categories) -> bool:
-    # float() parses digit strings, but patsy matches "1" and 1.0 as different
-    # levels; string domains stay with patsy so its errors stay intact.
-    if any(isinstance(c, (str, bytes)) for c in categories):
-        return False
-    try:
-        arr = np.asarray(categories, dtype=np.float64)
-    except (TypeError, ValueError):
-        return False
-    return arr.ndim == 1 and np.isfinite(arr).all() and np.unique(arr).size == arr.size
 
 
 def compile_linear_predictor(design_info, coef) -> LinearPredictor:
@@ -249,32 +233,20 @@ def compile_linear_predictor(design_info, coef) -> LinearPredictor:
         if len(term.factors) == 0:
             constant += float(coef[sl].sum())
             continue
-        lookup = None
-        if len(subterms) == 1 and len(term.factors) == 1:
-            (factor,) = term.factors
-            (subterm,) = subterms
-            info = design_info.factor_infos[factor]
-            m = _PLAIN_C.match(factor.code.strip())
-            if (
-                info.type == "categorical"
-                and m is not None
-                and factor in subterm.contrast_matrices
-                and _is_numeric_domain(info.categories)
-            ):
-                contrast = subterm.contrast_matrices[factor].matrix
-                table = np.asarray(contrast, dtype=np.float64) @ coef[sl]
-                levels = np.asarray(info.categories, dtype=np.float64)
-                order = np.argsort(levels)
-                lookup = _Lookup(
-                    code=factor.code,
-                    column=m.group(1),
-                    levels_sorted=levels[order],
-                    table_sorted=table[order],
-                )
-        if lookup is not None:
-            lookups.append(lookup)
-        else:
+        plain = plain_categorical(design_info, term, subterms)
+        if plain is None:
             materialised_terms.append(term)
+            continue
+        table = plain.contrast @ coef[sl]
+        order = np.argsort(plain.levels)
+        lookups.append(
+            _Lookup(
+                code=plain.code,
+                column=plain.column,
+                levels_sorted=plain.levels[order],
+                table_sorted=table[order],
+            )
+        )
 
     if materialised_terms:
         subset = design_info.subset(materialised_terms)

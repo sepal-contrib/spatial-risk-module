@@ -56,9 +56,9 @@ def test_eta_matches_the_full_design_product():
     )
     assert pred.materialised_columns == 2  # scale(a), b:scale(a)
     # Per pixel only the eta vector; per chunk row max(lookup 4, 2 matrix cols
-    # + 3 x 2 factors (scale(a), b) + 2 build).
+    # + 3 x 2 factors (scale(a), b) + 4 build).
     assert pred.working_set_columns == 1
-    assert pred.chunk_scratch_bytes == linear_predictor._ETA_CHUNK_ROWS * 10 * 8
+    assert pred.chunk_scratch_bytes == linear_predictor._ETA_CHUNK_ROWS * 12 * 8
 
 
 def test_levels_absent_from_the_training_frame_still_look_up_their_coefficient():
