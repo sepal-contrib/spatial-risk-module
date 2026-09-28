@@ -217,6 +217,7 @@
       "error_invalid_model": "Seleccioná un modelo entrenado válido.",
       "error_invalid_dataset": "Seleccioná un conjunto de datos válido.",
       "error_mask_required": "Asigná una capa de máscara o elegí 'Sin máscara'.",
+      "error_missing_variables": "Al conjunto de datos '{dataset}' le faltan variables que usa el modelo '{model}': {names}. Agregalas al conjunto de datos con los mismos nombres usados en el entrenamiento, o elegí otro conjunto de datos.",
       "error_name_required": "Ingresá un nombre de predicción (letras, números, - o _).",
       "error_name_running": "Se está generando una predicción llamada '{name}' — esperá a que termine o elegí otro nombre.",
       "confirm_delete_predictions_title": "¿Eliminar predicciones?",

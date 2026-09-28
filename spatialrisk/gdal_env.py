@@ -19,6 +19,9 @@ config rather than a change to any one destination dtype.
 import logging
 import os
 import tempfile
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -211,6 +214,46 @@ def configure_gdal_tmpdir() -> Optional[Path]:
         return None
 
 
+def keep_gdal_sidecars_visible() -> None:
+    """Let GDAL find ``.ovr`` sidecars even after the map's tile server starts.
+
+    localtileserver's app setup does
+    ``os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")``, which
+    is process-wide: from the first map layer on, GDAL stops looking for the
+    external overview pyramids :mod:`spatialrisk.overviews` builds. The tile
+    server then renders every tile of a large raster from full resolution (its
+    per-tile statistics read the whole file; ~50 s a tile on a 2.2 Gpx raster
+    instead of ~1 s), and ``ensure_overviews`` rebuilds pyramids already on disk.
+
+    Sets the variable outright rather than as a default, so it holds whether it
+    runs before the tile server (whose ``setdefault`` then leaves it alone) or
+    after it. The environment variable, not ``gdal.SetConfigOption``, because
+    rasterio's wheel bundles its own libgdal and only the environment reaches
+    both.
+    """
+    os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "FALSE"
+
+
+def pin_gdal_num_threads() -> None:
+    """Give GDAL half the cores app-wide, whether or not a map layer is drawn.
+
+    localtileserver's app setup does
+    ``os.environ.setdefault("GDAL_NUM_THREADS", "ALL_CPUS")``, so GDAL ran on
+    one thread until the first map layer and on every core after it: the same
+    harmonization write took 28.5 s or 9.5 s depending on that. Pyramid builds
+    and processing writes gain from threads (a 2.2 Gpx pyramid: 82 s at one,
+    39 s at four); tile drawing does not, the browser's concurrent requests
+    already parallelise it. Half the cores is the policy for every raster scan
+    (:func:`spatialrisk.parallel.worker_threads`, ``SPATIAL_RISK_NUM_THREADS``
+    overrides it); sampling and inference still set their own through
+    ``rasterio.Env``.
+
+    Sets the variable outright, in the environment, for the same reasons as
+    :func:`keep_gdal_sidecars_visible`.
+    """
+    os.environ["GDAL_NUM_THREADS"] = str(worker_threads(cores=_available_cores()))
+
+
 def sampling_gdal_env(
     cachemax_bytes: Optional[int] = None, num_threads: Optional[int] = None
 ) -> rasterio.Env:
@@ -400,3 +443,396 @@ def plan_sampling(
         memory_source=memory_source,
         width_bytes_per_row=int(width_bytes_per_row),
     )
+
+
+# --------------------------------------------------------------------------- #
+# inference stripe plan
+# --------------------------------------------------------------------------- #
+INFERENCE_WORKERS_ENV = "SPATIAL_RISK_INFERENCE_WORKERS"
+"""Override for the worker count chosen by :func:`plan_inference` (min 1)."""
+
+INFERENCE_MEMORY_FRACTION = SAMPLING_MEMORY_FRACTION
+INFERENCE_TARGET_STRIPE_ROWS = 256
+"""Default stripe height for prediction = the output tile height
+(:data:`spatialrisk.parallel.PREDICT_BAND_ROWS`), so a stripe write covers
+whole output tiles."""
+
+INFERENCE_MIN_STRIPE_ROWS = 32
+"""Floor for the second shrink stage of :func:`plan_inference`: a stripe that
+cannot fit one worker at one tile row halves (256 -> 128 -> 64 -> 32) and stops
+here. Below this, output tiles are rewritten too many times to be worth it."""
+
+
+class InferencePlan:
+    """What :func:`plan_inference` decided, and the readings it decided from.
+
+    Every field but ``cachemax_bytes`` describes memory this run will really
+    take and really reserves on the :class:`ResourceLedger`
+    (``workers x stripe_bytes``). ``cachemax_bytes`` is neither: it is the
+    ``GDAL_CACHEMAX`` the run asks for, unreserved and -- GDAL latching the
+    value on first use -- honoured only if this is the process's first job
+    (see :func:`plan_inference`).
+
+    ``over_budget_bytes`` is how far one stripe at the final height exceeds
+    the memory budget, 0 when it fits; non-zero means the run proceeds
+    anyway (with one worker unless an explicit override set more).
+    """
+
+    __slots__ = (
+        "rows_per_stripe",
+        "workers",
+        "gdal_threads",
+        "cachemax_bytes",
+        "by_cores",
+        "by_memory",
+        "stripe_bytes",
+        "memory_budget_bytes",
+        "over_budget_bytes",
+        "free_bytes",
+        "memory_source",
+    )
+
+    def __init__(self, **kw):
+        """Take every slot as a keyword; all of them are required."""
+        for name in self.__slots__:
+            setattr(self, name, kw[name])
+
+    def __repr__(self):
+        """Every field, for logs and bench records."""
+        fields = ", ".join(f"{n}={getattr(self, n)!r}" for n in self.__slots__)
+        return f"InferencePlan({fields})"
+
+
+def inference_working_set(
+    width: int,
+    rows: int,
+    *,
+    n_features: int,
+    feature_itemsizes,
+    n_design_cols: int,
+    with_mask: bool,
+    with_extra: bool,
+) -> int:
+    """Bytes one prediction stripe holds at its peak, per the engine's body.
+
+    Per pixel: each feature's decoded band plus its float64 column, the one
+    DataFrame of float64 columns, ``n_design_cols`` float64 working columns
+    for the model's linear predictor, the probability vector and its
+    rescaled copy, the uint16 output stripe, the mask byte and the float64
+    extra layer (iCAR rho).
+
+    ``n_design_cols`` is the per-pixel float64 width the model closure is
+    charged for, not necessarily the fitted formula's column count: GLM and
+    iCAR pass
+    :attr:`spatialrisk.mlmodels.linear_predictor.LinearPredictor.working_set_columns`
+    and RF passes
+    :attr:`spatialrisk.mlmodels.design_matrix.DesignBuilder.working_set_columns`
+    (both 1 -- ``eta()`` and the RF design builder walk the stripe in row
+    chunks bounded by their own ``chunk_scratch_bytes``, which this budget
+    leaves to headroom instead of charging per pixel; see those modules'
+    docstrings, ``tests/test_linear_predictor.py`` and
+    ``tests/test_design_matrix.py``). See the spec §4; pinned by the memory
+    probe in ``tests/test_inference_plan.py``.
+    """
+    per_px = (
+        sum(int(s) for s in feature_itemsizes)
+        + n_features * 8
+        + n_features * 8
+        + n_design_cols * 8
+        + 2 * 8
+        + 2
+        + (1 if with_mask else 0)
+        + (8 if with_extra else 0)
+    )
+    return int(width) * int(rows) * per_px
+
+
+def plan_inference(
+    *,
+    width: int,
+    tile_rows: int,
+    n_features: int,
+    feature_itemsizes,
+    n_design_cols: int,
+    with_mask: bool,
+    with_extra: bool,
+    cores: Optional[int] = None,
+    free_bytes: Optional[int] = None,
+    rows_per_stripe: Optional[int] = None,
+    gdal_cache_bytes: Optional[int] = None,
+    reserved_bytes: int = 0,
+    reserved_workers: int = 0,
+    workers_override: Optional[int] = None,
+) -> InferencePlan:
+    """Choose stripe height, worker count and GDAL budget for one prediction.
+
+    Same policy as :func:`plan_sampling`, with the inference working set.
+    ``reserved_bytes`` / ``reserved_workers`` are what other runs in this
+    process already hold (:class:`ResourceLedger`); they come off the memory
+    and core budgets first, so a second concurrent prediction plans for what
+    is left instead of for the whole machine (the 2026-09-22 SEPAL kernel
+    death: GLM + RF launched together).
+
+    * ``workers = min(half the affinity cores - reserved_workers,
+      budget // stripe_bytes)``, min 1;
+    * the budget is :data:`INFERENCE_MEMORY_FRACTION` of the free memory minus
+      GDAL's block cache; if one worker does not fit, the stripe shrinks in
+      two stages -- first in whole tile rows down to one tile row, then by
+      halving below the tile height (256 -> 128 -> 64 -> 32) down to
+      :data:`INFERENCE_MIN_STRIPE_ROWS` -- and the job runs serially;
+    * pooled workers get one GDAL decode thread each, a single worker keeps
+      :func:`sampling_num_threads`;
+    * the cache grows to hold every in-flight stripe of every input.
+
+    :data:`INFERENCE_TARGET_STRIPE_ROWS` equals the
+    :data:`spatialrisk.raster_profile.BLOCK_SIZE` passed as ``tile_rows``, so
+    the starting height is already one tile row and stage 1 (``while rows >
+    tile_rows``) never runs; only stage 2's halving applies. A caller with
+    ``tile_rows`` below the target starts taller, so stage 1 shrinks it in
+    whole tile rows first -- keeping stripes tile-aligned as long as possible
+    -- before stage 2 ever halves below one tile row. If a stripe at
+    :data:`INFERENCE_MIN_STRIPE_ROWS` still overruns the budget, the plan
+    proceeds anyway (one worker) and ``over_budget_bytes`` reports by how
+    much; the engine warns about it.
+
+    Stage 2 buys memory safety with iCAR's bit-reproducibility: rho is
+    bilinear-resampled per stripe from the stripe's bounds, so a sub-tile
+    stripe can move a handful of iCAR pixels by one uint16 step against a
+    256-row run (measured at about 1e-8 to 1e-7 of the pixels with a coarse
+    rho). Accepted: stage 2 only runs when one tile row does not fit, so any
+    run that fits keeps its 256-row output.
+
+    ``cachemax_bytes`` is budgeted for only as the flat
+    :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` subtracted from the memory budget
+    above, never as the larger figure this returns, and it is not reserved on
+    the :class:`ResourceLedger` at all: a second concurrent run plans as if
+    one nominal cache existed. It is a request rather than a size in any
+    case -- GDAL reads ``GDAL_CACHEMAX`` the first time it needs the block
+    cache and latches it, so in the long-lived app process the first job of
+    the session fixes the cache every later one runs with, whatever their
+    plans say.
+
+    ``SPATIAL_RISK_INFERENCE_WORKERS`` overrides the worker count (min 1), and
+    a caller's own ``workers_override`` (min 1) wins over both the policy and
+    that variable. An override goes in here rather than onto the returned plan
+    because the count also sizes ``gdal_threads`` and ``cachemax_bytes``;
+    ``by_cores`` and ``by_memory`` still report what the policy would have
+    chosen. An explicit ``rows_per_stripe`` is honoured as given and never
+    shrunk.
+    """
+    if cores is None:
+        cores = _available_cores()
+    if free_bytes is None:
+        free_bytes, memory_source = free_memory_bytes()
+    else:
+        memory_source = "given"
+    if gdal_cache_bytes is None:
+        gdal_cache_bytes = DEFAULT_SAMPLING_CACHEMAX_BYTES
+
+    tile_rows = max(1, int(tile_rows))
+    if rows_per_stripe is not None:
+        rows = int(rows_per_stripe)
+        if rows < 1:
+            raise ValueError("rows_per_stripe must be >= 1.")
+        fixed_rows = True
+    else:
+        rows = (
+            tile_rows
+            if tile_rows >= INFERENCE_TARGET_STRIPE_ROWS
+            else (INFERENCE_TARGET_STRIPE_ROWS // tile_rows) * tile_rows
+        )
+        fixed_rows = False
+
+    def _ws(r):
+        return inference_working_set(
+            width,
+            r,
+            n_features=n_features,
+            feature_itemsizes=feature_itemsizes,
+            n_design_cols=n_design_cols,
+            with_mask=with_mask,
+            with_extra=with_extra,
+        )
+
+    by_cores = max(1, int(cores) // 2 - int(reserved_workers))
+    budget = max(
+        0,
+        int(free_bytes * INFERENCE_MEMORY_FRACTION)
+        - gdal_cache_bytes
+        - int(reserved_bytes),
+    )
+    stripe_bytes = _ws(rows)
+    by_memory = budget // stripe_bytes
+    if by_memory < 1 and not fixed_rows:
+        # Stage 1: whole tile rows, down to one tile row.
+        while rows > tile_rows and _ws(rows) > budget:
+            rows = max(tile_rows, ((rows // tile_rows) - 1) * tile_rows)
+        # Stage 2: below the tile height, halving so stripes still divide a
+        # tile row (256 -> 128 -> 64 -> 32); stops at INFERENCE_MIN_STRIPE_ROWS.
+        while rows > INFERENCE_MIN_STRIPE_ROWS and _ws(rows) > budget:
+            rows = max(INFERENCE_MIN_STRIPE_ROWS, rows // 2)
+        stripe_bytes = _ws(rows)
+        by_memory = budget // stripe_bytes
+    workers = max(1, min(by_cores, by_memory))
+
+    env_val = os.environ.get(INFERENCE_WORKERS_ENV)
+    if env_val:
+        workers = max(1, int(env_val))
+    if workers_override is not None:
+        workers = max(1, int(workers_override))
+
+    raw_row = int(width) * (
+        sum(int(s) for s in feature_itemsizes)
+        + (1 if with_mask else 0)
+        + (4 if with_extra else 0)
+    )
+    cachemax = max(gdal_cache_bytes, workers * 2 * rows * raw_row)
+    gdal_threads = sampling_num_threads() if workers == 1 else 1
+    return InferencePlan(
+        rows_per_stripe=rows,
+        workers=workers,
+        gdal_threads=gdal_threads,
+        cachemax_bytes=int(cachemax),
+        by_cores=by_cores,
+        by_memory=int(max(0, by_memory)),
+        stripe_bytes=int(stripe_bytes),
+        memory_budget_bytes=int(budget),
+        over_budget_bytes=int(max(0, stripe_bytes - budget)),
+        free_bytes=int(free_bytes),
+        memory_source=memory_source,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# cross-run budget: one ledger per process
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class Reservation:
+    """What one running job holds: planned bytes and worker threads."""
+
+    bytes_: int
+    workers: int
+    label: str
+    id: int
+
+
+class ResourceLedger:
+    """Live reservations of memory and workers across the jobs of this process.
+
+    A per-run plan cannot see the other runs; when two predictions were
+    launched together on SEPAL each sized itself against the whole machine
+    and the kernel died (2026-09-22). Every engine run reserves what its plan
+    will use and releases it when done, and the next plan is made against
+    the remainder (:func:`plan_inference` ``reserved_bytes`` /
+    ``reserved_workers``).
+
+    ``reserve`` blocks only when *another* reservation is outstanding and
+    even ``minimum_bytes`` (one worker at one tile row) does not fit the
+    budget; a release wakes it. With nothing outstanding the minimum always
+    proceeds, so a lone job on a starved machine still runs (the same rule
+    as :func:`plan_sampling`). The reading is conservative on purpose: a
+    running job's allocations are already gone from the free-memory reading
+    *and* still counted here, which only makes the later job smaller.
+
+    What is tracked is the stripe working sets only. A plan's
+    ``cachemax_bytes`` is never reserved here: it is allowed for once, flatly,
+    as the :data:`DEFAULT_SAMPLING_CACHEMAX_BYTES` that
+    :func:`plan_inference` takes off the budget, and the GDAL block cache is
+    process-wide and latched at its first use anyway, so it is not a
+    per-reservation quantity to begin with.
+    """
+
+    def __init__(self, budget_fn=None, clock=time.monotonic, sleep_log_every_s=30.0):
+        """Take the budget reading, the clock and how often a wait is logged."""
+        self._budget_fn = budget_fn or self._default_budget
+        self._clock = clock
+        self._log_every = float(sleep_log_every_s)
+        self._cond = threading.Condition()
+        self._live = {}
+        self._next_id = 0
+
+    def _default_budget(self) -> int:
+        """Free memory this process may still claim, net of what is outstanding."""
+        free, _ = free_memory_bytes()
+        return max(0, int(free * INFERENCE_MEMORY_FRACTION) - self.outstanding_bytes)
+
+    @property
+    def outstanding_bytes(self) -> int:
+        """Bytes every live reservation holds.
+
+        Read without taking the lock, and over a snapshot. Not for fear of
+        deadlock: ``threading.Condition`` owns an ``RLock``, so the callers
+        that reach this from inside ``with self._cond`` (a ``budget_fn`` in
+        the wait loop, :meth:`plan_and_reserve`) could re-enter it freely.
+        The lock is skipped because those callers already hold it and the sum
+        is the only thing it would protect; the snapshot is what makes the
+        property safe for a reader that does *not* hold it, since iterating
+        ``self._live`` directly can raise "dictionary changed size during
+        iteration" the moment another thread records or releases.
+        """
+        return sum(r.bytes_ for r in list(self._live.values()))
+
+    @property
+    def outstanding_workers(self) -> int:
+        """Worker threads every live reservation holds (snapshot, see above)."""
+        return sum(r.workers for r in list(self._live.values()))
+
+    def snapshot(self) -> list:
+        """The live reservations, as a list, taken under the lock."""
+        with self._cond:
+            return list(self._live.values())
+
+    def _wait_until_fits(self, minimum_bytes, label, log):
+        """Under the lock: block while others hold memory and the minimum cannot fit."""
+        last_log = None
+        while self._live and self._budget_fn() < minimum_bytes:
+            now = self._clock()
+            if last_log is None or now - last_log >= self._log_every:
+                holders = ", ".join(
+                    f"{r.label} {r.bytes_ / 2**20:.0f} MiB" for r in self._live.values()
+                )
+                (log or logger).info(
+                    "%s: waiting for memory (needs %.0f MiB; held by %s)",
+                    label,
+                    minimum_bytes / 2**20,
+                    holders,
+                )
+                last_log = now
+            self._cond.wait(timeout=self._log_every)
+
+    def _record(self, bytes_, workers, label) -> Reservation:
+        """Add one reservation to the live set and return it."""
+        self._next_id += 1
+        r = Reservation(int(bytes_), int(workers), str(label), self._next_id)
+        self._live[r.id] = r
+        return r
+
+    def reserve(
+        self, *, bytes_, workers, label, minimum_bytes, log=None
+    ) -> Reservation:
+        """Record a reservation, waiting first if the minimum cannot fit."""
+        with self._cond:
+            self._wait_until_fits(minimum_bytes, label, log)
+            return self._record(bytes_, workers, label)
+
+    def plan_and_reserve(self, plan_fn, *, minimum_bytes, label, log=None):
+        """Plan against what is left, wait if needed, re-plan, reserve. Atomic.
+
+        ``plan_fn(reserved_bytes, reserved_workers) -> plan`` with
+        ``plan.workers`` and ``plan.stripe_bytes``. Returns ``(plan, reservation)``.
+        """
+        with self._cond:
+            self._wait_until_fits(minimum_bytes, label, log)
+            plan = plan_fn(self.outstanding_bytes, self.outstanding_workers)
+            r = self._record(plan.workers * plan.stripe_bytes, plan.workers, label)
+            return plan, r
+
+    def release(self, reservation) -> None:
+        """Drop a reservation and wake every thread waiting for room."""
+        with self._cond:
+            self._live.pop(reservation.id, None)
+            self._cond.notify_all()
+
+
+INFERENCE_LEDGER = ResourceLedger()
+"""The process-wide ledger every ``predict_windowed`` run reserves on."""

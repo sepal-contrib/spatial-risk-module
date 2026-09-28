@@ -1,10 +1,10 @@
 """Draw sample sets on the map as PMTiles vector tiles.
 
 Scales to millions of points: the browser fetches only the tiles for the current
-viewport/zoom. Solara-free (mirrors prediction_map.py). Reachability on SEPAL
-reuses the jupyter-loopback comm bridge that localtileserver already relies on —
-it forwards Range requests and relays 206 responses over the kernel comm channel,
-which is what pmtiles.js needs.
+viewport/zoom. Solara-free (mirrors prediction_map.py). On SEPAL the tiles go
+through jupyter-server-proxy (see gui/scripts/tile_proxy.py). Without a proxy
+prefix (local voila) they fall back to the jupyter-loopback comm bridge, which
+forwards Range requests and relays 206 responses as pmtiles.js needs.
 """
 import logging
 
@@ -61,7 +61,8 @@ def _enable_loopback(client):
     probe; the server host is 127.0.0.1 now, which a hand-rolled
     ``intercept_localhost`` would miss). Best-effort: on non-SEPAL frontends
     (or if the bridge is missing) this is a harmless no-op and the layer still
-    works where the origin is shared.
+    works where the origin is shared. A no-op on SEPAL, where
+    ``VECTORTILESERVER_DISABLE_JUPYTER_LOOPBACK`` is set at startup.
     """
     try:
         client.enable_jupyter_loopback()

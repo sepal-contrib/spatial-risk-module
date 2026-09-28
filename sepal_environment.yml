@@ -59,9 +59,10 @@ dependencies:
       # pysepal fork: spatial-risk integration branch (browser locale, AOI
       # restore, PMTiles layers, GEE event-loop fixes on top of v3.8.0)
       - "pysepal @ git+https://github.com/SerafiniJose/pysepal.git@spatial-risk"
-      # jupyter-loopback fork: voila tile-404 fixes (probe 405 vs 404 +
-      # localhost page-origin prefix match) — pending upstream PR
-      - "jupyter-loopback @ git+https://github.com/SerafiniJose/jupyter-loopback.git@fix/voila-localhost-proxy-probe"
+      # Stock release. Tiles go over jupyter-server-proxy, not its comm bridge
+      # (gui/scripts/tile_proxy.py). Pinned so envs that still carry the old
+      # 0.4.0.dev fork get replaced.
+      - jupyter-loopback[comm]==0.3.3
       # PMTiles vector-tile server for sample maps (PyPI rename of the git-era
       # pyvectortiles; unpinned it broke the app when 0.2.x/0.3.0 shipped)
       - vectortileserver==0.3.0

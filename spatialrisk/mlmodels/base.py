@@ -18,6 +18,38 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 logger = logging.getLogger("spatial_risk")
 
 
+def _mask_values(mask_value) -> tuple:
+    """Normalise apply()'s ``mask_value`` (scalar or list) to a tuple."""
+    if isinstance(mask_value, (list, tuple)):
+        return tuple(mask_value)
+    return (mask_value,)
+
+
+# ``cell`` is appended to the formula internally by the iCAR model; it is never
+# a dataset variable.
+_INTERNAL_FORMULA_VARIABLES = {"cell"}
+
+
+class MissingModelVariablesError(ValueError):
+    """The dataset handed to apply() lacks variables the model's formula uses.
+
+    Carries the pieces separately so the GUI can render its own translated
+    message instead of this English one.
+    """
+
+    def __init__(self, missing, dataset_name=None, model_name=None):
+        """Record what is missing, where, and for which model."""
+        self.missing = list(missing)
+        self.dataset_name = dataset_name
+        self.model_name = model_name
+        super().__init__(
+            f"Dataset '{dataset_name}' is missing variable(s) used by model "
+            f"'{model_name}': {', '.join(self.missing)}. Add them to the dataset "
+            "(with the same names used at training), or choose a dataset that "
+            "has them."
+        )
+
+
 class BaseRiskModel(BaseModel):
     """Generic base class for risk probability ML models.
 
@@ -157,23 +189,72 @@ class BaseRiskModel(BaseModel):
         self.formula = resolved
         return df, resolved
 
+    def required_variables(self) -> List[str]:
+        """Sorted dataset variables apply() needs: the formula's RHS names.
+
+        A formula edited at training time may use fewer variables than the
+        training dataset had, so the formula — not ``feature_names`` — is the
+        contract. ``feature_names`` is only the fallback when there is no
+        parsable formula.
+        """
+        from spatialrisk.far_helpers import formula_variables
+
+        if self.formula:
+            try:
+                _, rhs = formula_variables(self.formula)
+            except Exception:  # unparsable: let patsy report it at apply()
+                rhs = None
+            if rhs is not None:
+                return sorted(rhs - _INTERNAL_FORMULA_VARIABLES)
+        return sorted(self.feature_names)
+
+    def missing_variables(self, dataset: Any) -> List[str]:
+        """Sorted :meth:`required_variables` that *dataset* has no feature for."""
+        available = {v.name for v in getattr(dataset, "features", None) or []}
+        return [v for v in self.required_variables() if v not in available]
+
     def _resolve_dataset(self, dataset: Optional[Any]) -> Any:
-        """Return dataset to use for apply(), validating feature compatibility."""
+        """Return dataset to use for apply(), validating feature compatibility.
+
+        Always validated, even when it is ``self.dataset``: the inference
+        runner rebinds ``model.dataset`` to the prediction dataset before
+        calling apply(), so identity says nothing about compatibility.
+        """
         active = dataset if dataset is not None else self.dataset
         if active is None:
             raise ValueError(
                 "No dataset available. Pass dataset= or set model.dataset"
                 " before calling apply()."
             )
-        # Validate features when a different dataset is provided
-        if dataset is not None and dataset is not self.dataset and self.feature_names:
-            available = {v.name for v in dataset.features}
-            missing = [f for f in self.feature_names if f not in available]
-            if missing:
-                raise ValueError(
-                    f"Provided dataset is missing required feature(s): {missing}"
-                )
+        missing = self.missing_variables(active)
+        if missing:
+            raise MissingModelVariablesError(
+                missing,
+                dataset_name=getattr(active, "name", None),
+                model_name=self.name or self.model_type,
+            )
         return active
+
+    def _ensure_design_info(self) -> None:
+        """Rebuild patsy design info from the training CSV when the pickle lost it.
+
+        patsy's DesignInfo is not picklable, so a loaded model re-derives it
+        from the formula and the saved samples. Raises when neither is there.
+        """
+        if self._x_design_info is not None:
+            return
+        if self.samples_path is not None and Path(self.samples_path).exists():
+            import pandas as pd
+            from patsy import dmatrices
+
+            df = pd.read_csv(self.samples_path).dropna()
+            _, x_ref = dmatrices(self.formula, df, NA_action="drop")
+            self._x_design_info = x_ref.design_info
+            return
+        raise RuntimeError(
+            "Cannot reconstruct design info: samples_path not set or "
+            "file missing. Re-run fit() to regenerate samples."
+        )
 
     def _stamp_now(self) -> str:
         """Return current datetime as ISO string and set trained_at."""
@@ -264,6 +345,8 @@ class BaseRiskModel(BaseModel):
         dataset: Optional[Any] = None,
         mask: Optional[Union[str, Path]] = None,
         mask_value: Union[int, float, list] = 0,
+        *,
+        workers: Optional[int] = None,
     ) -> Path:
         """Generate a probability raster from a Dataset object.
 
@@ -282,6 +365,11 @@ class BaseRiskModel(BaseModel):
         mask_value : int, float, or list of int/float, optional
             Value(s) in the mask raster that identify pixels to suppress.
             Defaults to 0. Ignored when ``mask`` is None.
+        workers : int, optional
+            Stripe worker threads for
+            :func:`spatialrisk.mlmodels.windowed_predict.predict_windowed`.
+            None lets each predictor apply its own default (the resource
+            policy, except RF's serial one); 1 runs on the calling thread.
 
         Returns:
         --------
