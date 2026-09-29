@@ -7,23 +7,9 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.artifact_names import suggest_name
+from gui.scripts.dataset_validation import dataset_form_error, variable_choices
 from gui.widget.artifact_name_field import ArtifactNameField, use_artifact_name
 from gui.widget.creation_dialog import CreationDialog
-
-
-def available_years(project, var_names):
-    """Sorted intersection of years across the given temporal variable names."""
-    if project is None or not var_names:
-        return []
-    year_sets = []
-    for name in var_names:
-        if project.is_temporal(name, source="processed"):
-            years = project.get_variable_years(name, source="processed")
-            if years:
-                year_sets.append(set(years))
-    if not year_sets:
-        return []
-    return sorted(set.intersection(*year_sets))
 
 
 @solara.component
@@ -49,9 +35,9 @@ def DatasetFormDialog(
     p = project.value
     is_edit = editing_key is not None
 
-    target_name, set_target_name = solara.use_state("")
-    feature_names, set_feature_names = solara.use_state([])
-    year, set_year = solara.use_state(None)
+    # Select values from variable_choices: "name" or "name@year".
+    target_value, set_target_value = solara.use_state("")
+    feature_values, set_feature_values = solara.use_state([])
 
     existing = set(p.datasets) if p is not None and p.datasets else set()
     name_value, on_name_input, reset_name = use_artifact_name(
@@ -60,35 +46,54 @@ def DatasetFormDialog(
     clean = (name_value or "").strip()
 
     def reset():
-        set_target_name("")
-        set_feature_names([])
-        set_year(None)
+        set_target_value("")
+        set_feature_values([])
         reset_name()
 
     def prefill():
         if not open_.value or initial is None:
             return
-        set_target_name(initial.get("target", ""))
-        set_feature_names(list(initial.get("features", [])))
-        set_year(initial.get("year"))
+        set_target_value(initial.get("target", ""))
+        set_feature_values(list(initial.get("features", [])))
 
     solara.use_effect(prefill, [open_.value])
 
-    available_vars = p.list_unique_variable_names(source="processed") if p else []
-    feature_options = [v for v in available_vars if v != target_name]
-    selected_temporal = [target_name] + feature_names if target_name else feature_names
-    years = available_years(p, selected_temporal) if p else []
+    # A temporal variable is offered once per year ("defor (2015)"), so picking
+    # the variable picks its year too — each one can use a different year.
+    choices = variable_choices(p) if p else []
+    by_value = {c["value"]: c for c in choices}
+    target = by_value.get(target_value)
+    target_items = [{"text": c["text"], "value": c["value"]} for c in choices]
+    feature_choices = [
+        c for c in choices if target is None or c["name"] != target["name"]
+    ]
+    # The features the select shows as chips. v_model keeps a value the select
+    # has no item for — a feature later picked as the target, or one removed
+    # from the project since an edited dataset was saved — without rendering
+    # it, so the user can neither see nor remove it: never submit it either.
+    offered = {c["value"] for c in feature_choices}
+    chosen = [by_value[v] for v in feature_values if v in offered]
+    # One year per variable: the formula names each feature once, so once a
+    # year of a variable is picked its other years are greyed out.
+    taken = {c["name"]: c["value"] for c in chosen}
+    feature_items = [
+        {
+            "text": c["text"],
+            "value": c["value"],
+            "disabled": taken.get(c["name"], c["value"]) != c["value"],
+        }
+        for c in feature_choices
+    ]
 
     def validate():
         if p is None:
             return t("tiles.dataset.error_no_project")
         if not clean:
             return t("tiles.dataset.error_dataset_name_required")
-        if not target_name:
-            return t("tiles.dataset.error_target_required")
-        if not feature_names:
-            return t("tiles.dataset.error_features_required")
-        return None
+        # Caught here, the modal stays open with the error instead of closing
+        # and leaving it for the tile (#40).
+        err = dataset_form_error(choices, target_value, [c["value"] for c in chosen])
+        return t(err) if err else None
 
     def will_replace():
         if not is_edit and clean in existing:
@@ -99,9 +104,12 @@ def DatasetFormDialog(
         on_submit(
             {
                 "name": editing_key if is_edit else clean,
-                "target": target_name,
-                "features": list(feature_names),
-                "year": year,
+                "target": target["name"],
+                "target_year": target["year"],
+                "features": [c["name"] for c in chosen],
+                "feature_years": {
+                    c["name"]: c["year"] for c in chosen if c["year"] is not None
+                },
             },
             editing_key,
         )
@@ -124,9 +132,9 @@ def DatasetFormDialog(
     ):
         rv.Select(
             label=t("tiles.dataset.target_variable_label"),
-            items=available_vars,
-            v_model=target_name,
-            on_v_model=set_target_name,
+            items=target_items,
+            v_model=target_value,
+            on_v_model=set_target_value,
             dense=True,
             outlined=True,
             hint=t("tiles.dataset.target_hint"),
@@ -134,9 +142,9 @@ def DatasetFormDialog(
         )
         rv.Select(
             label=t("tiles.dataset.feature_variables_label"),
-            items=feature_options,
-            v_model=feature_names,
-            on_v_model=set_feature_names,
+            items=feature_items,
+            v_model=feature_values,
+            on_v_model=set_feature_values,
             multiple=True,
             dense=True,
             outlined=True,
@@ -147,17 +155,6 @@ def DatasetFormDialog(
             hint=t("tiles.dataset.features_hint"),
             persistent_hint=True,
         )
-        if years:
-            rv.Select(
-                label=t("tiles.dataset.year_label"),
-                items=years,
-                v_model=year,
-                on_v_model=set_year,
-                dense=True,
-                outlined=True,
-                hint=t("tiles.dataset.year_hint"),
-                persistent_hint=True,
-            )
         ArtifactNameField(
             value=name_value,
             on_input=on_name_input,

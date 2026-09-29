@@ -79,6 +79,7 @@ def test_build_dataset_snapshot_compact_and_no_project_recursion():
         "target_name": "forest_loss",
         "target_year": 2020,
         "feature_names": ["slope", "dist_road"],
+        "feature_years": [None, None],
     }
 
 

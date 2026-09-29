@@ -801,6 +801,8 @@ class Project(BaseModel):
                     "target_name": dataset.target.name if dataset.target else None,
                     "target_year": dataset.target.year if dataset.target else None,
                     "feature_names": [f.name for f in dataset.features],
+                    # Each temporal feature carries its own year (None = static).
+                    "feature_years": [f.year for f in dataset.features],
                 }
 
         # Serialize registered samples (location-only; the GPKG is the truth).
@@ -1018,15 +1020,18 @@ class Project(BaseModel):
                 )
                 target_name = ds_data.get("target_name")
                 feature_names = ds_data.get("feature_names", [])
+                # Per-feature years; projects saved before they existed have
+                # none, and their temporal features all use the dataset year.
+                feature_years = dict(
+                    zip(feature_names, ds_data.get("feature_years") or [])
+                )
                 if target_name:
-                    # The dataset's stored year applies to temporal features and is
-                    # already restored via the constructor above. Only pass it to
-                    # set_target when the target itself is temporal, since set_target
-                    # rejects a year argument for static targets.
+                    # set_target rejects a year argument for static targets.
                     target_is_temporal = project.is_temporal(target_name)
+                    target_year = ds_data.get("target_year") or ds_data.get("year")
                     ds.set_target(
                         target_name,
-                        year=ds_data.get("year") if target_is_temporal else None,
+                        year=target_year if target_is_temporal else None,
                     )
                 if feature_names:
                     missing = [
@@ -1041,7 +1046,15 @@ class Project(BaseModel):
                             f"processed variables, skipped: {missing}"
                         )
                     if valid_names:
-                        ds.set_features(valid_names)
+                        ds.set_features(
+                            valid_names,
+                            years={
+                                n: feature_years[n]
+                                for n in valid_names
+                                if feature_years.get(n) is not None
+                                and project.is_temporal(n)
+                            },
+                        )
                 project.datasets[key] = ds
             print(f"Loaded {len(project.datasets)} dataset(s)")
 

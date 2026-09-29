@@ -196,13 +196,20 @@ class Dataset(BaseModel):
                 print(f"✓ Target set: {name} (static)")
             return None
 
-    def set_features(self, names: Optional[List[str]] = None) -> Optional[List[str]]:
+    def set_features(
+        self,
+        names: Optional[List[str]] = None,
+        years: Optional[Dict[str, int]] = None,
+    ) -> Optional[List[str]]:
         """Set or discover feature variables.
 
         Parameters
         ----------
         names : List[str], optional
             Feature variable names. If None, returns available features.
+        years : Dict[str, int], optional
+            Year per temporal feature (name -> year). A temporal feature not
+            listed here uses the dataset year (``self.year``).
 
         Returns:
         -------
@@ -212,10 +219,10 @@ class Dataset(BaseModel):
 
         Notes:
         -----
-        If any feature is temporal, a year must be set (either via set_target
-        with year parameter, or by calling set_year() before or after
-        set_features).
-        All temporal features will use the same year as specified in self.year.
+        Each temporal feature needs a year: its entry in ``years``, or else the
+        dataset year (set via set_target with a year parameter, or set_year()).
+        When ``years`` is given and the dataset has no year yet, a single year
+        shared by every temporal feature becomes the dataset year.
         """
         if names is None:
             # Discovery mode - return available features
@@ -248,39 +255,46 @@ class Dataset(BaseModel):
                 else:
                     static_features.append(name)
 
+            years = dict(years or {})
+            for name in list(years):
+                if name not in temporal_features:
+                    raise ValueError(
+                        f"Feature variable '{name}' is static (not temporal). "
+                        f"Do not specify a year for it."
+                    )
+
+            def _year_of(name):
+                return years.get(name, self.year)
+
             # Check if temporal features require a year to be set
-            if temporal_features and self.year is None:
+            unresolved = [n for n in temporal_features if _year_of(n) is None]
+            if unresolved:
                 raise ValueError(
-                    f"Temporal features detected: {', '.join(temporal_features)}\n"
-                    "You must set a year before or when setting features with "
-                    "temporal variables.\n"
-                    "Either:\n"
-                    "  1. Call set_target() with year parameter first "
-                    "(e.g., set_target('target', year=2020)), OR\n"
-                    "  2. Call set_year() before set_features() "
-                    "(e.g., dataset.set_year(2020))\n"
-                    "All temporal features will use the same year."
+                    f"Temporal features without a year: {', '.join(unresolved)}\n"
+                    "Give each one a year with set_features(names, years={name: "
+                    "year}), or set a dataset year first: set_target('target', "
+                    "year=2020) or dataset.set_year(2020)."
                 )
 
-            # Validate that all temporal features have data for the specified year
-            if temporal_features and self.year is not None:
-                missing_vars = []
-                for name in temporal_features:
-                    available_years = self.project.get_variable_years(name)
-                    if self.year not in available_years:
-                        missing_vars.append(f"{name} (available: {available_years})")
-
-                if missing_vars:
-                    raise ValueError(
-                        f"Year {self.year} not available for temporal features:\n  "
-                        + "\n  ".join(missing_vars)
+            # Validate that all temporal features have data for their year
+            missing_vars = []
+            for name in temporal_features:
+                available_years = self.project.get_variable_years(name)
+                if _year_of(name) not in available_years:
+                    missing_vars.append(
+                        f"{name} {_year_of(name)} (available: {available_years})"
                     )
+            if missing_vars:
+                raise ValueError(
+                    "Year not available for temporal features:\n  "
+                    + "\n  ".join(missing_vars)
+                )
 
             # Store variable instances (with year if temporal)
             feature_instances = []
             for name in names:
                 is_temporal = self.project.is_temporal(name)
-                year_param = self.year if is_temporal else None
+                year_param = _year_of(name) if is_temporal else None
                 var = self.project.get_variable(name, year=year_param)
                 if var is None:
                     raise ValueError(
@@ -291,12 +305,18 @@ class Dataset(BaseModel):
                 feature_instances.append(var)
 
             self.features = feature_instances
+            if self.year is None and temporal_features:
+                shared = {_year_of(n) for n in temporal_features}
+                if len(shared) == 1:
+                    self.year = shared.pop()
             print(f"✓ Features set: {len(names)} variables")
             if static_features:
                 print(f"  Static: {', '.join(static_features)}")
             if temporal_features:
-                year_info = f" (year: {self.year})" if self.year else ""
-                print(f"  Temporal{year_info}: {', '.join(temporal_features)}")
+                print(
+                    "  Temporal: "
+                    + ", ".join(f"{n} ({_year_of(n)})" for n in temporal_features)
+                )
             return None
 
     def set_year(self, year: int) -> None:
@@ -383,10 +403,11 @@ class Dataset(BaseModel):
         all_vars = [self.target] + self.features
         temporal_vars = [v for v in all_vars if self.project.is_temporal(v.name)]
 
-        if temporal_vars and self.year is None:
+        undated = [v for v in temporal_vars if v.year is None]
+        if undated:
             raise ValueError(
                 "Year must be set for temporal variables: "
-                f"{', '.join([v.name for v in temporal_vars])}\n"
+                f"{', '.join([v.name for v in undated])}\n"
                 f"Use set_year() or check available years with get_available_years()"
             )
 
