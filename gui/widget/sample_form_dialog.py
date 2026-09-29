@@ -7,6 +7,7 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.artifact_names import suggest_name
+from gui.scripts.variable_labels import layer_items, layer_label
 from gui.widget.artifact_name_field import ArtifactNameField, use_artifact_name
 from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS, CreationDialog
 from gui.widget.details_fields import ro_field
@@ -160,7 +161,7 @@ def SampleFormDialog(
         )
         rv.Select(
             label=raster_label,
-            items=raster_keys,
+            items=layer_items(p, raster_keys),
             v_model=raster_var,
             on_v_model=set_raster_var,
             dense=True,
@@ -171,12 +172,15 @@ def SampleFormDialog(
         # Advisory only — the user may have a reason, so Generate stays enabled.
         if is_continuous_strata(p, strategy, raster_var):
             solara.Warning(
-                t("tiles.sampling.warn_continuous_strata", name=raster_var),
+                t(
+                    "tiles.sampling.warn_continuous_strata",
+                    name=layer_label(p, raster_var),
+                ),
                 dense=True,
             )
         rv.Select(
             label=t("tiles.sampling.mask_variable_label"),
-            items=[""] + raster_keys,
+            items=[{"text": "", "value": ""}] + layer_items(p, raster_keys),
             v_model=mask_var,
             on_v_model=set_mask_var,
             dense=True,
@@ -320,11 +324,11 @@ def SampleDetailsDialog(project, sample_key, on_close: Callable[[], None]):
                                 if strategy == "stratified"
                                 else "tiles.sampling.raster_variable_label_area"
                             ),
-                            getattr(sample, "raster_var_name", None),
+                            layer_label(p, getattr(sample, "raster_var_name", None)),
                         )
                         ro_field(
                             t("tiles.sampling.mask_variable_label"),
-                            getattr(sample, "mask_var_name", None),
+                            layer_label(p, getattr(sample, "mask_var_name", None)),
                         )
 
                         if strategy == "stratified":

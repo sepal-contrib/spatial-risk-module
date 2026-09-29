@@ -32,6 +32,7 @@ from gui.scripts.inference_runner import (
 from gui.scripts.model_registry import MODEL_REGISTRY
 from gui.scripts.prediction_import import resolve_import_key, sanitize_import_name
 from gui.scripts.product_rows import prediction_row_key
+from gui.scripts.variable_labels import layer_items, layer_label
 from gui.widget.artifact_name_field import ArtifactNameField, use_artifact_name
 from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS, CreationDialog
 from gui.widget.details_fields import ro_field
@@ -422,7 +423,7 @@ def PredictionFormDialog(
                     items=[
                         {"text": t("tiles.inference.mask_layer_none"), "value": NO_MASK}
                     ]
-                    + [{"text": n, "value": n} for n in mask_candidates],
+                    + layer_items(p, mask_candidates),
                     item_text="text",
                     item_value="value",
                     v_model=mask_layer,
@@ -524,7 +525,7 @@ def PredictionDetailsDialog(project, row_key, on_close: Callable[[], None]):
             with rv.CardText():
                 solara.Style(_ADVANCED_PANEL_CSS)
                 if pred is not None:
-                    _details_body(pred, group)
+                    _details_body(p, pred, group)
             with rv.CardActions(style_="justify-content: flex-end;"):
                 solara.Button(
                     t("common.close"),
@@ -534,8 +535,8 @@ def PredictionDetailsDialog(project, row_key, on_close: Callable[[], None]):
                 )
 
 
-def _details_body(pred, group):
-    """The dialog's field stack for one prediction group."""
+def _details_body(project, pred, group):
+    """The dialog's field stack for one prediction group (``project`` is a Project)."""
     imported = _is_import(pred)
 
     with solara.Column(style="gap:4px;"):
@@ -551,7 +552,7 @@ def _details_body(pred, group):
             solara.Text(t("tiles.inference.details_imported_note"))
             _import_section(pred)
         else:
-            _model_section(pred)
+            _model_section(project, pred)
             _dataset_section(pred)
 
         _output_section(group)
@@ -587,7 +588,7 @@ def _import_section(pred):
     )
 
 
-def _model_section(pred):
+def _model_section(project, pred):
     """Model identity, run-time choices, then config behind the advanced panel."""
     snapshot = pred.model_snapshot or {}
     model_type = snapshot.get("model_type")
@@ -607,7 +608,8 @@ def _model_section(pred):
     if "mask_layer" in run_params:
         ro_field(
             t("tiles.inference.mask_layer_label"),
-            run_params["mask_layer"] or t("tiles.inference.mask_layer_none"),
+            layer_label(project, run_params["mask_layer"])
+            or t("tiles.inference.mask_layer_none"),
         )
     if run_params.get("windows"):
         ro_field(t("tiles.inference.windows_label"), run_params["windows"])

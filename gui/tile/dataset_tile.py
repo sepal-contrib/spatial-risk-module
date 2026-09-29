@@ -2,10 +2,12 @@
 
 import logging
 
-import reacton.ipyvuetify as rv
 import solara
+from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
+from gui.scripts.dataset_validation import choice_value
+from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.dataset_form_dialog import DatasetFormDialog
 from gui.widget.dataset_list import DatasetList
@@ -23,13 +25,12 @@ def DatasetTile(project):
     dialog_open = solara.use_reactive(False)
     editing_key, set_editing_key = solara.use_state(None)
     initial, set_initial = solara.use_state(None)
-    form_error, set_form_error = solara.use_state(None)
+    notifications = use_notifications()
     pending_remove, set_pending_remove = solara.use_state(None)
 
     def on_new():
         set_editing_key(None)
         set_initial(None)
-        set_form_error(None)
         dialog_open.set(True)
 
     def on_edit(key):
@@ -40,12 +41,16 @@ def DatasetTile(project):
         set_initial(
             {
                 "name": ds.name or key,
-                "target": ds.target.name if ds.target else "",
-                "features": [f.name for f in ds.features],
-                "year": ds.year,
+                "target": (
+                    choice_value(ds.target.name, getattr(ds.target, "year", None))
+                    if ds.target
+                    else ""
+                ),
+                "features": [
+                    choice_value(f.name, getattr(f, "year", None)) for f in ds.features
+                ],
             }
         )
-        set_form_error(None)
         dialog_open.set(True)
 
     def _do_remove(key):
@@ -58,18 +63,16 @@ def DatasetTile(project):
 
     def on_submit(entry, edit_key):
         """Build, validate and register the dataset described by `entry`."""
-        set_form_error(None)
         if p is None:
-            set_form_error(t("tiles.dataset.error_no_project"))
+            notifications.error(
+                t("tiles.dataset.error_no_project"), timeout=ERROR_TOAST_TIMEOUT
+            )
             return
         try:
-            ds = Dataset(project=p, name=entry["name"], year=entry["year"])
-            target_is_temporal = p.is_temporal(entry["target"])
-            ds.set_target(
-                entry["target"],
-                year=entry["year"] if target_is_temporal else None,
-            )
-            ds.set_features(entry["features"])
+            # Each temporal variable carries its own year (picked with it).
+            ds = Dataset(project=p, name=entry["name"])
+            ds.set_target(entry["target"], year=entry["target_year"])
+            ds.set_features(entry["features"], years=entry["feature_years"])
             ds.validate()
             key = edit_key if edit_key else entry["name"]
             # Persist immediately so the dataset survives a reload without a
@@ -85,7 +88,12 @@ def DatasetTile(project):
             project.set(p.model_copy())
         except Exception as exc:
             logger.exception("dataset submit failed")
-            set_form_error(t("tiles.dataset.error_registration_failed", exc=exc))
+            # The dialog has closed by now, so a failure only the builder can
+            # see (a layer missing on disk) is a toast, not a step-panel alert.
+            notifications.error(
+                t("tiles.dataset.error_registration_failed", exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
 
     has_processed = p is not None and bool(p.processed_variables)
 
@@ -106,11 +114,6 @@ def DatasetTile(project):
             block=True,
             on_click=on_new,
         )
-
-        # Registration errors surface here (the dialog is closed by then —
-        # this tile's own `form_error` state set in on_submit above).
-        if form_error:
-            rv.Alert(type_="error", dense=True, children=[form_error])
 
         DatasetList(project=project, on_edit=on_edit, on_remove=set_pending_remove)
 
