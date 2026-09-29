@@ -1,9 +1,12 @@
+"""Prediction model fields, serialisation and the dataset snapshot."""
+
 from pathlib import Path
 
 from spatialrisk.predictions.prediction import Prediction, build_dataset_snapshot
 
 
 def test_prediction_minimal_fields():
+    """A Prediction built from the required fields gets empty defaults."""
     pred = Prediction(
         path=Path("/tmp/glm_2020.tif"),
         model_key="glm_my_model",
@@ -23,6 +26,7 @@ def test_prediction_minimal_fields():
 
 
 def test_prediction_round_trips_path_as_string():
+    """model_dump writes the path as a string and drops the live project."""
     pred = Prediction(path=Path("/tmp/out.tif"), model_key="rf_m", dataset_name="ds")
     dumped = pred.model_dump(mode="json")
     assert dumped["path"] == "/tmp/out.tif"
@@ -33,8 +37,10 @@ def test_prediction_round_trips_path_as_string():
 
 
 def test_prediction_display_palette_defaults_none_and_round_trips():
-    """Imported predictions persist their chosen display palette through the
-    model_dump/Prediction(**data) cycle that Project.save()/load() rely on."""
+    """An imported prediction's display palette survives a dump/load cycle.
+
+    Project.save()/load() rely on the model_dump/Prediction(**data) cycle.
+    """
     default = Prediction(path=Path("/tmp/a.tif"), model_key="glm_m", dataset_name="ds")
     assert default.display_palette is None  # computed predictions resolve by family
 
@@ -44,7 +50,9 @@ def test_prediction_display_palette_defaults_none_and_round_trips():
         dataset_name="imported",
         display_palette="stretch",
     )
-    restored = Prediction(**{**pred.model_dump(mode="json"), "path": Path("/tmp/import.tif")})
+    restored = Prediction(
+        **{**pred.model_dump(mode="json"), "path": Path("/tmp/import.tif")}
+    )
     assert restored.display_palette == "stretch"
 
 
@@ -63,6 +71,7 @@ class _FakeDataset:
 
 
 def test_build_dataset_snapshot_compact_and_no_project_recursion():
+    """The snapshot holds identifying fields only, never the live project."""
     snap = build_dataset_snapshot(_FakeDataset())
     assert snap == {
         "name": "calibration_2020",
@@ -74,10 +83,12 @@ def test_build_dataset_snapshot_compact_and_no_project_recursion():
 
 
 def test_build_dataset_snapshot_handles_none():
+    """No dataset gives an empty snapshot."""
     assert build_dataset_snapshot(None) == {}
 
 
 def test_prediction_exported_from_package():
+    """Prediction is importable from the spatialrisk package root."""
     import spatialrisk
 
     assert hasattr(spatialrisk, "Prediction")

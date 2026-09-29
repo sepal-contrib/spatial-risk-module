@@ -7,12 +7,11 @@ Works exclusively with LocalRasterVar instances.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
+from typing import Any, Dict, List, Optional
+
 import numpy as np
-import pandas as pd
 import rasterio
-from rasterio.warp import calculate_default_transform, reproject, Resampling
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from spatialrisk.parallel import scan_env, worker_threads
 
@@ -84,7 +83,7 @@ class Dataset(BaseModel):
     Provides data in different formats for different model types.
     Works exclusively with LocalRasterVar instances (raster variables only).
 
-    Attributes
+    Attributes:
     ----------
     project : Project
         Project instance with all variables
@@ -132,7 +131,7 @@ class Dataset(BaseModel):
         year : int, optional
             Year for temporal variables. Required if target is multitemporal.
 
-        Returns
+        Returns:
         -------
         List[str] or None
             If name is None, returns list of available target variables.
@@ -205,16 +204,17 @@ class Dataset(BaseModel):
         names : List[str], optional
             Feature variable names. If None, returns available features.
 
-        Returns
+        Returns:
         -------
         List[str] or None
             If names is None, returns list of available features.
             If names is provided, sets features and returns None.
 
-        Notes
+        Notes:
         -----
-        If any feature is temporal, a year must be set (either via set_target with year parameter,
-        or by calling set_year() before or after set_features).
+        If any feature is temporal, a year must be set (either via set_target
+        with year parameter, or by calling set_year() before or after
+        set_features).
         All temporal features will use the same year as specified in self.year.
         """
         if names is None:
@@ -252,11 +252,14 @@ class Dataset(BaseModel):
             if temporal_features and self.year is None:
                 raise ValueError(
                     f"Temporal features detected: {', '.join(temporal_features)}\n"
-                    f"You must set a year before or when setting features with temporal variables.\n"
-                    f"Either:\n"
-                    f"  1. Call set_target() with year parameter first (e.g., set_target('target', year=2020)), OR\n"
-                    f"  2. Call set_year() before set_features() (e.g., dataset.set_year(2020))\n"
-                    f"All temporal features will use the same year."
+                    "You must set a year before or when setting features with "
+                    "temporal variables.\n"
+                    "Either:\n"
+                    "  1. Call set_target() with year parameter first "
+                    "(e.g., set_target('target', year=2020)), OR\n"
+                    "  2. Call set_year() before set_features() "
+                    "(e.g., dataset.set_year(2020))\n"
+                    "All temporal features will use the same year."
                 )
 
             # Validate that all temporal features have data for the specified year
@@ -322,12 +325,12 @@ class Dataset(BaseModel):
 
         self.year = year
         print(f"✓ Year set: {year}")
-        print(f"✓ All temporal variables available for this year")
+        print("✓ All temporal variables available for this year")
 
     def get_available_years(self) -> List[int]:
         """Get years available for all configured variables.
 
-        Returns
+        Returns:
         -------
         List[int]
             Sorted list of years available for all temporal variables
@@ -356,12 +359,12 @@ class Dataset(BaseModel):
         - All variables exist and are processed
         - All variables have matching spatial properties
 
-        Returns
+        Returns:
         -------
         bool
             True if validation passes
 
-        Raises
+        Raises:
         ------
         ValueError
             If validation fails
@@ -382,7 +385,8 @@ class Dataset(BaseModel):
 
         if temporal_vars and self.year is None:
             raise ValueError(
-                f"Year must be set for temporal variables: {', '.join([v.name for v in temporal_vars])}\n"
+                "Year must be set for temporal variables: "
+                f"{', '.join([v.name for v in temporal_vars])}\n"
                 f"Use set_year() or check available years with get_available_years()"
             )
 
@@ -390,7 +394,7 @@ class Dataset(BaseModel):
         print("✓ Checking variable existence...")
         for var in all_vars:
             if var is None:
-                raise ValueError(f"Variable instance is None")
+                raise ValueError("Variable instance is None")
             if not var.path or not var.path.exists():
                 raise ValueError(
                     f"Variable '{var.name}' has no valid file path: {var.path}"
@@ -426,7 +430,7 @@ class Dataset(BaseModel):
             Maximum dimension for display (default: 1024). Larger rasters will be
             downsampled for faster visualization.
 
-        Examples
+        Examples:
         --------
         >>> dataset.show()  # Show all variables in 3-column grid
         >>> dataset.show(ncols=2)  # Show in 2-column grid
@@ -510,7 +514,7 @@ class Dataset(BaseModel):
     def register(
         self, project: Any, key: Optional[str] = None, auto_save: bool = True
     ) -> None:
-        """Register this dataset with a project. Mirrors model.register()."""
+        """Register this dataset with a project, the same way a model registers."""
         project.add_dataset(self, key=key, auto_save=auto_save)
 
     def extract_at_points(self, points, *, drop_nodata: bool = True):
@@ -529,12 +533,13 @@ class Dataset(BaseModel):
         drop_nodata : bool
             Drop points that hit nodata/NaN or fall outside ANY layer (logged).
 
-        Returns
+        Returns:
         -------
         pandas.DataFrame
             Columns: [target_name, feature1…featureN, cell_id, trial].
         """
         import logging
+
         import numpy as np
         import pandas as pd
         import rasterio
@@ -547,7 +552,6 @@ class Dataset(BaseModel):
         n_pts = len(points)
         df_data = {}
         valid = np.ones(n_pts, dtype=bool)
-        target_ncols = None
         target_cell = None
 
         num_threads = worker_threads()
@@ -593,7 +597,6 @@ class Dataset(BaseModel):
                 df_data[var.name] = vals
 
                 if i == 0:  # target raster defines cell_id
-                    target_ncols = vwidth
                     target_cell = r * vwidth + c
 
         df_data["cell_id"] = target_cell
@@ -614,7 +617,7 @@ class Dataset(BaseModel):
     def get_file_paths(self) -> Dict[str, Path]:
         """Get file paths for all configured variables.
 
-        Returns
+        Returns:
         -------
         Dict[str, Path]
             Dictionary mapping variable names to file paths
@@ -640,7 +643,7 @@ class Dataset(BaseModel):
         format : str, optional
             Output format: 'VRT' (default) or 'GTiff'
 
-        Returns
+        Returns:
         -------
         Path
             Path to stacked raster file
@@ -651,12 +654,9 @@ class Dataset(BaseModel):
                 / f"{self.name or 'dataset'}_stack.{format.lower()}"
             )
 
-        paths = self.get_file_paths()
+        self.get_file_paths()
 
         if format == "VRT":
-            # Create VRT file
-            from rasterio.vrt import WarpedVRT
-
             # TODO: Implement VRT stacking
             raise NotImplementedError("VRT stacking not yet implemented")
         else:
@@ -678,7 +678,7 @@ class Dataset(BaseModel):
         suffix : str, optional
             Suffix for output filenames
 
-        Returns
+        Returns:
         -------
         Dict[str, Path]
             Dictionary mapping variable names to exported file paths
@@ -705,7 +705,7 @@ class Dataset(BaseModel):
     def get_spatial_info(self) -> Dict[str, Any]:
         """Get spatial properties of the dataset.
 
-        Returns
+        Returns:
         -------
         Dict[str, Any]
             Dictionary with spatial metadata
@@ -730,7 +730,7 @@ class Dataset(BaseModel):
     def describe(self) -> Dict[str, Any]:
         """Get summary statistics for all variables.
 
-        Returns
+        Returns:
         -------
         Dict[str, Any]
             Dictionary with variable statistics

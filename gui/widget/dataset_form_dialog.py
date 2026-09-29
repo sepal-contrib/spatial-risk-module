@@ -41,9 +41,10 @@ def DatasetFormDialog(
         open_: solara.Reactive[bool].
         on_submit: callback(entry, editing_key) — the tile builds/validates/
             registers the Dataset (mutation stays in the tile, contract #1/#7).
-        editing_key / initial: when set, the dialog opens prefilled for edit;
-            the storage key is fixed (name field disabled) so models that
+        editing_key: when set, the dialog opens prefilled for edit; the
+            storage key is fixed (name field disabled) so models that
             reference the dataset by name are never orphaned by a rename.
+        initial: the edited dataset's fields, used to prefill the form.
     """
     p = project.value
     is_edit = editing_key is not None
@@ -112,7 +113,9 @@ def DatasetFormDialog(
             if is_edit
             else t("tiles.dataset.dialog_title_new")
         ),
-        create_label=t("common.save") if is_edit else t("tiles.dataset.register_button"),
+        create_label=t("common.save")
+        if is_edit
+        else t("tiles.dataset.register_button"),
         validate=validate,
         will_replace=will_replace,
         launch=launch,
