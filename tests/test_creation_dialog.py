@@ -24,8 +24,9 @@ def test_creation_dialog_survives_outside_click_but_closes_on_esc():
     Vuetify stacks a v-select's menu above the dialog only when the overlay
     stack lines up; in this embedding it does not, so the same outside click
     that closes the dropdown also closed the form. `persistent` takes the
-    dialog out of the click-outside path entirely (and `no_click_animation`
-    stops it shaking at a click meant for the dropdown). VDialog still emits
+    dialog out of the click-outside close (`no_click_animation` turns off
+    Vuetify's shake, which also fires on ESC; the outside click is answered by
+    the Python-side nudge instead, see gui/widget/dialog_nudge). VDialog still emits
     `keydown` while persistent, so ESC stays wired from Python — and VSelect
     stops ESC propagating while its menu is open, so ESC closes the dropdown
     first and the form only once no dropdown is open.

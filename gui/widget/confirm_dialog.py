@@ -24,6 +24,7 @@ import reacton.ipyvuetify as rv
 import solara
 
 from gui.i18n import t
+from gui.widget.enter_key import ENTER_DEFAULT
 from gui.widget.text_style import MUTED
 
 # Paths and file names: monospace keeps them scannable and stops a long one
@@ -110,6 +111,12 @@ def ConfirmDialog(
                         outlined=True,
                         small=True,
                     )
+                # Enter presses it, destructive or not: it mirrors ESC, and the
+                # dialog is itself the confirmation step (gui/widget/enter_key).
                 solara.Button(
-                    confirm_label, on_click=on_confirm, color=confirm_color, small=True
+                    confirm_label,
+                    on_click=on_confirm,
+                    color=confirm_color,
+                    small=True,
+                    classes=[ENTER_DEFAULT],
                 )

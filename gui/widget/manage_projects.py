@@ -24,6 +24,7 @@ from gui.scripts.project_ui_helpers import (
     format_size,
     project_count_chips,
 )
+from gui.widget.enter_key import ENTER_DEFAULT
 
 
 @solara.component
@@ -183,6 +184,8 @@ def ManageProjectsDialog(
                     color="primary",
                     small=True,
                     disabled=load_disabled,
+                    # Enter presses it — a disabled button ignores the press.
+                    classes=[ENTER_DEFAULT],
                 )
 
 
@@ -224,6 +227,12 @@ def ConfirmDeleteProjectDialog(
     can_delete = (
         delete_confirm_valid(typed, name or "") and not writer_active and not busy
     )
+
+    def confirm_if_typed():
+        # The disabled button is the browser's copy of this gate; a press sent
+        # before the last keystroke reached the kernel still lands here.
+        if can_delete:
+            on_confirm()
 
     with rv.Dialog(
         v_model=open,
@@ -283,8 +292,12 @@ def ConfirmDeleteProjectDialog(
                 )
                 solara.Button(
                     t("project.dialog_delete_confirm"),
-                    on_click=on_confirm,
+                    on_click=confirm_if_typed,
                     color="error",
                     small=True,
                     disabled=not can_delete,
+                    # Enter in the name field deletes — but only once the name
+                    # is typed: until then the button is disabled, and a
+                    # disabled button ignores the press.
+                    classes=[ENTER_DEFAULT],
                 )

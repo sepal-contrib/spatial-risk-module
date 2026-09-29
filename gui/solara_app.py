@@ -69,6 +69,7 @@ from gui.tile.summary_tile import ProjectSummaryTile
 from gui.tile.toolbox_tile import ToolboxTile, allocation_jobs, density_on_map
 from gui.tile.train_tile import TrainTile, train_jobs
 from gui.tile.variables_tile import VariablesTile, vars_on_map
+from gui.widget.enter_key import ENTER_DEFAULT, EnterKeyListener
 from gui.widget.manage_projects import ConfirmDeleteProjectDialog, ManageProjectsDialog
 from gui.widget.pipeline_header import PipelineHeader
 from gui.widget.text_style import MUTED
@@ -516,6 +517,7 @@ def ProjectPanel(on_close=None):
                     color="primary",
                     small=True,
                     disabled=not (validation and validation.valid),
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
     # ---- Discard-unsaved confirm (New while dirty) ----------------------
@@ -543,6 +545,7 @@ def ProjectPanel(on_close=None):
                     on_click=_open_new_dialog,
                     color="error",
                     small=True,
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
     # ---- Overwrite confirm (Save over an existing project) --------------
@@ -573,6 +576,7 @@ def ProjectPanel(on_close=None):
                     on_click=_really_save,
                     color="error",
                     small=True,
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
     # ---- Manage dialog + delete confirmation ----------------------------
@@ -1071,6 +1075,10 @@ def Page():
     # spurious horizontal scrollbar even when the panel fits. The dialog card
     # already clips with `overflow: hidden`, so pin the content's x-axis hidden.
     solara.Style(".dialog-content { overflow-x: hidden !important; }")
+
+    # Enter presses the open modal's default button (the one tagged
+    # ENTER_DEFAULT); the key is read in the browser, see gui/widget/enter_key.
+    EnterKeyListener()
 
     app_title = compute_app_title(
         app_state.project.value, app_state.project_dirty.value
