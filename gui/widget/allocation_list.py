@@ -67,6 +67,7 @@ def AllocationList(
     density_on_map=frozenset(),
     on_edit=None,
     on_dismiss=None,
+    toggling_keys=frozenset(),
 ):
     """Allocation runs table: one row per saved run plus in-flight jobs.
 
@@ -83,6 +84,8 @@ def AllocationList(
             failed job's submission entry so the user can fix and rerun.
         on_dismiss: callback(job_id) — discard a job row that is no longer
             running.
+        toggling_keys: density layer keys whose map toggle is running; that
+            row's map button is an hourglass that ignores clicks until the layer lands.
     """
     table_rows = []
     for r in rows:
@@ -130,6 +133,7 @@ def AllocationList(
                     "kind": "map_toggle",
                     "on_click": lambda *_, rr=r: on_toggle_density(rr),
                     "is_on": density_layer_key(r["key"]) in density_on_map,
+                    "loading": density_layer_key(r["key"]) in toggling_keys,
                 }
             )
         actions.append(
