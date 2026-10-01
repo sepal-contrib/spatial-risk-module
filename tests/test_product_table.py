@@ -53,7 +53,7 @@ def test_status_maps_cover_all_states():
     for status in ("running", "ready", "completed", "failed", "cancelled"):
         assert status in STATUS_ICONS
         assert status in STATUS_COLORS
-    assert STATUS_ICONS["running"] == "mdi-loading mdi-spin"
+    assert STATUS_ICONS["running"] == "mdi-timer-sand sr-hourglass"
     assert STATUS_ICONS["completed"] == "mdi-check-circle"
     # Status tones are Vuetify theme tokens, not literal colours, so they track
     # the app palette in light and dark ("cancelled" stays a neutral grey).
@@ -145,3 +145,59 @@ def test_harmonization_statuses_and_action_are_in_the_vocabulary():
     assert STATUS_COLORS["not_downloaded"] == "warning"
     assert action_icon("harmonize") == "mdi-hammer"
     assert action_color("harmonize") == "primary"
+
+
+def test_busy_actions_show_the_hourglass():
+    """Any loading action swaps its icon for the hourglass (#38)."""
+    from gui.widget.product_table import BUSY_ICON, action_icon
+
+    assert BUSY_ICON == "mdi-timer-sand"
+    assert action_icon("map_toggle", is_on=False, loading=True) == BUSY_ICON
+    assert action_icon("map_toggle", is_on=True, loading=True) == BUSY_ICON
+    assert action_icon("download", loading=True) == BUSY_ICON
+    assert action_icon("harmonize", loading=True) == BUSY_ICON
+    assert action_icon("download") == "mdi-cloud-download-outline"
+
+
+def test_the_hourglass_is_one_grey_everywhere():
+    """Same grey in every section, whatever tone the button or status had (#38).
+
+    The CSS pins it per theme on the icon itself, and a busy row action drops
+    its own colour so the button's ripple/hover is neutral too.
+    """
+    import reacton
+
+    from gui.widget.product_table import HOURGLASS_CSS, ProductTable
+
+    assert "color: rgba(0, 0, 0, 0.6) !important" in HOURGLASS_CSS
+    assert "color: rgba(255, 255, 255, 0.7) !important" in HOURGLASS_CSS
+    for theme in ("light", "dark"):
+        assert f".v-icon.theme--{theme}.sr-hourglass" in HOURGLASS_CSS
+        assert f".sr-hourglass .v-icon.theme--{theme}" in HOURGLASS_CSS
+
+    rows = [
+        {
+            "key": "a",
+            "cells": [{"value": "a"}],
+            "actions": [
+                {"kind": "download", "on_click": lambda: None, "loading": True},
+                {"kind": "harmonize", "on_click": lambda: None},
+            ],
+        }
+    ]
+    _box, rc = reacton.render(
+        ProductTable(title="t", columns=[{"label": "n"}], rows=rows, empty_text=""),
+        handle_error=False,
+    )
+    try:
+        import ipyvuetify as vw
+
+        btns = {
+            str(b.children[0].children[0]): b
+            for b in rc.find(vw.Btn).widgets
+            if b.icon and b.children and getattr(b.children[0], "children", None)
+        }
+        assert not btns["mdi-timer-sand"].color  # busy: the CSS grey
+        assert btns["mdi-hammer"].color == "primary"  # idle keeps its tone
+    finally:
+        rc.close()

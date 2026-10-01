@@ -19,10 +19,15 @@ from gui.scripts.solara_threads import (
 )
 from gui.scripts.variable_identity import base_raster_key, is_base_raster
 from gui.store.project_writers import writing
-from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
+from gui.tile.derived_map import (
+    derived_on_map,
+    derived_toggle_inflight,
+    use_derived_map_toggle,
+)
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.creation_dialog import CreationDialog
 from gui.widget.help import InfoButton
+from gui.widget.product_table import BUSY_CLASSES, BUSY_ICON, HOURGLASS_CSS
 from gui.widget.text_style import MUTED
 from gui.widget.variable_list import HarmonizationVariableList
 from spatialrisk.harmonization import (
@@ -98,12 +103,14 @@ def ReferenceStrip(project, on_open, pending=False):
     needed.
 
     ``pending`` is True while the reference warp runs on its worker thread: the
-    strip then says so, carries a progress bar and stops opening the form,
-    because the old reference it still holds is about to be replaced and the UI
-    is otherwise unchanged (the warp no longer freezes it, so nothing else
-    signals that work is happening). Disabling it is what keeps the user from
-    typing a correction that ``on_set_base`` would only have to refuse — and the
-    pending line it carries is the reason, so the disabled state is not mute.
+    strip then says so, swaps its crosshairs for the app's busy hourglass and
+    stops opening the form, because the old reference it still holds is about
+    to be replaced and the UI is otherwise unchanged (the warp no longer freezes
+    it, so nothing else signals that work is happening). Ignoring clicks is what
+    keeps the user from typing a correction that ``on_set_base`` would only have
+    to refuse — and the pending line it carries is the reason, so the busy state
+    is not mute. It ignores them through ``sr-busy`` rather than ``disabled``,
+    like every other busy button, so the hourglass keeps its grey.
     """
     p = project.value
     base = p.base_raster if p is not None else None
@@ -122,23 +129,28 @@ def ReferenceStrip(project, on_open, pending=False):
     # solara.Style needs a container to render into — at a component's top
     # level it is silently dropped, and the strip then overflows its button.
     with solara.Column(style="width:100%;gap:0;"):
-        solara.Style(STRIP_CSS)
+        solara.Style(STRIP_CSS + HOURGLASS_CSS)
         # The label is built as `children=`, not a nested `with`: reacton
         # reparents elements passed this way, and it keeps the two text lines
         # inside the button's own content box where the CSS above can reach.
         solara.Button(
-            classes=["sr-reference-strip"],
             block=True,
             outlined=True,
-            color="primary" if base is not None else "warning",
+            color=None if pending else ("primary" if base is not None else "warning"),
             style=STRIP_STYLE,
             on_click=on_open,
-            disabled=pending,
+            # sr-busy on the button, the flip on the hourglass alone: on the
+            # button it would also spin the chevron.
+            classes=["sr-reference-strip"] + (["sr-busy"] if pending else []),
             children=[
                 solara.Row(
                     style="width:100%;align-items:center;gap:8px;flex-wrap:nowrap;",
                     children=[
-                        rv.Icon(children=["mdi-crosshairs-gps"], small=True),
+                        rv.Icon(
+                            children=[BUSY_ICON if pending else "mdi-crosshairs-gps"],
+                            small=True,
+                            class_="sr-hourglass" if pending else "",
+                        ),
                         solara.Column(
                             style=(
                                 "gap:0;align-items:flex-start;"
@@ -157,8 +169,6 @@ def ReferenceStrip(project, on_open, pending=False):
                 )
             ],
         )
-        if pending:
-            solara.ProgressLinear(True)
 
 
 @solara.component
@@ -558,7 +568,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         # likewise a dialog.
         ReferenceStrip(
             project=project,
-            on_open=lambda: reference_open.set(True),
+            # The strip ignores clicks while the warp runs, but not the
+            # keyboard: Enter on the focused strip must not open the form.
+            on_open=lambda: (
+                None if "reference" in reference_inflight else reference_open.set(True)
+            ),
             pending="reference" in reference_inflight,
         )
 
@@ -627,6 +641,8 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             or "reference" in reference_inflight,
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
+            # Read here so the tile subscribes: the row is an hourglass while it adds.
+            toggling_keys=derived_toggle_inflight.value,
             on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
         )
 
@@ -647,11 +663,15 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             )
 
         # Same icon as the per-row action, same shape as Step 2's Download-all
-        # under its source list.
+        # under its source list; outlined with the grey hourglass while a run is
+        # in flight (as Download-all does).
+        solara.Style(HOURGLASS_CSS)
         solara.Button(
             t("tiles.process.harmonize_all_button"),
-            icon_name="mdi-hammer",
-            color="primary",
+            icon_name=BUSY_ICON if run_in_flight else "mdi-hammer",
+            classes=BUSY_CLASSES if run_in_flight else [],
+            color=None if run_in_flight else "primary",
+            outlined=run_in_flight,
             small=True,
             block=True,
             on_click=run_processing,
@@ -667,13 +687,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # with every layer already on the reference grid a run rewrites
             # nothing, and the sentence that used to say so is gone, so the
             # button carries it — as Download-all does with no cloud layers left.
-            disabled=run_in_flight
-            or not has_base
-            or nothing_pending
-            or "reference" in reference_inflight,
+            # A run in flight is the hourglass instead (BUSY_CLASSES ignores
+            # clicks without the faded disabled look).
+            disabled=not run_in_flight
+            and (not has_base or nothing_pending or "reference" in reference_inflight),
         )
-        if processing.value:
-            solara.ProgressLinear(True)
 
     # `will_replace` is the creation flow's overwrite guard; setting a reference
     # is idempotent, so there is nothing to confirm.

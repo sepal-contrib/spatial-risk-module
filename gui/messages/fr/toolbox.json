@@ -51,6 +51,7 @@
       "unit_ha_yr": "ha/an",
       "unit_ha": "ha",
       "show_density": "Afficher la carte de densité",
+      "error_toggle_density": "Impossible d'afficher la carte de densité de « {name} » : {exc}",
       "delete_title": "Supprimer l'allocation",
       "delete_message": "Supprimer « {name} » et ses fichiers de sortie ? Cette action est irréversible.",
       "provenance_persisted": "table issue de l'exécution du modèle",

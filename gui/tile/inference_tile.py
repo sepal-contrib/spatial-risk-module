@@ -503,15 +503,13 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
         if form_error:
             rv.Alert(type_="error", dense=True, children=[form_error])
 
-        if preds_inflight.value:
-            rv.ProgressLinear(indeterminate=True, color="primary")
-
         # Outputs list
         InferenceOutputList(
             project=project,
             inference_jobs=inference_jobs,
             preds_on_map=preds_on_map,
             on_toggle_map=on_toggle_map if map_ is not None else None,
+            toggling_keys=preds_inflight.value,
             on_dismiss=on_dismiss,
             on_delete=set_pending_delete,
             on_edit=on_edit,

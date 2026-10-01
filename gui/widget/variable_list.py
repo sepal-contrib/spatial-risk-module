@@ -46,13 +46,17 @@ def SourceVariableList(
     vars_on_map=None,
     on_download: Optional[Callable[[str], None]] = None,
     downloading_keys: frozenset = frozenset(),
+    toggling_keys: frozenset = frozenset(),
 ):
     """Table of source (raw) variables with download/map/edit/remove actions.
 
     Cloud-backed variables (GEEVar) show a "cloud" chip and, when
     ``on_download`` is given, a per-row download button. ``downloading_keys``
-    are the keys whose download is running: their button spins and is
-    disabled; every other row stays clickable (downloads run in parallel).
+    are the keys whose download is running: their button is an hourglass
+    that ignores clicks; every other row stays clickable (downloads run in
+    parallel). ``toggling_keys`` does the same for the map toggle: adding a
+    layer can take seconds, and the hourglass is the only sign the click was
+    taken.
     """
     p = project.value
     raw_variables = (p.raw_variables if p is not None else {}) or {}
@@ -93,6 +97,7 @@ def SourceVariableList(
                     "kind": "map_toggle",
                     "on_click": lambda *_, k=key: on_toggle_map(k),
                     "is_on": key in on_map,
+                    "loading": key in toggling_keys,
                 }
             )
         if on_edit is not None:
@@ -157,12 +162,16 @@ def DerivedVariableList(
     title: Optional[str] = None,
     jobs=None,
     on_dismiss: Optional[Callable[[str], None]] = None,
+    toggling_keys: frozenset = frozenset(),
 ):
     """Derived (processed) variables, plus the layers still being generated.
 
     ``keys`` restricts the product rows to those registry keys (None = all).
     ``derived_on_map`` is the reactive set of keys currently drawn on the map
     (see ``gui/tile/derived_map.py``), which drives the toggle state.
+    ``toggling_keys`` are the keys whose map toggle is running: that row's
+    map button is an hourglass that ignores clicks until the layer has landed
+    (or failed).
 
     ``jobs`` is the reactive list of session job dicts for submissions still
     running — the same overlay the Train/Sampling/Inference tabs use, so a
@@ -194,6 +203,7 @@ def DerivedVariableList(
                         "kind": "map_toggle",
                         "on_click": lambda *_, k=r["key"]: on_toggle_map(k),
                         "is_on": r["key"] in on_map,
+                        "loading": r["key"] in toggling_keys,
                     }
                 )
             if on_remove is not None:
@@ -278,6 +288,7 @@ def HarmonizationVariableList(
     on_toggle_map: Optional[Callable[[str], None]] = None,
     derived_on_map=None,
     on_remove: Optional[Callable[[str], None]] = None,
+    toggling_keys: frozenset = frozenset(),
 ):
     """Every harmonizable source variable with its harmonization status.
 
@@ -287,10 +298,12 @@ def HarmonizationVariableList(
     computed off-thread), and a per-row harmonize action that is enabled only
     on pending rows — the same shape as the per-row download in Step 2.
 
-    ``running_keys`` are the raw keys a run is currently rewriting (spinner on
-    those rows); every harmonize button is disabled while ``harmonize_disabled``.
+    ``running_keys`` are the raw keys a run is currently rewriting (hourglass
+    on those rows); every harmonize button is disabled while ``harmonize_disabled``.
     Map toggle and remove act on the harmonized *output*, so they are shown
-    only once one is registered; their callbacks receive the processed key.
+    only once one is registered; their callbacks receive the processed key,
+    and ``toggling_keys`` (processed keys whose map toggle is running) turns
+    that row's map button into an hourglass that ignores clicks.
     """
     from spatialrisk.harmonization import is_harmonizable, output_key
 
@@ -328,6 +341,7 @@ def HarmonizationVariableList(
                     "kind": "map_toggle",
                     "on_click": lambda *_, k=out_key: on_toggle_map(k),
                     "is_on": out_key in on_map,
+                    "loading": out_key in toggling_keys,
                 }
             )
         if output is not None and on_remove is not None:

@@ -14,6 +14,7 @@ import reacton
 import solara
 
 from gui.i18n import t
+from gui.widget.product_table import BUSY_ICON
 from gui.widget.variable_list import (
     HarmonizationVariableList,
     harmonization_row_status,
@@ -176,8 +177,12 @@ def test_harmonize_button_is_live_only_where_there_is_work():
         rc.close()
 
 
-def test_running_row_spins_and_every_button_is_disabled():
-    """A run in flight shows on its row and freezes every harmonize button."""
+def test_running_row_shows_the_hourglass_and_every_button_is_frozen():
+    """A run in flight shows on its row and freezes every harmonize button.
+
+    The running row's button is the hourglass that ignores clicks (#38); the
+    others are plain disabled hammers.
+    """
     project = solara.reactive(_project())
     rc, _ = _render(
         project,
@@ -186,9 +191,20 @@ def test_running_row_spins_and_every_button_is_disabled():
         harmonize_disabled=True,
     )
     try:
-        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-hammer"]]
-        assert all(b.disabled for b in hammer)
-        assert [b.loading for b in hammer] == [False, True, False]
+        icons = ("mdi-hammer", BUSY_ICON)
+        hammer = [b for b in _buttons(rc) if b.children[0].children[0] in icons]
+        assert [b.children[0].children[0] for b in hammer] == [
+            "mdi-hammer",
+            BUSY_ICON,
+            "mdi-hammer",
+        ]
+        assert [b.disabled for b in hammer] == [True, False, True]
+        assert [bool(b.class_ and "sr-busy" in b.class_) for b in hammer] == [
+            False,
+            True,
+            False,
+        ]
+        assert not any(b.loading for b in hammer)  # no spinner
         assert t("widgets.product_table.status_running") in _status_labels(rc)
     finally:
         rc.close()

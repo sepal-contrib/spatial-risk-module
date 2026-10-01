@@ -51,6 +51,7 @@
       "unit_ha_yr": "ha/yr",
       "unit_ha": "ha",
       "show_density": "Show density map",
+      "error_toggle_density": "Could not toggle the density map of '{name}': {exc}",
       "delete_title": "Delete allocation run",
       "delete_message": "Delete '{name}' and its output files? This cannot be undone.",
       "provenance_persisted": "table from the model run",

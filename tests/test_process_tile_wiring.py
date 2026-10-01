@@ -21,7 +21,11 @@ def test_bulk_buttons_match_the_primary_action_style():
     """Harmonize all and Download all layers look like New variable.
 
     All three are the tab's one full-width primary action; an outlined variant
-    read as secondary next to a list it actually commands.
+    read as secondary next to a list it actually commands. The one exception
+    is the busy state (#38): while it runs, the button is outlined around the
+    grey hourglass, which would read poorly on the blue fill; the render tests
+    in test_process_tile_hint / test_variables_download_overlap pin that idle
+    is filled primary again.
     """
     from gui.tile.process_tile import ProcessTile
     from gui.tile.variables_tile import VariablesTile
@@ -35,7 +39,7 @@ def test_bulk_buttons_match_the_primary_action_style():
     for block in (harmonize, download):
         assert "block=True" in block
         assert "outlined=True" not in block
-        assert 'color="primary"' in block
+        assert '"primary"' in block
 
 
 def test_process_tile_is_compact():

@@ -15,7 +15,7 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.notify_bridge import tracked_job
+from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
 from gui.scripts.product_rows import ACTIVE_SAMPLING_STATUSES
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
@@ -70,11 +70,14 @@ def _remove_sample_layers(map_, base_key):
     remove_sample_points_from_map(map_, base_key)
 
 
-def _toggle_sample_on_map(key, project_reactive, map_, turn_on):
+def _toggle_sample_on_map(key, project_reactive, map_, turn_on, notifier=None):
     """Background worker: add/remove a sample's map layer off the kernel thread.
 
     Prefers PMTiles vector tiles; falls back to GeoJSON when the sample has no
-    .pmtiles (old project / tippecanoe missing) or PMTiles add fails.
+    .pmtiles (old project / tippecanoe missing) or PMTiles add fails. A failure
+    of both is toasted through ``notifier`` (None = log only): the row's
+    hourglass clears either way, and without the toast a failed add would look
+    exactly like a click that did nothing.
     """
     base_key = _sample_layer_key(key)
     try:
@@ -122,8 +125,13 @@ def _toggle_sample_on_map(key, project_reactive, map_, turn_on):
             _remove_sample_layers(map_, base_key)
             with samples_on_map_lock:
                 samples_on_map.set(samples_on_map.value - {key})
-    except Exception:
+    except Exception as exc:
         logger.exception("sample map toggle failed for %s", key)
+        if notifier is not None:
+            notifier.error(
+                t("tiles.sampling.error_toggle_map", exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
     finally:
         samples_pending.release(key)
 
@@ -321,7 +329,9 @@ def SamplingTile(project, map_=None):
         if not samples_pending.claim(key):  # idempotent: ignore re-clicks
             return
         try:
-            spawn_in_context(_toggle_sample_on_map, (key, project, map_, turn_on))
+            spawn_in_context(
+                _toggle_sample_on_map, (key, project, map_, turn_on, notifications)
+            )
         except Exception:
             samples_pending.release(key)
             logger.exception("could not start the map-toggle worker")
