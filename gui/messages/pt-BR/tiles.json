@@ -55,6 +55,7 @@
       "epsg_label": "EPSG",
       "epsg_placeholder": "EPSG:5490",
       "epsg_hint": "SRC projetado em metros — o ícone ⌖ sugere a zona UTM.",
+      "auto_utm_tooltip": "Sugerir a zona UTM do raster de referência",
       "resolution_label": "Resolução (m)",
       "resolution_hint": "Tamanho do pixel em metros para todas as camadas harmonizadas.",
       "set_base_button": "Definir referência",

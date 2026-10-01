@@ -55,6 +55,7 @@
       "epsg_label": "EPSG",
       "epsg_placeholder": "EPSG:5490",
       "epsg_hint": "Projected CRS in metres — the ⌖ icon suggests the UTM zone.",
+      "auto_utm_tooltip": "Suggest the UTM zone of the reference raster",
       "resolution_label": "Resolution (m)",
       "resolution_hint": "Pixel size in metres for all harmonized layers.",
       "set_base_button": "Set reference",
