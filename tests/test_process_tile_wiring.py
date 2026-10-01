@@ -9,9 +9,13 @@ def test_base_projection_form_owns_the_hook():
     from gui.tile.process_tile import BaseProjectionForm
 
     src = inspect.getsource(BaseProjectionForm)
-    assert 'append_icon="mdi-crosshairs-gps"' in src
-    assert '"click:append"' in src
-    assert "rv.use_event" in src
+    # The ⌖ icon sits in the field's append slot, wrapped in a tooltip — an
+    # ``append_icon`` cannot carry one (issue #37) — and its click is the hook.
+    assert '"name": "append"' in src
+    assert "rv.Tooltip(" in src
+    assert "mdi-crosshairs-gps" in src
+    assert "append_icon=" not in src
+    assert "rv.use_event(utm_icon" in src
     # Fields only: the form is CreationDialog's body, and the dialog owns the
     # submit and cancel actions.
     assert "solara.Button" not in src

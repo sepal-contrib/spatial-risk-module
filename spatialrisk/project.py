@@ -5,11 +5,12 @@ import logging
 import os
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from box import Box
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from spatialrisk.gdal_env import configure_gdal_tmpdir
 from spatialrisk.log_utils import log_progress
@@ -69,6 +70,23 @@ def _stringify_paths(obj: Any) -> Any:
     return obj
 
 
+@dataclass
+class _SharedState:
+    """The project-wide values every copy of an open project reads and writes.
+
+    See ``Project._shared``. A dataclass so two projects holding equal values
+    still compare equal (reacton skips re-renders on ``==`` props).
+    """
+
+    base_raster: Optional["LocalRasterVar"] = None
+    aoi: Optional[Dict[str, Any]] = None
+
+
+# Set through the constructor or model_copy(update=...) like fields, but stored
+# in Project._shared rather than on each copy.
+_SHARED_FIELDS = ("base_raster", "aoi")
+
+
 class Project(BaseModel):
     """
     A Pydantic model representing a deforestation risk analysis project.
@@ -90,18 +108,55 @@ class Project(BaseModel):
     processed_variables: Dict[str, Union["LocalVectorVar", "LocalRasterVar"]] = Field(
         default_factory=dict
     )
-    base_raster: Optional["LocalRasterVar"] = None
     models: Dict[str, Any] = Field(default_factory=dict)
     datasets: Dict[str, Any] = Field(default_factory=dict)
     samples: Dict[str, Any] = Field(default_factory=dict)
     predictions: Dict[str, Any] = Field(default_factory=dict)
     evaluations: Dict[str, Any] = Field(default_factory=dict)
     allocations: Dict[str, Any] = Field(default_factory=dict)
-    # AOI descriptor (GUI-populated, library-agnostic): light metadata only
-    # (method, name, gee, admin, geometry_file). The geometry itself lives in a
-    # sidecar ``aoi.geojson`` in the project folder, written/read by the GUI —
-    # the project model stays free of geopandas/pysepal types. None when no AOI.
-    aoi: Optional[Dict[str, Any]] = None
+    # The reference raster and the AOI, shared by every shallow copy of this
+    # project. The GUI republishes the open project as a ``model_copy()`` after
+    # almost every action, and a background job saves and republishes the copy
+    # it started with when it finishes. The registries above are dicts those
+    # copies share, so a job's copy never misses what happened meanwhile; these
+    # two used to be per-copy fields, so a job started before the user set the
+    # reference wrote its reference-less copy over the manifest and the app.
+    # A shallow copy keeps this same object (``model_copy`` copies the private
+    # dict, not its values); a deep copy gets its own.
+    _shared: _SharedState = PrivateAttr(default_factory=_SharedState)
+
+    def __init__(self, **data: Any) -> None:
+        """Build a project; ``base_raster`` and ``aoi`` are accepted like fields."""
+        shared = {name: data.pop(name) for name in _SHARED_FIELDS if name in data}
+        super().__init__(**data)
+        for name, value in shared.items():
+            setattr(self, name, value)
+
+    @property
+    def base_raster(self) -> Optional["LocalRasterVar"]:
+        """The reference raster every layer is harmonized onto (None if unset)."""
+        return self._shared.base_raster
+
+    @base_raster.setter
+    def base_raster(self, value: Optional["LocalRasterVar"]) -> None:
+        """Set (or clear) the reference raster for every copy of this project."""
+        self._shared.base_raster = value
+
+    @property
+    def aoi(self) -> Optional[Dict[str, Any]]:
+        """AOI descriptor (GUI-populated, library-agnostic), None when no AOI.
+
+        Light metadata only (method, name, gee, admin, geometry_file). The
+        geometry itself lives in a sidecar ``aoi.geojson`` in the project
+        folder, written/read by the GUI — the project model stays free of
+        geopandas/pysepal types.
+        """
+        return self._shared.aoi
+
+    @aoi.setter
+    def aoi(self, value: Optional[Dict[str, Any]]) -> None:
+        """Set (or clear) the AOI descriptor for every copy of this project."""
+        self._shared.aoi = value
 
     def _relink_backrefs(self) -> None:
         """Point every contained variable/model/prediction's ``.project`` at self.
@@ -136,9 +191,20 @@ class Project(BaseModel):
     def model_copy(self, *, update=None, deep=False) -> "Project":
         """Copy the project and re-link all child ``.project`` back-references.
 
-        See ``_relink_backrefs`` for why this is required.
+        See ``_relink_backrefs`` for why this is required. A shallow copy keeps
+        sharing ``base_raster`` and ``aoi`` with this project (see ``_shared``);
+        one that overrides either through ``update`` stops sharing them.
         """
+        update = dict(update or {})
+        shared = {name: update.pop(name) for name in _SHARED_FIELDS if name in update}
         copied = super().model_copy(update=update, deep=deep)
+        if shared:
+            # An explicit override makes a copy that no longer tracks this one.
+            copied._shared = _SharedState(
+                **{name: getattr(self, name) for name in _SHARED_FIELDS}
+            )
+            for name, value in shared.items():
+                setattr(copied, name, value)
         copied._relink_backrefs()
         return copied
 
