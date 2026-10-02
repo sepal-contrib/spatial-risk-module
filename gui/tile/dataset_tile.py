@@ -6,7 +6,7 @@ import solara
 from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
-from gui.scripts.dataset_validation import choice_value
+from gui.scripts.dataset_validation import instance_choice_value
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.dataset_form_dialog import DatasetFormDialog
@@ -41,14 +41,8 @@ def DatasetTile(project):
         set_initial(
             {
                 "name": ds.name or key,
-                "target": (
-                    choice_value(ds.target.name, getattr(ds.target, "year", None))
-                    if ds.target
-                    else ""
-                ),
-                "features": [
-                    choice_value(f.name, getattr(f, "year", None)) for f in ds.features
-                ],
+                "target": instance_choice_value(p, ds.target) if ds.target else "",
+                "features": [instance_choice_value(p, f) for f in ds.features],
             }
         )
         dialog_open.set(True)

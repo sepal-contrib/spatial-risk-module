@@ -41,6 +41,16 @@ def variable_choices(project) -> List[dict]:
     return choices
 
 
+def instance_choice_value(project, var) -> str:
+    """The value ``variable_choices`` offers for the layer instance ``var``.
+
+    A layer with a single year is not temporal (``Project.is_temporal`` needs
+    two), so it is offered bare even though its instance carries that year.
+    """
+    temporal = project.is_temporal(var.name, source="processed")
+    return choice_value(var.name, getattr(var, "year", None) if temporal else None)
+
+
 def dataset_form_error(
     choices: Sequence[dict], target: str, features: Sequence[str]
 ) -> Optional[str]:

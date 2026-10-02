@@ -419,6 +419,50 @@ def test_tile_edit_prefills_each_variable_with_its_year(tile):
     ]
 
 
+def _add_single_year_layer(project, tmp_path, name="cover", year=2010):
+    """Register a layer that exists for one year only (``geobosque_2010``)."""
+    p = project.value
+    path = tmp_path / f"{name}_{year}.tif"
+    path.touch()
+    var = LocalRasterVar(
+        name=name, year=year, path=path, raster_type=RasterType.continuous
+    )
+    var.project = p
+    p.processed_variables[f"{name}_{year}"] = var
+    project.set(p.model_copy())
+
+
+def test_tile_edit_prefills_a_single_year_feature(tile, tmp_path):
+    """A one-year layer is offered bare, so edit must select it bare too.
+
+    Its instance still carries the year, but with one year it is not temporal:
+    the select offers ``cover``, not ``cover@2010``, and a prefilled value with
+    no item renders no chip -- the dataset reopened with fewer features than it
+    was saved with, and saving it dropped them.
+    """
+    box, project, _, captured = tile
+    _add_single_year_layer(project, tmp_path)
+    _fill(box, "forest_loss", ["cover", "altitude"])
+    _click(box, t("tiles.dataset.register_button"))
+
+    captured["on_edit"]("dataset_1")
+    assert _select(box, "tiles.dataset.feature_variables_label").v_model == [
+        "cover",
+        "altitude",
+    ]
+
+
+def test_tile_edit_prefills_a_single_year_target(tile, tmp_path):
+    """Same for the target: a one-year target reopens selected."""
+    box, project, _, captured = tile
+    _add_single_year_layer(project, tmp_path)
+    _fill(box, "cover", ["altitude"])
+    _click(box, t("tiles.dataset.register_button"))
+
+    captured["on_edit"]("dataset_1")
+    assert _select(box, "tiles.dataset.target_variable_label").v_model == "cover"
+
+
 def test_tile_reports_a_builder_failure_as_a_toast(tile, tmp_path):
     """A layer gone from disk passes the dialog; the failure is a toast."""
     box, project, notifier, _ = tile
