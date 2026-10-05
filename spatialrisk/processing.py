@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, List
 
+import dask
 import numpy as np
 import rasterio
 import rioxarray
@@ -9,6 +10,8 @@ import xarray as xr
 from osgeo import gdal
 
 from spatialrisk.gdal_env import configure_gdal_tmpdir
+from spatialrisk.geo_utils import SRC_CHUNK, WARP_CACHEMAX_BYTES
+from spatialrisk.parallel import worker_threads
 from spatialrisk.variables.models import RasterType
 
 if TYPE_CHECKING:
@@ -306,16 +309,18 @@ def process_change_xarray(input1_path, input2_path, output_path, op="loss"):
     if op not in ("loss", "gain"):
         raise ValueError(f"op must be 'loss' or 'gain', got {op!r}")
 
-    # Open the input rasters
+    # Open the input rasters lazily in SRC_CHUNK tiles. rioxarray's "auto"
+    # reads uint8 masks in ~11k x 11k (127 Mpx) tiles, one per worker thread.
+    chunks = {"band": 1, "x": SRC_CHUNK, "y": SRC_CHUNK}
     input1 = rioxarray.open_rasterio(
         input1_path,
-        chunks="auto",
+        chunks=chunks,
         cache=False,
         lock=False,
     ).squeeze()
     input2 = rioxarray.open_rasterio(
         input2_path,
-        chunks="auto",
+        chunks=chunks,
         cache=False,
         lock=False,
     ).squeeze()
@@ -346,21 +351,37 @@ def process_change_xarray(input1_path, input2_path, output_path, op="loss"):
         event = valid_mask & (input1 == 0) & (input2 == 1)
         stable = valid_mask & (input1 == 0) & (input2 == 0)
 
-    output = xr.where(event, 1, xr.where(stable, 0, 255)).astype("uint8")
+    # uint8 scalars: bare 1/0/255 promote every tile to int64 (8x the mask)
+    # before the cast back.
+    output = xr.where(
+        event, np.uint8(1), xr.where(stable, np.uint8(0), np.uint8(255))
+    ).astype("uint8")
 
     # Set proper metadata
     output.rio.write_nodata(255, inplace=True)
     output.rio.write_crs(input1.rio.crs, inplace=True)
     output.rio.write_transform(input1.rio.transform(), inplace=True)
 
-    output.rio.to_raster(
-        output_path,
-        driver="GTiff",
-        compress="DEFLATE",
-        predictor=2,
-        bigtiff="YES",
-        tiled=True,
-    )
+    # Stream the layer to disk as xr_reproject does: ``lock=True`` writes each
+    # tile through dask.array.store (the default lock=None evaluates the whole
+    # layer into one array first), with the worker pool and GDAL block cache
+    # capped. Measured 2026-10-05 on a SEPAL c8 (15 GB), loss between two
+    # 53672 x 40412 forest masks: OOM-killed at 11.3 GB after 20 s before,
+    # 0.4 GB and 69 s after; see tests/test_change_layer_streaming.py for the
+    # guard.
+    with (
+        rasterio.Env(GDAL_CACHEMAX=WARP_CACHEMAX_BYTES),
+        dask.config.set(scheduler="threads", num_workers=worker_threads()),
+    ):
+        output.rio.to_raster(
+            output_path,
+            driver="GTiff",
+            compress="DEFLATE",
+            predictor=2,
+            bigtiff="YES",
+            tiled=True,
+            lock=True,
+        )
 
 
 def process_forest_loss_xarray(input1_path, input2_path, output_path):

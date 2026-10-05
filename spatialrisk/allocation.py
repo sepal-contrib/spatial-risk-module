@@ -246,7 +246,7 @@ def allocate_deforestation(
     warped = None
 
     # --- count project pixels per category --------------------------------
-    counts = _count_categories(cropped, forest_mask_file, out_dir, copts)
+    counts = _count_categories(cropped, forest_mask_file, out_dir, copts, blk_rows)
     if counts.empty or counts["counts"].sum() == 0:
         raise AllocationInputError(
             "No eligible risk-map pixels inside the project borders: the borders do "
@@ -327,20 +327,25 @@ def allocate_deforestation(
     )
 
 
-def _count_categories(cropped, forest_mask_file, out_dir, copts) -> pd.DataFrame:
-    """DataFrame(cat, counts) of eligible nonzero pixels in the cropped risk map."""
+def _count_categories(
+    cropped, forest_mask_file, out_dir, copts, blk_rows: int = 128
+) -> pd.DataFrame:
+    """DataFrame(cat, counts) of eligible nonzero pixels in the cropped risk map.
+
+    Read in strips of *blk_rows* rows, like :func:`_write_density_map`: whole
+    risk and mask bands plus their temporaries cost ~10 bytes a pixel (4.2 GB
+    at 20000 x 20000, measured 2026-10-05) when the borders span a big AOI.
+    """
     from osgeo import gdal
 
     ds = gdal.Open(str(cropped))
-    risk = ds.GetRasterBand(1).ReadAsArray()
-    ds = None
-    eligible = risk != 0
+    band = ds.GetRasterBand(1)
+    ncol, nrow = ds.RasterXSize, ds.RasterYSize
+    mds = None
     if forest_mask_file is not None:
         mask_cropped = out_dir / "project_mask.tif"
-        ref = gdal.Open(str(cropped))
-        gt, ncol, nrow = ref.GetGeoTransform(), ref.RasterXSize, ref.RasterYSize
+        gt = ds.GetGeoTransform()
         bounds = (gt[0], gt[3] + nrow * gt[5], gt[0] + ncol * gt[1], gt[3])
-        ref = None
         gdal.Warp(
             str(mask_cropped),
             str(forest_mask_file),
@@ -350,12 +355,26 @@ def _count_categories(cropped, forest_mask_file, out_dir, copts) -> pd.DataFrame
             creationOptions=copts,
         )
         mds = gdal.Open(str(mask_cropped))
-        mask = mds.GetRasterBand(1).ReadAsArray()
-        mds = None
-        eligible &= mask == 1
-    values, counts = np.unique(risk[eligible], return_counts=True)
+
+    totals: dict = {}
+    step = max(1, int(blk_rows))
+    for y in range(0, nrow, step):
+        rows = min(step, nrow - y)
+        risk = band.ReadAsArray(0, y, ncol, rows)
+        eligible = risk != 0
+        if mds is not None:
+            eligible &= mds.GetRasterBand(1).ReadAsArray(0, y, ncol, rows) == 1
+        values, counts = np.unique(risk[eligible], return_counts=True)
+        for value, count in zip(values.tolist(), counts.tolist()):
+            totals[value] = totals.get(value, 0) + count
+    ds = mds = None
+
+    cats = sorted(totals)
     return pd.DataFrame(
-        {"cat": values.astype(np.int64), "counts": counts.astype(np.int64)}
+        {
+            "cat": np.array(cats, dtype=np.int64),
+            "counts": np.array([totals[c] for c in cats], dtype=np.int64),
+        }
     )
 
 
