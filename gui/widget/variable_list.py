@@ -213,7 +213,9 @@ def DerivedVariableList(
         else:
             # The output has no registry entry yet, so the source is resolved
             # from the name the job will register under.
-            source_name = derived_source_key(p, r["name"], unknown_source)
+            source_name = derived_source_key(
+                p, r["name"], unknown_source, year=r.get("year")
+            )
             if r["status"] != "running" and on_dismiss is not None:
                 actions.append(
                     {

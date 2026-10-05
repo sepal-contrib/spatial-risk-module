@@ -1,11 +1,12 @@
 """What a submitted derived-layer entry will register: display name and key.
 
-The job row needs both halves. They differ for edge/dist, because
-``add_as_processed`` stores a year-bearing variable under ``{name}_{year}`` and
-``_create_post_var`` inherits its source's year — so keying a job on the name
-alone would treat the layer as never registered (a row stuck on "completed"
-beside its own product) and would conflate two same-named sources from
-different years.
+The job row needs both halves, and so does the dialog's output preview. They
+differ for edge/dist, because ``add_as_processed`` stores a year-bearing
+variable under ``{name}_{year}`` and ``_create_post_var`` inherits its source's
+year — so keying a job on the name alone would treat the layer as never
+registered (a row stuck on "completed" beside its own product), and a yearless
+display name would list two same-named sources from different years
+identically.
 """
 
 from types import SimpleNamespace
@@ -41,20 +42,24 @@ def test_derived_output_of_edge_dist_on_a_yearless_source_keys_on_its_name():
     assert out.key == "loss_forest_2010_2020_dist"
 
 
-def test_derived_output_of_edge_dist_carries_the_sources_year_into_the_key():
-    """add_as_processed stores a year-bearing variable under name_year."""
+def test_derived_output_of_edge_dist_carries_the_sources_year():
+    """add_as_processed stores a year-bearing variable under name_year.
+
+    The display name names the year too, the way every other layer list does
+    (``defor (2015)``).
+    """
     p = _project(forest_2010=_var("forest", 2010))
     out = derived_output(p, _entry("edge", pp_key="forest_2010"))
-    assert out.name == "forest_edge"
+    assert out.name == "forest_edge (2010)"
     assert out.key == "forest_edge_2010"
 
 
-def test_derived_output_keys_differ_for_the_same_name_in_two_years():
-    """Two same-named sources yield one display name but distinct outputs."""
+def test_derived_output_tells_the_same_name_in_two_years_apart():
+    """Two same-named sources yield distinct display names and outputs."""
     p = _project(forest_2010=_var("forest", 2010), forest_2015=_var("forest", 2015))
     a = derived_output(p, _entry("dist", pp_key="forest_2010"))
     b = derived_output(p, _entry("dist", pp_key="forest_2015"))
-    assert a.name == b.name == "forest_dist"
+    assert (a.name, b.name) == ("forest_dist (2010)", "forest_dist (2015)")
     assert a.key != b.key
 
 

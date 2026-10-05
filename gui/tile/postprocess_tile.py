@@ -181,6 +181,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
                     "id": job_id,
                     "name": output.name,
                     "output_key": output.key,
+                    "year": output.year,
                     "status": "running",
                     "error": None,
                 }
