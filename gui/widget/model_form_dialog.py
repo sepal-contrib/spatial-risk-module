@@ -9,6 +9,11 @@ import solara
 from gui.i18n import t
 from gui.scripts.artifact_names import sanitize_key, suggest_version
 from gui.scripts.formula_validation import validate_formula
+from gui.scripts.icar_warning import (
+    categorical_level_counts,
+    icar_slow_estimate,
+    icar_slow_message,
+)
 from gui.scripts.model_registry import MODEL_KEYS, MODEL_REGISTRY
 from gui.widget.artifact_name_field import ArtifactNameField, use_artifact_name
 from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS, CreationDialog
@@ -187,12 +192,24 @@ def ModelFormDialog(
     # leaving formula_text stuck at "" (deps below would otherwise be
     # unchanged on reopen).
     prefill_nonce, set_prefill_nonce = solara.use_state(0)
+    # What the selected dataset holds, not just its name. Every step tile stays
+    # mounted, so a dataset edited under the same name in the Dataset step
+    # while this dialog sits closed must still refresh what is derived from it
+    # (the formula below) when the dialog reopens.
+    ds_signature = (
+        selected_dataset,
+        getattr(getattr(selected_ds_obj, "target", None), "name", None),
+        tuple(
+            (v.name, getattr(v, "year", None))
+            for v in (selected_ds_obj.features if selected_ds_obj else [])
+        ),
+    )
 
     # include_levels=False keeps the displayed formula short (bare C(x), no
     # raster read); fit re-arms the level domains via inject_categorical_levels.
     # Still off the render path: extract/classify can grow I/O again.
     @solara.lab.use_task(
-        dependencies=[selected_dataset, has_formula, prefill_nonce],
+        dependencies=[ds_signature, has_formula, prefill_nonce],
         raise_error=False,
         prefer_threaded=True,
     )
@@ -202,7 +219,7 @@ def ModelFormDialog(
         text = await asyncio.to_thread(
             generate_patsy_formula, selected_ds_obj, include_levels=False
         )
-        return (selected_dataset, text)
+        return (ds_signature, text)
 
     def _apply_prefill():
         if prefill_formula.error:
@@ -213,16 +230,29 @@ def ModelFormDialog(
         res = prefill_formula.value
         if res is None:
             return
-        ds_key, text = res
+        signature, text = res
         # Identity check: a slow run for dataset A must not overwrite the
-        # prefill after the user switched to dataset B.
-        if ds_key == selected_dataset:
+        # prefill after the user switched to dataset B (or edited A).
+        if signature == ds_signature:
             set_formula_text(text)  # overwrites edits = regenerate-on-switch
 
     solara.use_effect(
         _apply_prefill,
-        [prefill_formula.value, prefill_formula.error, selected_dataset, prefill_nonce],
+        [prefill_formula.value, prefill_formula.error, ds_signature, prefill_nonce],
     )
+
+    # iCAR's sampler slows with the square of the coefficient count, and every
+    # category of a C() term is a coefficient: warn when a categorical layer
+    # would make the run long. The categories were stored when each layer was
+    # harmonized, so this is attribute reads -- no raster is opened here.
+    slow_icar = None
+    if selected_key == "icar" and selected_ds_obj is not None:
+        slow_icar = icar_slow_estimate(
+            formula_text,
+            categorical_level_counts(selected_ds_obj),
+            p.samples.get(selected_sample) if p and p.samples else None,
+            all_params.get(selected_key, {}),
+        )
 
     def reset():
         reset_name()
@@ -367,6 +397,8 @@ def ModelFormDialog(
                 hint=t("tiles.train.sample_select_hint"),
                 persistent_hint=True,
             )
+        if slow_icar is not None:
+            solara.Warning(icar_slow_message(slow_icar), dense=True)
 
         if MODEL_HAS_VARIABLES[selected_key]:
             solara.Markdown(t("tiles.train.variables_header"))

@@ -363,3 +363,22 @@ def test_empty_keys_scans_nothing(tmp_path):
     assert harmonization_status_from_disk(p, keys=[]) == HarmonizationStatus(
         pending=[], current=[]
     )
+
+
+def test_categorical_output_without_stored_categories_is_pending(tmp_path):
+    """Harmonized before categories were stored: Harmonize must redo it.
+
+    Re-registering is what stores them (``add_as_processed`` scans the file),
+    so an otherwise current categorical layer still counts as work to do.
+    """
+    src = _write(tmp_path / "src.tif")
+    out = _write(tmp_path / "out.tif")
+    _touch(src, 1000)
+    _touch(out, 2000)
+    output = _var("subj", out, raster_type=RasterType.categorical)
+    output.categorical_levels = None
+    p = _project(
+        {"subj": _var("subj", src, raster_type=RasterType.categorical)},
+        {"subj": output},
+    )
+    assert harmonization_status_from_disk(p).pending == ["subj"]

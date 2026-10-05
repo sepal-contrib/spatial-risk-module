@@ -30,19 +30,26 @@ def DatasetFormDialog(
         editing_key: when set, the dialog opens prefilled for edit; the
             storage key is fixed (name field disabled) so models that
             reference the dataset by name are never orphaned by a rename.
-        initial: the edited dataset's fields, used to prefill the form.
+        initial: the edited dataset's fields, used to prefill the form. With
+            ``duplicate_of`` set (and no ``editing_key``) the dialog creates a
+            new dataset pre-filled from that one, suggesting ``initial["name"]``.
     """
     p = project.value
     is_edit = editing_key is not None
+    duplicate_of = None if is_edit else (initial or {}).get("duplicate_of")
 
     # Select values from variable_choices: "name" or "name@year".
     target_value, set_target_value = solara.use_state("")
     feature_values, set_feature_values = solara.use_state([])
 
     existing = set(p.datasets) if p is not None and p.datasets else set()
-    name_value, on_name_input, reset_name = use_artifact_name(
-        editing_key if is_edit else suggest_name("dataset", existing)
-    )
+    if is_edit:
+        suggested = editing_key
+    elif duplicate_of:
+        suggested = initial["name"]
+    else:
+        suggested = suggest_name("dataset", existing)
+    name_value, on_name_input, reset_name = use_artifact_name(suggested)
     clean = (name_value or "").strip()
 
     def reset():
@@ -119,6 +126,8 @@ def DatasetFormDialog(
         title=(
             t("tiles.dataset.dialog_title_edit", key=editing_key)
             if is_edit
+            else t("tiles.dataset.dialog_title_duplicate", key=duplicate_of)
+            if duplicate_of
             else t("tiles.dataset.dialog_title_new")
         ),
         create_label=t("common.save")

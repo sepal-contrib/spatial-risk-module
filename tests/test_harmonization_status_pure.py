@@ -110,3 +110,25 @@ def test_a_never_harmonized_layer_is_pending_even_against_an_unstamped_base():
     assert status.pending == ["a"]
     assert status.unknown == ["b"]
     assert status.current == []
+
+
+def test_categorical_output_without_stored_categories_is_pending():
+    """Right grid, but harmonized before categories were stored."""
+    raw = _Var("subj")
+    raw.raster_type = RasterType.categorical
+    out = _Var("subj", sig="SIG")
+    out.raster_type = RasterType.categorical
+    out.categorical_levels = None
+    p = _Project({"subj": raw}, {"subj": out}, base_sig="SIG")
+    assert harmonization_status(p).pending == ["subj"]
+
+
+def test_categorical_output_with_stored_categories_is_current():
+    """Stored categories and a matching grid: nothing to do."""
+    raw = _Var("subj")
+    raw.raster_type = RasterType.categorical
+    out = _Var("subj", sig="SIG")
+    out.raster_type = RasterType.categorical
+    out.categorical_levels = [1, 2]
+    p = _Project({"subj": raw}, {"subj": out}, base_sig="SIG")
+    assert harmonization_status(p).current == ["subj"]

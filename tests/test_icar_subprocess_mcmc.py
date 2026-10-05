@@ -68,3 +68,31 @@ def test_run_icar_mcmc_executes_in_child_process():
     # as the 'cell' term — an off-by-one would mislabel every coefficient.
     assert summary["betas"][0]["name"] == "Intercept"
     assert summary["vrho"]["ci_low"] < summary["vrho"]["ci_high"]
+
+
+def test_run_icar_mcmc_starts_the_chain_at_beta_start():
+    """beta_start crosses the process boundary into forestatrisk.
+
+    With no burn-in and a start 1000 units from the mode, a 100-iteration chain
+    of unit-scale random-walk steps cannot get anywhere near the data's
+    estimates (about -0.7 and 0.6 here): the posterior means stay at the start.
+    Dropped on the way, forestatrisk would start from its own default of 0.
+    """
+    from spatialrisk.mlmodels.icar_model import run_icar_mcmc
+
+    df, n_neighbors, neighbors = _tiny_mcmc_inputs()
+    result = run_icar_mcmc(
+        formula="y + trial ~ x + cell",
+        data=df,
+        n_neighbors=n_neighbors,
+        neighbors=neighbors,
+        burnin=0,
+        mcmc=100,
+        thin=1,
+        prior_vrho=-1.0,
+        beta_start=1000.0,
+        seed=1234,
+        verbose=0,
+    )
+
+    assert result["betas"].min() > 500
