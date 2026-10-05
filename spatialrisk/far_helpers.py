@@ -2,7 +2,6 @@
 
 import ast
 import re
-import warnings
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -150,12 +149,16 @@ def get_design_info(patsy_formula, samples_file):
     return (y_design_info, x_design_info)
 
 
-def get_categorical_levels(var) -> "list | None":
-    """Return the full set of unique values in a categorical raster.
+class MissingCategoricalLevels(ValueError):
+    """A categorical layer registered before its categories were stored."""
 
-    Reads the raster band block-by-block (memory-safe for large rasters such
-    as a sub-jurisdiction map) and accumulates the distinct pixel values,
-    dropping nodata and NaN. Integral values are returned as Python ``int``.
+
+def get_categorical_levels(var) -> list:
+    """The categories stored on a categorical layer when it was registered.
+
+    ``add_as_processed`` scans the raster once (:func:`scan_categorical_levels`)
+    and saves the result as ``var.categorical_levels``, so nothing is read here.
+    Each call returns a fresh list.
 
     These levels are intended to be injected into a Patsy ``C(var, levels=...)``
     term so that the design matrix declares its complete categorical domain up
@@ -167,49 +170,51 @@ def get_categorical_levels(var) -> "list | None":
     an expression such as ``C(x + 0)``, or string levels -- raises
     ``PatsyError``.
 
-    Parameters
-    ----------
-    var : LocalRasterVar
-        Categorical variable exposing a ``.path`` attribute.
+    Raises:
+    -------
+    MissingCategoricalLevels
+        For a layer harmonized before the categories were stored. Training
+        without them would build a bare ``C(x)`` that breaks at prediction.
+    """
+    levels = getattr(var, "categorical_levels", None)
+    if levels is None:
+        raise MissingCategoricalLevels(
+            f"Layer '{getattr(var, 'name', var)}' was harmonized before the app "
+            "stored the categories of categorical layers. Harmonize it again in "
+            "the Harmonization step."
+        )
+    return list(levels)
 
-    Returns:
-    --------
-    list or None
-        Sorted list of unique levels, or ``None`` if the raster cannot be read
-        (so the caller can fall back to a bare ``C(var)`` term).
+
+def scan_categorical_levels(path) -> list:
+    """Sorted distinct values of band 1 of the raster at ``path``.
+
+    Reads block by block (memory-safe for a sub-jurisdiction map over a big
+    AOI, where it takes 10-20 s) and drops nodata and NaN. Integral values come
+    back as Python ``int``.
     """
     import numpy as np
     import rasterio
 
-    try:
-        values: set = set()
-        with rasterio.open(var.path) as src:
-            nodata = src.nodata
-            for _, window in src.block_windows(1):
-                block = src.read(1, window=window)
-                block = (
-                    block[~np.isnan(block)]
-                    if np.issubdtype(block.dtype, np.floating)
-                    else block.ravel()
-                )
-                uniques = np.unique(block)
-                if nodata is not None:
-                    uniques = uniques[uniques != nodata]
-                values.update(uniques.tolist())
+    values: set = set()
+    with rasterio.open(path) as src:
+        nodata = src.nodata
+        for _, window in src.block_windows(1):
+            block = src.read(1, window=window)
+            block = (
+                block[~np.isnan(block)]
+                if np.issubdtype(block.dtype, np.floating)
+                else block.ravel()
+            )
+            uniques = np.unique(block)
+            if nodata is not None:
+                uniques = uniques[uniques != nodata]
+            values.update(uniques.tolist())
 
-        def _coerce(v):
-            return int(v) if float(v).is_integer() else v
+    def _coerce(v):
+        return int(v) if float(v).is_integer() else v
 
-        return sorted(_coerce(v) for v in values)
-    except Exception as exc:  # fall back to data-discovered levels
-        warnings.warn(
-            f"Could not read categorical levels for '{getattr(var, 'name', var)}' "
-            f"from {getattr(var, 'path', '?')}: {exc}. "
-            "Falling back to levels discovered from the training sample.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return None
+    return sorted(_coerce(v) for v in values)
 
 
 def generate_patsy_formula(dataset: "Dataset", include_levels: bool = True) -> str:
@@ -285,7 +290,7 @@ def generate_patsy_formula(dataset: "Dataset", include_levels: bool = True) -> s
         parts += [f"scale({x})" for x in continuous]
     for var in categorical:
         # Declare the full categorical domain so prediction never hits an
-        # "unexpected level". Fall back to a bare C() if the raster is unreadable.
+        # "unexpected level".
         levels = get_categorical_levels(var) if include_levels else None
         if levels is not None:
             parts.append(f"C({var.name}, levels={levels})")
@@ -314,7 +319,8 @@ def inject_categorical_levels(formula: str, dataset: "Dataset") -> str:
     CSV, so the level domain must be explicit there — otherwise a pixel value
     absent from the sample raises a patsy "unexpected level" error. Applied to
     the RHS only; terms that already carry ``levels=`` (or anything beyond the
-    bare name) and unreadable rasters are left untouched.
+    bare name) are left untouched. A layer with no stored categories raises
+    :class:`MissingCategoricalLevels`.
     """
     parts = formula.split("~", 1)
     if len(parts) != 2:
@@ -331,8 +337,6 @@ def inject_categorical_levels(formula: str, dataset: "Dataset") -> str:
         if not re.search(pattern, rhs):
             continue
         levels = get_categorical_levels(var)
-        if levels is None:
-            continue
         rhs = re.sub(pattern, f"C({name}, levels={levels})", rhs)
 
     return f"{lhs}~{rhs}"

@@ -25,6 +25,7 @@ from gui.scripts.variable_map import add_raster_var_on_map
 from gui.store.project_writers import writing
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.help import InfoButton
+from gui.widget.product_table import BUSY_CLASSES, BUSY_ICON, HOURGLASS_CSS
 from gui.widget.variable_list import SourceVariableList
 from gui.widget.variable_modal import VariableModal
 
@@ -147,7 +148,7 @@ def _run_download(keys, bulk, p, project_reactive, notifier, overwrite=False):
         # Inside the try: anything that raises before the job opens — a title
         # lookup, the writing() mark — must still reach the release below, or
         # the key stays claimed for the session (the row's download button
-        # spins forever and can never be clicked again).
+        # stays an hourglass and can never be clicked again).
         def _var_name(k):
             return getattr(p.raw_variables.get(k), "name", None) or k
 
@@ -561,6 +562,7 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     pending_overwrite, set_pending_overwrite = solara.use_state(None)
     notifications = use_notifications()
     downloading = download_inflight.value  # subscribes the tile
+    toggling = vars_inflight.value  # ditto: the per-row map-toggle hourglass
 
     def on_toggle_map(key: str):
         """One worker per toggle; a re-click while it runs is a no-op."""
@@ -710,8 +712,8 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         if also_delete:
             try:
                 # Sized before the unlink — afterwards there is nothing to stat.
-                freed = plan_variable_files(p, key).total_bytes
-                removed_files = p.delete_variable_files(key)
+                freed = plan_variable_files(p, key, "raw").total_bytes
+                removed_files = p.delete_variable_files(key, registry="raw")
                 if removed_files:
                     notifications.success(
                         t(
@@ -736,6 +738,10 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                 timeout=ERROR_TOAST_TIMEOUT,
             )
         _drop_from_map(key, map_, legend_port)
+        # Saved now, like dataset, model, sample and prediction removals: a
+        # file deleted above while the project file still listed the layer
+        # came back on reopen, pointing at nothing.
+        p.save()
         project.set(p.model_copy())
 
     p = project.value
@@ -812,22 +818,31 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             vars_on_map=vars_on_map,
             on_download=on_download,
             downloading_keys=downloading,
+            toggling_keys=toggling,
         )
 
-        # Download-all button, below the list
+        # Download-all button, below the list. While any download runs it is an
+        # outlined button with the grey hourglass (no spinner, see
+        # HOURGLASS_CSS: grey on the blue fill would read poorly); it stays
+        # clickable for the layers not downloading yet, and with none left it
+        # ignores clicks (sr-busy) instead of fading to disabled grey.
         idle_pending = [k for k in pending_geevars if k not in downloading]
+        busy = bool(downloading)
+        busy_classes = []
+        if busy:
+            busy_classes = ["sr-hourglass"] if idle_pending else BUSY_CLASSES
+        solara.Style(HOURGLASS_CSS)
         solara.Button(
             t("tiles.variables.download_button", count=len(idle_pending)),
-            icon_name="mdi-cloud-download-outline",
-            color="primary",
+            icon_name=BUSY_ICON if busy else "mdi-cloud-download-outline",
+            color=None if busy else "primary",
+            outlined=busy,
             small=True,
             block=True,
             on_click=lambda: on_download(None),
-            loading=bool(downloading),
-            disabled=not idle_pending,
+            disabled=not idle_pending and not busy,
+            classes=busy_classes,
         )
-        if downloading:
-            solara.ProgressLinear(True)
 
     editing_entry = (
         _variable_to_entry(editing_key, p.raw_variables[editing_key], p)
@@ -856,7 +871,7 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     # What the variable holds on disk: the offer to delete it too, or the one
     # line saying why it is being kept.
     _files = (
-        delete_prompt(p, pending_remove)
+        delete_prompt(p, pending_remove, registry="raw")
         if (p is not None and pending_remove)
         else DeletePrompt(plan=FilePlan())
     )

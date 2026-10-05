@@ -6,11 +6,7 @@ import reacton.ipyvuetify as rv
 import solara
 
 from gui.i18n import t
-from gui.scripts.process_actions import (
-    change_layer_candidates,
-    change_output_name,
-    postprocess_output_name,
-)
+from gui.scripts.process_actions import change_layer_candidates, derived_output
 from gui.widget.creation_dialog import CreationDialog
 from gui.widget.text_style import MUTED
 from spatialrisk.variables.models import PostProcessing
@@ -35,13 +31,9 @@ def DerivedLayerDialog(project, open_, on_submit: Callable[[dict], None]):
     pp_key, set_pp_key = solara.use_state("")
 
     is_change = op in CHANGE_OPS
-    output_name = (
-        change_output_name(p, op, start_key, end_key)
-        if p and is_change
-        else postprocess_output_name(p, pp_key, op)
-        if p and pp_key
-        else None
-    )
+    entry = {"op": op, "start_key": start_key, "end_key": end_key, "pp_key": pp_key}
+    output = derived_output(p, entry) if p and (is_change or pp_key) else None
+    output_name = output.name if output else None
 
     def reset():
         set_op("loss")
@@ -65,9 +57,7 @@ def DerivedLayerDialog(project, open_, on_submit: Callable[[dict], None]):
         return None
 
     def launch():
-        on_submit(
-            {"op": op, "start_key": start_key, "end_key": end_key, "pp_key": pp_key}
-        )
+        on_submit(entry)
 
     with CreationDialog(
         open_=open_,

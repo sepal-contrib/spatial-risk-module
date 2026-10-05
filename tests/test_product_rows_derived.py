@@ -107,3 +107,27 @@ def test_derived_rows_keys_filter_does_not_hide_jobs():
 def test_derived_rows_handles_a_missing_project():
     """No open project means no rows, not a crash."""
     assert derived_rows(None, []) == []
+
+
+def test_derived_rows_product_names_carry_their_year():
+    """Edge/dist of two forest years would otherwise list as two identical rows."""
+    p = _proj(
+        {
+            "forest_dist_2010": _var("forest_dist", 2010),
+            "forest_dist_2020": _var("forest_dist", 2020),
+            "loss_forest_2010_2020": _var("loss_forest_2010_2020"),
+        }
+    )
+    rows = derived_rows(p, [])
+    assert [r["name"] for r in rows] == [
+        "forest_dist (2010)",
+        "forest_dist (2020)",
+        "loss_forest_2010_2020",
+    ]
+
+
+def test_derived_rows_job_rows_carry_their_source_year():
+    """The source chip of a running job resolves the right year's raw layer."""
+    rows = derived_rows(_proj(), [_job(name="forest_dist (2020)", year=2020)])
+    assert rows[0]["year"] == 2020
+    assert derived_rows(_proj(), [_job()])[0]["year"] is None

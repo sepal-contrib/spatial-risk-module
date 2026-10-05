@@ -51,6 +51,7 @@
       "unit_ha_yr": "ha/año",
       "unit_ha": "ha",
       "show_density": "Mostrar mapa de densidad",
+      "error_toggle_density": "No se pudo alternar el mapa de densidad de '{name}': {exc}",
       "delete_title": "Eliminar ejecución de asignación",
       "delete_message": "¿Eliminar '{name}' y sus archivos de salida? Esta acción no se puede deshacer.",
       "provenance_persisted": "tabla de la ejecución del modelo",

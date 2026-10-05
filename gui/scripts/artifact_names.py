@@ -17,6 +17,16 @@ def suggest_name(prefix: str, taken) -> str:
     return f"{prefix}_{n}"
 
 
+def suggest_copy_name(source: str, taken) -> str:
+    """'<source>_copy', else the smallest free '<source>_copy_<n>' (n>=2)."""
+    name = f"{source}_copy"
+    n = 2
+    while name in taken:
+        name = f"{source}_copy_{n}"
+        n += 1
+    return name
+
+
 def suggest_version(model_key: str, taken_model_keys) -> str:
     """Smallest 'v<n>' whose storage key '<model_key>_v<n>' is free."""
     n = 1

@@ -82,6 +82,7 @@ def _render(monkeypatch, project, notifier):
         vars_on_map=None,
         on_download=None,
         downloading_keys=frozenset(),
+        toggling_keys=frozenset(),
     ):
         captured["on_download"] = on_download
         captured["downloading_keys"] = downloading_keys
@@ -185,3 +186,63 @@ def test_a_row_already_downloading_is_not_started_twice(monkeypatch):
         gate.set()
         rc.close()
         variables_tile.download_inflight.release("roads", "rivers")
+
+
+def test_download_all_is_the_hourglass_while_a_download_runs(monkeypatch):
+    """Download-all shows the hourglass, not a spinner, while any row downloads.
+
+    With a layer still idle it stays clickable; with every layer downloading it
+    ignores clicks (``sr-busy``) rather than fading to the disabled grey (#38).
+    """
+    import ipyvuetify as vw
+
+    from gui.i18n import t
+    from gui.tile import variables_tile
+    from gui.widget.product_table import BUSY_ICON
+
+    project = solara.reactive(_project(), equals=lambda a, b: a is b)
+    _captured, rc = _render(monkeypatch, project, _Notifier())
+
+    def button():
+        def leaves(w):
+            for c in getattr(w, "children", None) or []:
+                if isinstance(c, str):
+                    yield c
+                else:
+                    yield from leaves(c)
+
+        hits = [
+            b
+            for b in rc.find(vw.Btn).widgets
+            if any(
+                s.startswith(t("tiles.variables.download_button", count=n))
+                for s in leaves(b)
+                for n in (0, 1, 2)
+            )
+        ]
+        assert len(hits) == 1
+        return hits[0]
+
+    def icon(btn):
+        return [str(i.children[0]) for i in btn.children if isinstance(i, vw.Icon)]
+
+    inflight = variables_tile.download_inflight
+    try:
+        assert icon(button()) == ["mdi-cloud-download-outline"]
+
+        inflight.claim("roads")  # one running, "rivers" still idle
+        assert _wait(lambda: icon(button()) == [BUSY_ICON])
+        assert "sr-busy" not in (button().class_ or "")
+        assert button().disabled is False and not button().loading
+        assert button().outlined is True and not button().color  # grey, not blue
+        assert not rc.find(vw.ProgressLinear).widgets  # the hourglass says it
+
+        inflight.claim("rivers")  # nothing left to start
+        assert _wait(lambda: "sr-busy" in (button().class_ or ""))
+        assert button().disabled is False and not button().loading
+
+        inflight.release("roads", "rivers")
+        assert _wait(lambda: icon(button()) == ["mdi-cloud-download-outline"])
+        assert button().color == "primary" and not button().outlined
+    finally:
+        rc.close()

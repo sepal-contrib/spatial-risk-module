@@ -23,6 +23,9 @@ def build_dataset_snapshot(dataset: Any) -> Dict[str, Any]:
         "target_name": getattr(target, "name", None) if target is not None else None,
         "target_year": getattr(target, "year", None) if target is not None else None,
         "feature_names": [f.name for f in getattr(dataset, "features", [])],
+        "feature_years": [
+            getattr(f, "year", None) for f in getattr(dataset, "features", [])
+        ],
     }
 
 

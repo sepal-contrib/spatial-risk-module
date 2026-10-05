@@ -17,6 +17,7 @@ def InferenceOutputList(
     on_delete=None,
     on_edit=None,
     on_open=None,
+    toggling_keys: frozenset = frozenset(),
 ):
     """Predictions table: one row per registered prediction group plus jobs.
 
@@ -34,6 +35,8 @@ def InferenceOutputList(
             registered prediction (the info action button); None omits the
             button. Job rows never get one: a run with no registered output
             has nothing to explain yet.
+        toggling_keys: row keys whose map toggle is running; that row's map
+            button is an hourglass that ignores clicks until its rasters are on the map.
     """
     p = project.value
     data = inference_rows(p, inference_jobs.value)
@@ -53,6 +56,7 @@ def InferenceOutputList(
                         "kind": "map_toggle",
                         "on_click": lambda *_, rr=r: on_toggle_map(rr),
                         "is_on": r["key"] in on_map,
+                        "loading": r["key"] in toggling_keys,
                     }
                 )
             if on_delete is not None:

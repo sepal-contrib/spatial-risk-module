@@ -38,7 +38,8 @@ def SampleSetList(
         on_dismiss: callback(job_id) — discard a failed job row.
         on_open: callback(sample_key) — open the read-only details dialog for a
             registered sample (info action button).
-        pending: set of sample keys with a map layer in flight.
+        pending: set of sample keys with a map layer in flight; that row's
+            map button is an hourglass that ignores clicks until the worker releases it.
     """
     p = project.value
     jobs = sampling_jobs.value if sampling_jobs is not None else []
@@ -66,6 +67,7 @@ def SampleSetList(
                         "kind": "map_toggle",
                         "on_click": lambda *_, k=key: on_toggle_map(k),
                         "is_on": key in on_map,
+                        "loading": key in pending,
                         "disabled": key in pending,
                     }
                 )

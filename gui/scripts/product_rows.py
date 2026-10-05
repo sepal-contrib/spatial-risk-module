@@ -17,6 +17,8 @@ derive from the registries at render time instead of being mirrored into fake
 
 from typing import Any, Dict, List, Optional
 
+from gui.scripts.variable_labels import year_label
+
 
 def _active_jobs_first(jobs: Optional[List[dict]]) -> List[dict]:
     """Session jobs, newest first (they sit above the product rows)."""
@@ -327,6 +329,7 @@ def derived_rows(
                 "key": f"job_{job['id']}",
                 "job_id": job["id"],
                 "name": job.get("name", "—"),
+                "year": job.get("year"),
                 "status": job.get("status", "running"),
                 "error": job.get("error"),
             }
@@ -338,7 +341,11 @@ def derived_rows(
             {
                 "kind": "variable",
                 "key": key,
-                "name": getattr(var, "name", key),
+                # Edge/dist of each forest year share a name: the year tells
+                # them apart, as in every other layer list.
+                "name": year_label(
+                    getattr(var, "name", key), getattr(var, "year", None)
+                ),
                 "status": "ready",
                 "error": None,
             }

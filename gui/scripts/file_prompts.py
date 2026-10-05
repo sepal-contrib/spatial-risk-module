@@ -54,13 +54,15 @@ def _relative(project, path: Path) -> str:
         return str(path)
 
 
-def delete_prompt(project, key: str) -> DeletePrompt:
+def delete_prompt(project, key: str, registry: Optional[str] = None) -> DeletePrompt:
     """The checkbox (or the explanation for its absence) for removing *key*.
 
     A checkbox only appears when ticking it would really delete something;
     otherwise the dialog says, in one dimmed line, why the file stays.
+    *registry* ("raw" or "processed") is the list the layer is removed from:
+    a raw layer and its harmonized output share a key.
     """
-    plan = plan_variable_files(project, key)
+    plan = plan_variable_files(project, key, registry)
     if plan.deletable:
         label = plural(
             len(plan.files),

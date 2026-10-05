@@ -5,6 +5,7 @@ own panel component plus an entry here; the workflow steps are untouched.
 """
 
 import logging
+import threading
 import uuid
 
 import reacton.ipyvuetify as rv
@@ -18,7 +19,8 @@ from gui.scripts.allocation_runner import (
     run_allocation,
 )
 from gui.scripts.density_map import add_density_on_map, density_layer_key
-from gui.scripts.notify_bridge import tracked_job
+from gui.scripts.inflight import InflightKeys
+from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
 from gui.scripts.solara_threads import spawn_in_context, update_job
 from gui.store.project_writers import writing
 from gui.widget.allocation_form import AllocationDetailsDialog, AllocationFormDialog
@@ -69,6 +71,56 @@ _TOOLS = [
 # render_map_on_switch) — add any new reactive here to those effects too.
 allocation_jobs = solara.reactive([])
 density_on_map = solara.reactive(set())
+
+# Guards the read-modify-write updates to ``density_on_map``: the toggle
+# worker's add/remove and the delete handler's discard run on different
+# threads. A plain read of ``.value`` or the wholesale reset needs no lock.
+density_on_map_lock = threading.Lock()
+
+# Density layer keys whose map toggle is running (see InflightKeys): the row's
+# map button shows the hourglass while it is claimed and a re-click is ignored.
+density_inflight = InflightKeys(key="density_inflight")
+
+
+def _toggle_density_on_map(row, map_, legend_port, notifier):
+    """Background worker: add or remove one run's density raster.
+
+    The add is slow on a big raster (overview build, a full band read for the
+    colour range, the tile-server start) and used to run inside the click
+    handler, freezing the whole session with no sign the click was taken.
+    Everything that follows the add — the on-map mark and the legend — runs
+    here too, so nothing is lost if the user clicks elsewhere meanwhile.
+    """
+    key = density_layer_key(row["key"])
+    try:
+        if key in density_on_map.value:
+            _drop_density_layer(map_, key, legend_port)
+            with density_on_map_lock:
+                density_on_map.set(density_on_map.value - {key})
+            return
+
+        generation = legend_port.generation() if legend_port is not None else None
+        _layer, (vmin, vmax) = add_density_on_map(
+            map_, row["density_map_path"], key=key, layer_name=row["name"]
+        )
+        # A project switch during the add means this layer is stale — take it
+        # back off rather than publish a legend for it.
+        if legend_port is not None and legend_port.generation() != generation:
+            map_.remove_layer(key, none_ok=True)
+            return
+
+        with density_on_map_lock:
+            density_on_map.set(density_on_map.value | {key})
+        if legend_port is not None:
+            legend_port.register(_density_legend(row["key"], row["name"], vmin, vmax))
+    except Exception as exc:
+        logger.exception("density map toggle failed for %s", row.get("key"))
+        notifier.error(
+            t("toolbox.allocation.error_toggle_density", name=row["name"], exc=exc),
+            timeout=ERROR_TOAST_TIMEOUT,
+        )
+    finally:
+        density_inflight.release(key)
 
 
 @solara.component
@@ -199,24 +251,30 @@ def ToolboxTile(project, map_=None, sepal_client=None, legend_port=None):
             layer_key = density_layer_key(key)
             if layer_key in density_on_map.value:
                 _drop_density_layer(map_, layer_key, legend_port)
-                density_on_map.set(density_on_map.value - {layer_key})
+                with density_on_map_lock:
+                    density_on_map.set(density_on_map.value - {layer_key})
             delete_allocation_run(p, key)
             project.set(p.model_copy())
 
     def toggle_density(row):
+        """One worker per toggle; a re-click while it runs is a no-op."""
         key = density_layer_key(row["key"])
-        if key in density_on_map.value:
-            _drop_density_layer(map_, key, legend_port)
-            density_on_map.set(density_on_map.value - {key})
-        else:
-            _layer, (vmin, vmax) = add_density_on_map(
-                map_, row["density_map_path"], key=key, layer_name=row["name"]
+        if not density_inflight.claim(key):
+            return
+        try:
+            spawn_in_context(
+                _toggle_density_on_map, (row, map_, legend_port, notifications)
             )
-            density_on_map.set(density_on_map.value | {key})
-            if legend_port is not None:
-                legend_port.register(
-                    _density_legend(row["key"], row["name"], vmin, vmax)
-                )
+        except Exception as exc:
+            # The worker's finally is what releases the claim, so a thread
+            # that never starts would hold this key for the rest of the
+            # session.
+            density_inflight.release(key)
+            logger.exception("could not start the density-toggle worker")
+            notifications.error(
+                t("toolbox.allocation.error_toggle_density", name=row["name"], exc=exc),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
 
     rows = allocation_rows(p, allocation_jobs.value) if p is not None else []
 
@@ -273,6 +331,7 @@ def ToolboxTile(project, map_=None, sepal_client=None, legend_port=None):
                     on_open=set_selected_run_key,
                     on_toggle_density=toggle_density if map_ is not None else None,
                     density_on_map=density_on_map.value,
+                    toggling_keys=density_inflight.value,
                     on_edit=on_edit,
                     on_dismiss=on_dismiss,
                 )

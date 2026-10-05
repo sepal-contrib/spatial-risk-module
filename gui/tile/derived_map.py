@@ -60,9 +60,13 @@ def _derived_legend(key: str, var):
     """
     from gui.scripts.legend_data import Label, variable_spec_from_style
     from gui.scripts.legend_registry import LayerLegend
+    from gui.scripts.variable_labels import year_label
     from gui.scripts.variable_styles import resolve_variable_style
 
-    label = Label(literal=getattr(var, "name", "") or key)
+    # Two years of one layer can be on the map at once: name the year.
+    label = Label(
+        literal=year_label(getattr(var, "name", "") or key, getattr(var, "year", None))
+    )
     return LayerLegend(
         layer_id=derived_layer_key(key),
         label=label,

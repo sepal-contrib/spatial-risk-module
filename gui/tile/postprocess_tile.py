@@ -13,7 +13,11 @@ from gui.scripts.inflight import InflightKeys
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
-from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
+from gui.tile.derived_map import (
+    derived_on_map,
+    derived_toggle_inflight,
+    use_derived_map_toggle,
+)
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.derived_layer_dialog import CHANGE_OPS, DerivedLayerDialog
 from gui.widget.help import InfoButton
@@ -145,6 +149,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
             removed = True
         if removed:
             forget_derived_jobs_for(key)
+            p.save()  # like every other removal (see Step 3)
             project.set(p.model_copy())
 
     def on_submit(entry):
@@ -177,6 +182,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
                     "id": job_id,
                     "name": output.name,
                     "output_key": output.key,
+                    "year": output.year,
                     "status": "running",
                     "error": None,
                 }
@@ -230,6 +236,8 @@ def PostProcessTile(project, map_=None, legend_port=None):
             keys=process_actions.postprocess_output_keys(p),
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
+            # Read here so the tile subscribes: the row is an hourglass while it adds.
+            toggling_keys=derived_toggle_inflight.value,
             on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
             jobs=derived_jobs,
             on_dismiss=dismiss_derived_job,
@@ -237,7 +245,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
 
     DerivedLayerDialog(project=project, open_=dialog_open, on_submit=on_submit)
     _files = (
-        delete_prompt(p, pending_remove)
+        delete_prompt(p, pending_remove, registry="processed")
         if (p is not None and pending_remove)
         else DeletePrompt(plan=FilePlan())
     )

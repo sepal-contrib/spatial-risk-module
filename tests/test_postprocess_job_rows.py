@@ -128,7 +128,7 @@ def test_submitting_lists_the_layer_before_the_work_finishes(monkeypatch):
         assert len(_jobs()) == 1
         job = _jobs()[0]
         assert job["status"] == "running"
-        assert job["name"] == "forest_dist"
+        assert job["name"] == "forest_dist (2010)"
         assert job["output_key"] == "forest_dist_2010"
         assert "forest_dist_2010" not in project.value.processed_variables
     finally:
@@ -214,7 +214,10 @@ def test_two_different_layers_run_at_the_same_time(monkeypatch):
     on_submit({"op": "edge", "start_key": "", "end_key": "", "pp_key": "forest_2010"})
     try:
         both_started.wait()  # raises BrokenBarrierError if they serialized
-        assert {j["name"] for j in _jobs()} == {"forest_dist", "forest_edge"}
+        assert {j["name"] for j in _jobs()} == {
+            "forest_dist (2010)",
+            "forest_edge (2010)",
+        }
     finally:
         rc.close()
 

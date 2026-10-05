@@ -2,13 +2,14 @@
 
 import warnings
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import ee
 import odc.geo.xr  # noqa: F401  # do not delete this - registers the .odc accessor
 import rioxarray
 from pydantic import Field, field_validator
 
+from spatialrisk.far_helpers import scan_categorical_levels
 from spatialrisk.geo_utils import RASTER_CHUNKS, raster_is_all_nodata, xr_reproject
 from spatialrisk.harmonization import geobox_signature
 from spatialrisk.processing import (
@@ -39,6 +40,10 @@ class LocalRasterVar(Variable):
     )  # Track processing steps
     default_crs: Optional[str] = None
     default_resolution: Optional[float] = None
+    # Sorted distinct values of a categorical layer, read once by
+    # add_as_processed: the New model dialog counts them to warn about slow
+    # iCAR training and fit() declares them as each C() term's domain.
+    categorical_levels: Optional[List[Union[int, float]]] = None
 
     @field_validator("path")
     @classmethod
@@ -161,15 +166,39 @@ class LocalRasterVar(Variable):
                 "the variable."
             )
 
+        if self.raster_type == RasterType.categorical:
+            # Every processed layer passes through here, and this runs in the
+            # processing job, so the 10-20 s scan of a big raster never blocks
+            # the UI. Re-registering a layer rescans its (rewritten) file.
+            self.categorical_levels = scan_categorical_levels(self.path)
+
         # Use name + year for storage key
         storage_key = f"{self.name}_{self.year}" if self.year else self.name
+        replaced = self.project.processed_vars.get(storage_key)
         self.project.processed_vars[storage_key] = self
         print(f"✓ Added '{self.name}' to processed variables (key: {storage_key})")
+        if replaced is not None and replaced is not self:
+            self._rebind_datasets(replaced)
 
         if auto_save:
             self.project.save()
 
         return self
+
+    def _rebind_datasets(self, replaced) -> None:
+        """Point datasets that held ``replaced`` at this layer instead.
+
+        A dataset keeps the layer objects it was built from, so a layer
+        re-harmonized under the same key would otherwise stay the old object
+        in every dataset -- without the categories just stored -- until the
+        project is reopened.
+        """
+        for dataset in list((getattr(self.project, "datasets", None) or {}).values()):
+            if getattr(dataset, "target", None) is replaced:
+                dataset.target = self
+            features = getattr(dataset, "features", None) or []
+            if any(f is replaced for f in features):
+                dataset.features = [self if f is replaced else f for f in features]
 
     def download(self):
         """Copy from the default path to the project."""

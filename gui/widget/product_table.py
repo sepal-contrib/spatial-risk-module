@@ -77,8 +77,9 @@ STATUS_COLORS = {
     "checking": "grey",
 }
 STATUS_ICONS = {
-    "running": "mdi-loading mdi-spin",
-    "tiling": "mdi-loading mdi-spin",
+    # Flip and grey ship with the table (HOURGLASS_CSS), overriding the tone.
+    "running": "mdi-timer-sand sr-hourglass",
+    "tiling": "mdi-timer-sand sr-hourglass",
     "ready": "mdi-check-circle",
     "completed": "mdi-check-circle",
     "failed": "mdi-alert-circle",
@@ -91,6 +92,7 @@ STATUS_ICONS = {
 
 _ACTION_ICONS = {
     "edit": "mdi-pencil-outline",
+    "duplicate": "mdi-content-copy",
     "delete": "mdi-delete-outline",
     "download": "mdi-cloud-download-outline",
     "harmonize": "mdi-hammer",
@@ -100,8 +102,49 @@ _ACTION_ICONS = {
 }
 
 
-def action_icon(kind: str, is_on: bool = False) -> str:
-    """Standard icon for an action kind (map_toggle switches on is_on)."""
+# Busy state, app-wide: an hourglass that flips instead of Vuetify's spinner
+# (#38). ``sr-hourglass`` animates the icon (on an ancestor or on the icon
+# itself). ``sr-busy`` makes a button ignore clicks without ``disabled``, whose
+# faded grey reads as "unavailable" rather than "working". Both are render-time
+# props, so the handlers' in-flight claims stay the real double-click guard.
+# The hourglass is one neutral grey everywhere, whatever colour its button or
+# status would otherwise give it: the theme's secondary-text grey, keyed on the
+# icon's own theme class (set by Vuetify's theme provider, so it is right in
+# voila's teleported dialogs too, unlike the ``text--*`` helpers).
+BUSY_ICON = "mdi-timer-sand"
+BUSY_CLASSES = ["sr-hourglass", "sr-busy"]
+HOURGLASS_CSS = """
+.sr-hourglass .v-icon, .v-icon.sr-hourglass {
+  animation: sr-hourglass-flip 2.4s ease-in-out infinite;
+}
+/* No fade in from the icon it replaces: Vuetify eases .v-icon colour over
+   0.3 s, longer than many adds take, so a map-minus hourglass showed primary. */
+.sr-hourglass .v-icon, .v-icon.sr-hourglass { transition: none !important; }
+.v-icon.theme--light.sr-hourglass, .sr-hourglass .v-icon.theme--light {
+  color: rgba(0, 0, 0, 0.6) !important;
+}
+.v-icon.theme--dark.sr-hourglass, .sr-hourglass .v-icon.theme--dark {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+.sr-busy { pointer-events: none; }
+@keyframes sr-hourglass-flip {
+  0%, 40% { transform: rotate(0deg); }
+  50%, 90% { transform: rotate(180deg); }
+  100% { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sr-hourglass .v-icon, .v-icon.sr-hourglass { animation: none; }
+}
+"""
+
+
+def action_icon(kind: str, is_on: bool = False, loading: bool = False) -> str:
+    """Standard icon for an action kind (map_toggle switches on is_on).
+
+    A loading action of any kind shows the hourglass instead.
+    """
+    if loading:
+        return BUSY_ICON
     if kind == "map_toggle":
         return "mdi-map-minus" if is_on else "mdi-map-plus"
     return _ACTION_ICONS[kind]
@@ -221,16 +264,19 @@ def _render_action(act: dict):
     kind = act["kind"]
     is_on = act.get("is_on", False)
     color = action_color(kind, is_on, override=act.get("color"))
+    loading = act.get("loading", False)
+    # A busy action is the grey hourglass that ignores clicks (BUSY_CLASSES),
+    # not a disabled button, whose faded look reads as "unavailable".
     solara.Button(
         "",
-        icon_name=action_icon(kind, is_on),
+        icon_name=action_icon(kind, is_on, loading=loading),
         on_click=act["on_click"],
         icon=True,
         text=True,
         x_small=True,
-        color=color,
-        disabled=act.get("disabled", False),
-        loading=act.get("loading", False),
+        color=None if loading else color,
+        disabled=act.get("disabled", False) and not loading,
+        classes=BUSY_CLASSES if loading else [],
     )
 
 
@@ -309,7 +355,7 @@ def ProductTable(
     grid = grid_style(widths)
 
     with solara.Column(style="gap:0;width:100%;"):
-        solara.Style(CHIP_CSS)
+        solara.Style(CHIP_CSS + HOURGLASS_CSS)
         with solara.Row(style="align-items:center;gap:8px;padding:4px 0;"):
             solara.Text(
                 f"{title} ({len(rows)})",

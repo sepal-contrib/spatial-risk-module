@@ -97,6 +97,7 @@ def _mcmc_worker(payload: dict) -> dict:
         burnin=payload["burnin"],
         mcmc=payload["mcmc"],
         thin=payload["thin"],
+        beta_start=payload["beta_start"],
         priorVrho=payload["prior_vrho"],
         seed=payload["seed"],
         verbose=payload["verbose"],
@@ -134,6 +135,7 @@ def run_icar_mcmc(
     thin: int,
     prior_vrho: float,
     seed: int,
+    beta_start: float = -99.0,
     verbose: int = 1,
 ) -> dict:
     """Run the iCAR MCMC in a spawned child process and return its posteriors.
@@ -144,6 +146,9 @@ def run_icar_mcmc(
     separate process has its own GIL, keeping the app responsive. "spawn"
     (not "fork") because forking a multithreaded server process with GDAL/EE
     state loaded is unsafe.
+
+    ``beta_start`` follows forestatrisk: -99 starts the coefficients at a
+    logistic regression's estimates, any other value starts them all there.
     """
     payload = {
         "formula": formula,
@@ -153,6 +158,7 @@ def run_icar_mcmc(
         "burnin": burnin,
         "mcmc": mcmc,
         "thin": thin,
+        "beta_start": beta_start,
         "prior_vrho": prior_vrho,
         "seed": seed,
         "verbose": verbose,
@@ -378,7 +384,8 @@ class ICARModel(BaseRiskModel):
         n_obs = len(df)
 
         print("  Building spatial neighbourhood...")
-        n_neighbors, adj = far.cellneigh(raster_path, self.csize, rank=1)
+        # csize by keyword: cellneigh's second positional slot is `region`.
+        n_neighbors, adj = far.cellneigh(raster_path, csize=self.csize, rank=1)
 
         # MCMC — isolated in a subprocess so the GIL-holding sampler cannot
         # stall the calling process (see run_icar_mcmc).
@@ -392,6 +399,7 @@ class ICARModel(BaseRiskModel):
             thin=self.thin,
             prior_vrho=self.prior_vrho,
             seed=self.random_seed if self.random_seed is not None else 1234,
+            beta_start=self.beta_start,
             verbose=1,
         )
 

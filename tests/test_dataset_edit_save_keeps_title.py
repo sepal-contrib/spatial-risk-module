@@ -56,7 +56,7 @@ class _StubDataset:
     def set_target(self, name, year=None):
         self.target = types.SimpleNamespace(name=name)
 
-    def set_features(self, names):
+    def set_features(self, names, years=None):
         self.features = [types.SimpleNamespace(name=n) for n in names]
 
     def validate(self):

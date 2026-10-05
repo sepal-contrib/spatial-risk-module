@@ -39,7 +39,7 @@ from gui.scripts.model_stats_view import (
 from gui.scripts.model_stats_view import _fmt as fmt_stat
 from gui.widget.echarts import RENDERER_SVG, EChartsChart, theme_accent
 from gui.widget.help import InfoButton
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import BUSY_ICON, HOURGLASS_CSS, ProductTable
 from gui.widget.text_style import MUTED
 
 _CARD_STYLE = (
@@ -136,7 +136,8 @@ def ModelStatsPanel(model, visible=True):
             _FamilyPanel(model=model, stats=stats, visible=visible)
         elif recovered.pending:
             with solara.Row(gap="8px"):
-                rv.ProgressCircular(indeterminate=True, size=18, width=2)
+                solara.Style(HOURGLASS_CSS)
+                rv.Icon(children=[BUSY_ICON], small=True, class_="sr-hourglass")
                 solara.Text(t("tiles.train.stats.recovering"), style=MUTED)
         else:
             solara.Info(t("tiles.train.stats.empty_state"))
