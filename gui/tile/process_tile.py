@@ -34,6 +34,7 @@ from spatialrisk.harmonization import (
     HarmonizationStatus,
     harmonization_status,
     harmonization_status_from_disk,
+    layers_missing_categories,
 )
 from spatialrisk.variables.file_cleanup import FilePlan
 
@@ -726,6 +727,19 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             toggling_keys=derived_toggle_inflight.value,
             on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
         )
+
+        # Training needs each categorical layer's categories, stored when it is
+        # harmonized; layers harmonized by an older version have none and
+        # count as pending, so Harmonize all redoes them.
+        missing_categories = layers_missing_categories(p) if p is not None else []
+        if missing_categories:
+            solara.Warning(
+                t(
+                    "tiles.process.reharmonize_categories",
+                    names=", ".join(missing_categories),
+                ),
+                dense=True,
+            )
 
         # Only the still-resolving case needs a line of its own: until the
         # status lands no row can state one. Once it does, every row says its

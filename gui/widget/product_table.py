@@ -92,6 +92,7 @@ STATUS_ICONS = {
 
 _ACTION_ICONS = {
     "edit": "mdi-pencil-outline",
+    "duplicate": "mdi-content-copy",
     "delete": "mdi-delete-outline",
     "download": "mdi-cloud-download-outline",
     "harmonize": "mdi-hammer",

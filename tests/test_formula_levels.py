@@ -8,6 +8,8 @@ against the samples CSV, so levels must be present there), and
 
 import types
 
+import pytest
+
 import spatialrisk.far_helpers as fh
 from spatialrisk.far_helpers import (
     generate_patsy_formula,
@@ -64,11 +66,11 @@ def test_inject_leaves_explicit_levels_alone(monkeypatch):
     assert inject_categorical_levels(formula, _dataset()) == formula
 
 
-def test_inject_skips_unreadable_raster(monkeypatch):
-    """Unreadable rasters leave the bare C(x) term untouched."""
-    monkeypatch.setattr(fh, "get_categorical_levels", lambda v: None)
+def test_inject_refuses_a_layer_without_stored_categories():
+    """A bare C(x) would train, then break at prediction: refuse up front."""
     formula = "I(fcc) + trial ~ C(pa)"
-    assert inject_categorical_levels(formula, _dataset()) == formula
+    with pytest.raises(fh.MissingCategoricalLevels, match="'pa'"):
+        inject_categorical_levels(formula, _dataset())
 
 
 def test_inject_ignores_lhs_and_non_categorical(monkeypatch):

@@ -6,6 +6,7 @@ import solara
 from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
+from gui.scripts.artifact_names import suggest_copy_name
 from gui.scripts.dataset_validation import instance_choice_value
 from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 from gui.widget.confirm_dialog import ConfirmDialog
@@ -33,16 +34,36 @@ def DatasetTile(project):
         set_initial(None)
         dialog_open.set(True)
 
+    def _form_values(key):
+        """The dialog fields for dataset ``key`` (each layer with its year)."""
+        ds = p.datasets[key]
+        return {
+            "name": ds.name or key,
+            "target": instance_choice_value(p, ds.target) if ds.target else "",
+            "features": [instance_choice_value(p, f) for f in ds.features],
+        }
+
     def on_edit(key):
         if p is None or key not in p.datasets:
             return
-        ds = p.datasets[key]
         set_editing_key(key)
+        set_initial(_form_values(key))
+        dialog_open.set(True)
+
+    def on_duplicate(key):
+        """Open a *New* dataset dialog pre-filled from ``key``.
+
+        Nothing is registered until the user saves, typically after dropping a
+        layer -- an untouched clone would be a second name for the same thing.
+        """
+        if p is None or key not in p.datasets:
+            return
+        set_editing_key(None)
         set_initial(
             {
-                "name": ds.name or key,
-                "target": instance_choice_value(p, ds.target) if ds.target else "",
-                "features": [instance_choice_value(p, f) for f in ds.features],
+                **_form_values(key),
+                "name": suggest_copy_name(key, set(p.datasets)),
+                "duplicate_of": key,
             }
         )
         dialog_open.set(True)
@@ -109,7 +130,12 @@ def DatasetTile(project):
             on_click=on_new,
         )
 
-        DatasetList(project=project, on_edit=on_edit, on_remove=set_pending_remove)
+        DatasetList(
+            project=project,
+            on_edit=on_edit,
+            on_remove=set_pending_remove,
+            on_duplicate=on_duplicate,
+        )
 
         ConfirmDialog(
             open=pending_remove is not None,
