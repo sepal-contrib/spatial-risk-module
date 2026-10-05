@@ -149,6 +149,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
             removed = True
         if removed:
             forget_derived_jobs_for(key)
+            p.save()  # like every other removal (see Step 3)
             project.set(p.model_copy())
 
     def on_submit(entry):
@@ -244,7 +245,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
 
     DerivedLayerDialog(project=project, open_=dialog_open, on_submit=on_submit)
     _files = (
-        delete_prompt(p, pending_remove)
+        delete_prompt(p, pending_remove, registry="processed")
         if (p is not None and pending_remove)
         else DeletePrompt(plan=FilePlan())
     )

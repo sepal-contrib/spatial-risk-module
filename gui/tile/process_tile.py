@@ -337,6 +337,9 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             )
             removed = True
         if removed:
+            # Saved now, like every other removal: a raster deleted above while
+            # the project file still lists it would come back on reopen.
+            p.save()
             project.set(p.model_copy())
 
     p = project.value
@@ -799,7 +802,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     )
 
     _files = (
-        delete_prompt(p, pending_remove)
+        delete_prompt(p, pending_remove, registry="processed")
         if (p is not None and pending_remove)
         else DeletePrompt(plan=FilePlan())
     )

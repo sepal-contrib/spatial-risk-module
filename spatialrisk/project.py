@@ -670,7 +670,9 @@ class Project(BaseModel):
         del self.allocations[key]
         return True
 
-    def delete_variable_files(self, key: str) -> List[Path]:
+    def delete_variable_files(
+        self, key: str, registry: Optional[str] = None
+    ) -> List[Path]:
         """Delete the on-disk files of the variable registered under *key*.
 
         Files only — the registry entry, the reference raster and the map layer
@@ -679,10 +681,12 @@ class Project(BaseModel):
         :func:`~spatialrisk.variables.file_cleanup.plan_variable_files` refuses:
         a file outside the project folder, or one another variable still uses.
         Ask it first if you want to tell the user *why* before deleting.
+        *registry* ("raw" or "processed") picks between a raw layer and its
+        harmonized output, which share a key.
         """
         from spatialrisk.variables.file_cleanup import plan_variable_files
 
-        plan = plan_variable_files(self, key)
+        plan = plan_variable_files(self, key, registry)
         removed = [path for path in plan.files if self._safe_unlink(path)]
         if removed:
             logger.info(

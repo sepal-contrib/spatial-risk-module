@@ -712,8 +712,8 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         if also_delete:
             try:
                 # Sized before the unlink — afterwards there is nothing to stat.
-                freed = plan_variable_files(p, key).total_bytes
-                removed_files = p.delete_variable_files(key)
+                freed = plan_variable_files(p, key, "raw").total_bytes
+                removed_files = p.delete_variable_files(key, registry="raw")
                 if removed_files:
                     notifications.success(
                         t(
@@ -738,6 +738,10 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                 timeout=ERROR_TOAST_TIMEOUT,
             )
         _drop_from_map(key, map_, legend_port)
+        # Saved now, like dataset, model, sample and prediction removals: a
+        # file deleted above while the project file still listed the layer
+        # came back on reopen, pointing at nothing.
+        p.save()
         project.set(p.model_copy())
 
     p = project.value
@@ -867,7 +871,7 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
     # What the variable holds on disk: the offer to delete it too, or the one
     # line saying why it is being kept.
     _files = (
-        delete_prompt(p, pending_remove)
+        delete_prompt(p, pending_remove, registry="raw")
         if (p is not None and pending_remove)
         else DeletePrompt(plan=FilePlan())
     )

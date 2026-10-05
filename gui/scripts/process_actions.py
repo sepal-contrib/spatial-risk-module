@@ -350,7 +350,7 @@ def remove_processed_variable(
     try:
         # Before the del: the file plan is resolved from the registry entry.
         if delete_file:
-            project.delete_variable_files(key)
+            project.delete_variable_files(key, registry="processed")
     finally:
         # A file we could not unlink is not a reason to keep a layer the user
         # asked to drop: the entry goes either way, and the error still reaches

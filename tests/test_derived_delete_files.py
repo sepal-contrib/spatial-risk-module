@@ -65,7 +65,9 @@ def test_a_failed_unlink_still_unregisters_the_layer(project, monkeypatch):
     monkeypatch.setattr(
         Project,
         "delete_variable_files",
-        lambda self, key: (_ for _ in ()).throw(OSError("read-only filesystem")),
+        lambda self, key, registry=None: (_ for _ in ()).throw(
+            OSError("read-only filesystem")
+        ),
     )
 
     with pytest.raises(OSError):
