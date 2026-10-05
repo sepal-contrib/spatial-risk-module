@@ -235,23 +235,25 @@ def BaseProjectionForm(
                 style_="flex:1 1 55%;min-width:0;",
                 hint=t("tiles.process.epsg_hint"),
                 loading=utm_pending,
-                v_slots=[
-                    {
-                        "name": "append",
-                        "children": [
-                            rv.Tooltip(
-                                top=True,
-                                v_slots=[
-                                    {
-                                        "name": "activator",
-                                        "variable": "tooltip",
-                                        "children": [utm_icon],
-                                    }
-                                ],
-                                children=[utm_tooltip],
-                            )
+                # A named child (``slot="append"``), not a ``v_slots`` entry:
+                # ipyvue hands an unscoped ``v_slots`` entry to the field as a
+                # proxied scoped slot, and Vue 2.6 drops that proxy from
+                # ``$slots`` the next time the field re-renders from Python —
+                # editing the code made the ⌖ icon vanish. A named child is
+                # resolved into ``$slots`` afresh on every render.
+                children=[
+                    rv.Tooltip(
+                        slot="append",
+                        top=True,
+                        v_slots=[
+                            {
+                                "name": "activator",
+                                "variable": "tooltip",
+                                "children": [utm_icon],
+                            }
                         ],
-                    }
+                        children=[utm_tooltip],
+                    )
                 ],
             )
             rv.TextField(

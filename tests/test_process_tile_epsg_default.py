@@ -242,12 +242,27 @@ def test_the_utm_button_carries_a_tooltip():
         # The tooltip opens from the button's own hover and focus events.
         assert button.v_on == "tooltip.on"
         # Inside the EPSG field, not beside it: the field's append slot.
-        append = [
-            s
-            for s in _field(rc, "tiles.process.epsg_label").v_slots
-            if s["name"] == "append"
-        ]
-        assert append and _utm_tooltip(rc) in append[0]["children"]
+        field = _field(rc, "tiles.process.epsg_label")
+        tip = _utm_tooltip(rc)
+        assert tip in field.children and tip.slot == "append"
+        # As a named child, never a v_slots entry: ipyvue passes that as a
+        # proxied scoped slot, which Vue 2.6 drops from the field's $slots on
+        # its next re-render — editing the code made the icon disappear.
+        assert not any(s["name"] == "append" for s in field.v_slots or [])
+    finally:
+        rc.close()
+
+
+def test_the_utm_button_survives_editing_the_epsg():
+    """Clearing or retyping the code keeps the ⌖ button in the field."""
+    rc = _render(_project(with_base=True))
+    try:
+        field = _field(rc, "tiles.process.epsg_label")
+        for typed in ("", "EPSG:32634"):
+            field.v_model = typed
+            _settle(rc)
+            assert _utm_tooltip(rc) in _field(rc, "tiles.process.epsg_label").children
+            _utm_button(rc)
     finally:
         rc.close()
 

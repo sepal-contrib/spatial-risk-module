@@ -11,7 +11,8 @@ def test_base_projection_form_owns_the_hook():
     src = inspect.getsource(BaseProjectionForm)
     # The ⌖ icon sits in the field's append slot, wrapped in a tooltip — an
     # ``append_icon`` cannot carry one (issue #37) — and its click is the hook.
-    assert '"name": "append"' in src
+    # A named child, not a v_slots entry: that one vanished on re-render.
+    assert 'slot="append"' in src
     assert "rv.Tooltip(" in src
     assert "mdi-crosshairs-gps" in src
     assert "append_icon=" not in src
