@@ -12,6 +12,7 @@ from pysepal.solara.components.inputs import (
 
 from gui.i18n import t
 from gui.scripts import variable_palettes as palettes
+from gui.scripts.picker_paths import resolve_picked_path
 from gui.scripts.predefined_variables import (
     PREDEFINED_CATALOGUE,
     build_predefined_name,
@@ -562,6 +563,12 @@ def _render_custom_fields(
     set_invert=None,
 ):
     """Fields shown when source == 'custom'."""
+
+    def on_file_value(picked):
+        # See picker_paths: a sepal_client's picks come back home-relative.
+        resolved = resolve_picked_path(picked, sepal_client)
+        set_file_path(str(resolved) if resolved else "")
+
     ArtifactNameField(
         value=name,
         on_input=set_name,
@@ -593,7 +600,7 @@ def _render_custom_fields(
         FileInputComponent(
             label=t("vars.modal.custom_file_label"),
             value=file_path,
-            on_value=set_file_path,
+            on_value=on_file_value,
             sepal_client=sepal_client,
             root="",
             extensions=(
@@ -604,17 +611,7 @@ def _render_custom_fields(
             clearable=True,
         )
     if var_type == "GEEVar":
-        # pysepal's selector lists the user's assets and validates whatever is
-        # typed against Earth Engine; IMAGE only, a TABLE is not a raster layer.
-        # It publishes {asset_id, type, column, value} and treats ``value`` as
-        # output-only, so an edited layer's id is restored through ``initial``
-        # (snapshotted once at mount). The dialog is persistent and both ways
-        # out run reset(), so the selector always mounts after the prefill.
-        AssetSelectComponent(
-            types=["IMAGE"],
-            initial={"asset_id": asset_id} if asset_id else None,
-            on_value=lambda sel: set_asset_id((sel or {}).get("asset_id") or ""),
-        )
+        _GeeAssetField(asset_id=asset_id, on_asset_id=set_asset_id)
         rv.TextField(
             label=t("vars.modal.custom_scale_label"),
             v_model=scale,
@@ -656,6 +653,36 @@ def _render_custom_fields(
             hint=t("vars.modal.custom_rasterization_method_hint"),
             persistent_hint=True,
         )
+
+
+@solara.component
+def _GeeAssetField(asset_id: str, on_asset_id: Callable[[str], None]):
+    """Render pysepal's asset selector, seeded once with the stored asset id.
+
+    The selector lists the user's assets and checks whatever is typed against
+    Earth Engine. It lists IMAGE assets only, because a TABLE is not a raster
+    layer. It publishes ``{asset_id, type, column, value}``, and the modal
+    keeps only the id.
+
+    ``value`` is two-way in pysepal 4, and a change from outside replaces the
+    selector's draft. Passing the modal's own id back would count as such a
+    change after every pick, since ``{"asset_id": id}`` never equals the
+    published dict. So the seed is taken once, when the field mounts. Both
+    ways out of the dialog run ``reset()``, which unmounts this field, so each
+    opening mounts it again after the prefill has landed.
+
+    Args:
+        asset_id: the stored asset id, or "" for a new layer.
+        on_asset_id: callback(str) — the modal's asset-id setter.
+    """
+    seed = solara.use_memo(
+        lambda: {"asset_id": asset_id} if asset_id else None, dependencies=[]
+    )
+    AssetSelectComponent(
+        types=["IMAGE"],
+        value=seed,
+        on_value=lambda sel: on_asset_id((sel or {}).get("asset_id") or ""),
+    )
 
 
 _SWATCH_STYLE = (

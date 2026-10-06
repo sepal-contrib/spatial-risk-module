@@ -6,27 +6,28 @@ Run locally:
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 import reacton.ipyvuetify as rv
 import solara
 from pysepal import mapping as sm
 from pysepal.logger import setup_logging
-from pysepal.sepalwidgets.vue_app import LocaleSelect, MapApp, ThemeToggle
+from pysepal.sepalwidgets.vue_app import MapApp
 from pysepal.solara import (
     NotificationProvider,
     get_current_gee_interface,
     get_current_sepal_client,
+    get_current_theme_state,
+    prime_dev_auth,
     setup_sessions,
     setup_solara_server,
     setup_theme_colors,
     use_notifications,
     with_sepal_sessions,
 )
-from pysepal.solara.locale import resolve_locale_state
-from solara.lab.components.theming import theme
 
-from gui.i18n import get_translator, reset_translator, set_app_locale, t
+from gui.i18n import app_available_locales, reset_translator, t, use_app_locale
 from gui.scripts.aoi_io import load_aoi, persist_aoi
 from gui.scripts.map_helpers import (
     add_satellite_basemap,
@@ -98,18 +99,34 @@ logger.setLevel(logging.DEBUG)
 logger.debug("Spatial Risk app initialized")
 logger.debug("Solara version: %s", solara.__version__)
 
+# Guard for dev auth activation: reused by both seed-helper checks to avoid
+# repetition and to ensure consistent logic.
+_DEV_AUTH_ARMED = os.getenv("PYSEPAL_DEV_AUTH", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 # Forward INFO+ milestones from tracked background jobs into the pysepal
 # notification task pill (see gui/scripts/notify_bridge.py).
 install_task_log_handler()
 
 setup_solara_server(extra_asset_locations=[])
 
+# Prime the blocking developer login once at startup so the HTTP POST stays
+# off the render path. This function RAISES RuntimeError when PYSEPAL_DEV_AUTH
+# is not armed (it is not a no-op), hence the guard; when armed it raises
+# ValueError if the LOCAL_SEPAL_* credentials are unset.
+if _DEV_AUTH_ARMED:
+    prime_dev_auth()
+
 
 @solara.lab.on_kernel_start
 def on_kernel_start():
     """Reset per-kernel state and open the SEPAL sessions."""
-    reset_translator()  # drop the cached translator; Page rebuilds it from the
-    # session LocaleState (the browser resolves the locale, not the config file)
+    reset_translator()  # drop the cached translator; Page rebuilds it in the
+    # kernel's pysepal locale (the browser selector resolves it, no config file)
     return setup_sessions()
 
 
@@ -214,15 +231,44 @@ def ProjectPanel(on_close=None):
             when = next((i.modified for i in infos.value if i.name == name), None)
             # Restore the saved AOI (sidecar geometry + metadata) so the map can
             # frame it and the downstream tabs unlock. Set before installing the
-            # project so the load-zoom effect sees it on the same render.
-            # restoring_project(): Solara can render BETWEEN these two sets, and
+            # project so the load-zoom effect sees it on the same render, and
+            # so AoiTile reads the incoming spec off it on the switch.
+            # restoring_project(): Solara can render BETWEEN these sets, and
             # the attach-on-select effect must not persist the incoming AOI
             # into the outgoing project (see AppState.attach_current_aoi).
             with app_state.restoring_project():
-                app_state.aoi_result.set(
-                    load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
-                )
+                restored = load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
+                app_state.aoi_result.set(restored)
                 app_state.load_project_state(loaded, when)
+                # Only after the signal bump: its render resets the picker when
+                # needed (AoiTile) and syncs the draw control's visibility; this
+                # write then restores the picker, which seeds the draw control
+                # synchronously and re-runs the selection (autoselect).
+                app_state.aoi_spec.set(restored.spec if restored is not None else None)
+            # Heal a legacy manifest (ADMIN0/ADMIN1/ASSET, saved before
+            # aoi_spec existed) right away: the autoselect re-run, which
+            # happens asynchronously after this function returns, publishes
+            # an AoiResult that is often *equal* to `restored` (a
+            # frozen-dataclass comparison), so solara's equals_extra skip
+            # keeps aoi_result from changing and the attach-on-select effect
+            # (gui/solara_app.py, persist_aoi_on_select) never re-fires on its
+            # own. Scoped to manifests with no aoi_spec at all: attach_aoi
+            # rewrites anything that differs from what THIS app version would
+            # write, so calling it unconditionally would downgrade a manifest
+            # saved by a newer version (a spec schema_version/fields this one
+            # doesn't know about) back to a legacy-synthesized spec. attach_aoi
+            # is idempotent, so a manifest that is already current is left
+            # untouched (no mtime bump on a normal load). A failed heal must
+            # not turn a successful load into a load error.
+            if not (loaded.aoi or {}).get("aoi_spec"):
+                try:
+                    app_state.attach_current_aoi(data_dir=DATA_DIR)
+                except Exception:
+                    logger.warning(
+                        "Failed to heal AOI manifest for project %r on load",
+                        name,
+                        exc_info=True,
+                    )
             notifications.success(t("project.status_loaded", name=name))
             set_load_open(False)
             if on_close is not None:
@@ -622,11 +668,12 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
     # AoiView never gets to remove its draw control (toolbar + editable drawn
     # shape) from the shared map when the user moves to another step. Mirror
     # the tab state onto the map here. Also keyed on project_loaded_signal
-    # (a load remounts AoiView, whose restore may seed the control back onto
-    # the map while another tab is active) and on the AOI loading flag: the
-    # restore auto-select re-seeds the control from its async task — after
-    # the load-time effect run — and flips loading False right afterwards,
-    # so that flip is what re-hides a task-time re-add on a non-AOI tab.
+    # (the switch's picker reset in AoiTile puts the control back while DRAW
+    # stays selected; child effects run first, so this run re-hides it) and
+    # on the AOI loading flag: do_load writes the restored spec only after
+    # the bump, and AoiView's restore then seeds the control back onto the
+    # map and raises loading in the same pass (autoselect), so that flip is
+    # what re-hides a restore-time re-add on a non-AOI tab.
     dc_hidden = solara.use_ref(False)
     # Last project_loaded_signal this effect saw: the helper may only drop a
     # remembered hide on a project switch — any other re-run while away
@@ -667,6 +714,7 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
                 map_=map_,
                 gee_interface=gee_interface,
                 aoi_result=app_state.aoi_result,
+                aoi_spec=app_state.aoi_spec,
                 restore_signal=app_state.project_loaded_signal.value,
                 loading=app_state.loading,
             )
@@ -770,34 +818,11 @@ def Page():
 
     gee_interface = get_current_gee_interface()
     sepal_client = get_current_sepal_client()
-    theme_toggle = solara.use_memo(lambda: ThemeToggle(), [])
-    locale_state = resolve_locale_state()
-    locale_select = solara.use_memo(
-        lambda: LocaleSelect(translator=get_translator()), []
-    )
-
-    def _bind_locale():
-        # Wired here — NOT in on_kernel_start — because @with_sepal_sessions
-        # creates the session's LocaleState only when Page first renders;
-        # kernel-start would bind the process fallback (Codex review P1).
-        locale_select.bind_locale_state(locale_state)
-
-        def handler(change):
-            set_app_locale(change["new"])
-
-        locale_state.observe(handler, "locale")
-        return lambda: locale_state.unobserve(handler, "locale")
-
-    solara.use_effect(_bind_locale, [id(locale_state)])
-
-    def _observe_theme():
-        def handler(e):
-            return setattr(theme, "dark", e["new"])
-
-        theme_toggle.observe(handler, "dark")
-        return lambda: theme_toggle.unobserve(handler, "dark")
-
-    solara.use_effect(_observe_theme, [])
+    # v4 owns the theme toggle itself (scope-keyed ThemeState); the app just
+    # shares its scope's state with the map and MapApp.
+    theme_state = get_current_theme_state()
+    # Follow the header language selector: pysepal's kernel locale drives t().
+    use_app_locale()
 
     def create_map():
         map_ = sm.SepalMap(
@@ -806,7 +831,7 @@ def Page():
             center=[0, 0],
             gee=True,
             gee_interface=gee_interface,
-            theme_toggle=theme_toggle,
+            theme_state=theme_state,
             fullscreen=True,
         )
         # Second basemap (hidden) so the layers control offers a satellite
@@ -879,9 +904,7 @@ def Page():
     solara.use_effect(reset_jobs_on_load, [project_loaded_signal])
 
     def _seed_test_aoi():
-        import os
-
-        if os.getenv("SOLARA_TEST", "false").lower() != "true":
+        if not _DEV_AUTH_ARMED:
             return
         if app_state.aoi_result.value is not None:
             return
@@ -894,17 +917,15 @@ def Page():
             geometry=[box(12.403, 43.893, 12.517, 43.993)],
             crs="EPSG:4326",
         )
-        logger.debug("SOLARA_TEST: seeding AOI with San Marino")
+        logger.debug("PYSEPAL_DEV_AUTH: seeding AOI with San Marino")
         app_state.aoi_result.set(AoiResult(method="DRAW", name="San Marino", gdf=gdf))
 
     # Test AOI seeding disabled for now — start from an empty project.
-    # (SOLARA_TEST stays on; re-enable by uncommenting the line below.)
+    # (To enable, uncomment the line below and set PYSEPAL_DEV_AUTH=1.)
     # solara.use_effect(_seed_test_aoi, [])
 
     def _seed_test_variables():
-        import os
-
-        if os.getenv("SOLARA_TEST", "false").lower() != "true":
+        if not _DEV_AUTH_ARMED:
             return
         p = app_state.project.value
         aoi_result = app_state.aoi_result.value
@@ -987,14 +1008,14 @@ def Page():
                 )
 
         logger.debug(
-            "SOLARA_TEST: seeded %d raw + %d processed variables",
+            "PYSEPAL_DEV_AUTH: seeded %d raw + %d processed variables",
             len(p.raw_variables),
             len(p.processed_variables),
         )
         app_state.project.set(p.model_copy())
 
     # Test variable seeding disabled for now — Step 2 starts with no variables.
-    # (SOLARA_TEST stays on; re-enable by uncommenting the line below.)
+    # (To enable, uncomment the line below and set PYSEPAL_DEV_AUTH=1.)
     # solara.use_effect(_seed_test_variables, [app_state.project.value])
 
     # Test model/prediction seeding removed: it injected a fake GLM model and a
@@ -1093,8 +1114,9 @@ def Page():
 
     # Kernel-scoped notification bus + UI (toasts top-right, task pill
     # bottom-right). Mounted BEFORE the MapApp element so the bus exists by the
-    # time the workflow tiles first render — their use_notifications() then
-    # resolves a real Notifier instead of a first-render NoopNotifier.
+    # time the workflow tiles first render — pysepal 4's use_notifications()
+    # raises NotificationProviderError, not a first-render NoopNotifier, when
+    # nothing is mounted yet.
     NotificationProvider()
 
     # Floating layer legend (bottom-center over the map). Mounted before MapApp,
@@ -1107,8 +1129,8 @@ def Page():
         main_map=[sepal_map],
         steps_data=steps_data,
         initial_step=1,  # auto-open the Project dialog (step id 1) at startup
-        theme_toggle=[theme_toggle],
-        language_selector=[locale_select],
+        theme_state=theme_state,
+        locales=app_available_locales(),
         right_panel_config=right_panel_config,
         right_panel_content=right_panel_content,
         right_panel_open=True,

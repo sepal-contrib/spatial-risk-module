@@ -1790,13 +1790,14 @@ def _chart_record(metrics=("MedAE", "R2"), rows=None):
 
 @contextlib.contextmanager
 def _dark_theme():
-    """Put the SESSION theme state in dark mode, and restore after.
+    """Put the KERNEL theme state in dark mode, and restore after.
 
     The charts follow pysepal's resolved ``ThemeState.dark`` (via
     ``use_theme_dark``), not solara's internal theme traitlet: the app runs
-    under ``@with_sepal_sessions`` and MapApp's ThemeToggle drives the session
-    state. Headless, ``get_current_theme_state()`` hands back the module-level
-    fallback state — the same object the hook observes.
+    under ``@with_sepal_sessions`` and MapApp's ThemeToggle drives the kernel
+    state. Headless (no Solara server), ``get_current_theme_state()`` hands
+    back the one ``ThemeState`` pysepal keeps per process — the same object
+    the hook observes.
     """
     from pysepal.solara import get_current_theme_state
 
@@ -1888,7 +1889,7 @@ def test_charts_tab_repaints_when_the_theme_is_toggled_in_place():
     a render body sets up no subscription, so a toggle re-renders nothing, and
     reacton's prop-equality bailout blocks the component even when its parent
     does re-render. ``use_theme_dark()`` observes ``ThemeState.dark`` instead —
-    pysepal's session-scoped state that MapApp's ThemeToggle actually drives —
+    pysepal's kernel-scoped state that MapApp's ThemeToggle actually drives —
     so the flip itself schedules the re-render.
     """
     from gui.scripts.echarts_options import theme_colors

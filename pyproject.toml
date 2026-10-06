@@ -10,7 +10,7 @@ license = {text = "MIT"}
 # binary with no PyPI package) and python itself (see requires-python).
 dependencies = [
     "dask[distributed]", # distributed: dask.distributed is imported
-    "ee-client>=3.2.0,<4", # <3.1.1 binds one httpx pool to the first event loop; the sync/async GEEInterface bridge needs the per-loop resources of 3.1.1+
+    "ee-client>=3.2.1,<4", # <3.1.1 binds one httpx pool to the first event loop; the sync/async GEEInterface bridge needs the per-loop resources of 3.1.1+; 3.2.1 is the pysepal 4 floor (assets cache survives a cancelled fetch)
     "fiona",
     "forestatrisk>=1.3.2",
     "formulaic",
@@ -40,7 +40,7 @@ dependencies = [
     "scipy",
     "setuptools",
     "shapely",
-    "solara",
+    "solara>=1.60.3,<2", # pysepal 4 floor; conda-forge tops out at 1.58.2
     "vectortileserver==0.3.0",
     "voila",
     "wheel",
@@ -49,9 +49,9 @@ dependencies = [
     # SEPAL's custom Earth Engine build; it replaces the stock earthengine-api,
     # whose v1.1.5rc0 conflicts with pysepal's earthengine-api>1.6.0.
     "earthengine-api @ git+https://github.com/openforis/earthengine-api.git@v1.6.14#subdirectory=python",
-    # pysepal fork, spatial-risk integration branch (browser locale, AOI restore,
-    # PMTiles layers, GEE event-loop fixes on top of v3.8.0).
-    "pysepal @ git+https://github.com/SerafiniJose/pysepal.git@spatial-risk",
+    # pysepal 4.1: topology-driven sessions, AoiSpec restore, pysepal.i18n.
+    # Upstream release; replaces the SerafiniJose/pysepal@spatial-risk fork pin.
+    "pysepal==4.1.0",
     # Stock release; tiles use jupyter-server-proxy, not its comm bridge.
     "jupyter-loopback[comm]==0.3.3",
 ]

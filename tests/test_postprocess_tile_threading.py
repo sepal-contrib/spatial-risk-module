@@ -19,8 +19,8 @@ whole call), unlike the forestatrisk MCMC case that needed a subprocess.
 import threading
 
 import pytest
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 # Long enough that a synchronous handler visibly blocks, short enough that the
 # regression case fails fast instead of hanging the suite.
@@ -85,8 +85,8 @@ def _render_capturing_on_submit(monkeypatch, project, notifier=None):
     if notifier is not None:
         monkeypatch.setattr(postprocess_tile, "use_notifications", lambda: notifier)
 
-    box, rc = reacton.render(
-        postprocess_tile.PostProcessTile(project=project, map_=None),
+    box, rc = render_under_notifications(
+        lambda: postprocess_tile.PostProcessTile(project=project, map_=None),
         handle_error=False,
     )
     return captured["on_submit"], rc

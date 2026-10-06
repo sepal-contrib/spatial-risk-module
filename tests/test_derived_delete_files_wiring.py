@@ -10,12 +10,13 @@ from pathlib import Path
 
 import ipyvuetify as vw
 import pytest
-import reacton
 import solara
 
 from gui.i18n import t
 
 t("common.cancel")  # warm the translator before the first render
+
+from _notification_host import render_under_notifications  # noqa: E402
 
 from gui.scripts import process_actions  # noqa: E402
 from gui.tile import postprocess_tile, process_tile  # noqa: E402
@@ -102,8 +103,8 @@ def _mount(monkeypatch, tile, project_reactive, **props):
     ):
         if hasattr(module, name):
             monkeypatch.setattr(module, name, _StubList)
-    box, rc = reacton.render(
-        tile(project=project_reactive, **props), handle_error=False
+    box, rc = render_under_notifications(
+        lambda: tile(project=project_reactive, **props), handle_error=False
     )
     _OPEN_CONTEXTS.append(rc)
     return box, captured

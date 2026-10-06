@@ -14,9 +14,18 @@ import threading
 import pytest
 from pysepal.solara.notifications.bus import NotificationBus
 from pysepal.solara.notifications.notifier import Notifier
-from pysepal.solara.notifications.state import TaskStatus, ToastType
+from pysepal.solara.notifications.state import TaskStatus, ToastType, TrackedTask
 
 from gui.scripts import notify_bridge
+
+# progress_detail is a fork-only TrackedTask field (the download-progress
+# pill); upstream pysepal 4 does not carry it yet (pysepal PR-1 would add it).
+# Skip instead of xfail so these come back automatically the moment the pin
+# moves, with no code change here.
+_needs_progress_detail = pytest.mark.skipif(
+    "progress_detail" not in TrackedTask.__dataclass_fields__,
+    reason="progress_detail is fork-only until pysepal PR-1 lands upstream",
+)
 
 
 def _fresh():
@@ -188,6 +197,7 @@ class _RecordingTask:
         self.progress_calls.append((value, detail))
 
 
+@_needs_progress_detail
 def test_layer_reporter_start_updates_title_and_resets_progress():
     """A layer-start event retitles the task and resets the ring/detail."""
     _logger, bus, notifier = _fresh()
@@ -213,6 +223,7 @@ def test_layer_reporter_single_layer_keeps_original_title():
         assert bus.tasks.value[0].title == "Downloading layer 'rivers'"
 
 
+@_needs_progress_detail
 def test_layer_reporter_tile_ticks_publish_progress_and_detail():
     """Tile ticks publish the layer fraction plus the tile-count detail."""
     _logger, bus, notifier = _fresh()
@@ -371,6 +382,7 @@ def test_cancellation_is_not_reported_as_a_failure():
     assert [t for t in bus.toasts.value if t.type == ToastType.ERROR] == []
 
 
+@_needs_progress_detail
 def test_layer_reporter_wait_publishes_indeterminate_detail():
     """A queued layer shows its waiting message on an indeterminate ring."""
     _logger, bus, notifier = _fresh()
@@ -388,6 +400,7 @@ def test_layer_reporter_wait_publishes_indeterminate_detail():
         assert bus.tasks.value[0].progress_detail == "rivers — tile 1/4"
 
 
+@_needs_progress_detail
 def test_layer_reporter_wait_without_format_is_a_noop():
     """Callers that don't localize a wait message get a safe no-op hook."""
     _logger, bus, notifier = _fresh()

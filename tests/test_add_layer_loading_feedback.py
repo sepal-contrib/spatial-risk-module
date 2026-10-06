@@ -20,6 +20,7 @@ import ipyvuetify as vw
 import pytest
 import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.i18n import t
 
@@ -358,7 +359,9 @@ def _mount_capturing(monkeypatch, module, list_name, element, **patches):
     monkeypatch.setattr(module, list_name, _StubList)
     for name, value in patches.items():
         monkeypatch.setattr(module, name, value)
-    _box, rc = reacton.render(element, handle_error=False)
+    _box, rc = render_under_notifications(
+        lambda: solara.Column(children=[element]), handle_error=False
+    )
     return captured, rc
 
 
