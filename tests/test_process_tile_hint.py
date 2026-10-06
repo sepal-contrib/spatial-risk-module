@@ -508,8 +508,8 @@ def test_harmonize_all_is_the_hourglass_while_a_run_is_in_flight(monkeypatch):
 
     project = solara.reactive(_project_with_base(2), equals=lambda a, b: a is b)
     processing = solara.reactive(True)
-    _box, rc = reacton.render(
-        process_tile.ProcessTile(project=project, processing=processing),
+    _box, rc = render_under_notifications(
+        lambda: process_tile.ProcessTile(project=project, processing=processing),
         handle_error=False,
     )
     try:
