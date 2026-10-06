@@ -7,6 +7,7 @@ from gui.scripts.artifact_names import (
     name_field_messages,
     prediction_name_exists,
     sanitize_key,
+    suggest_copy_name,
     suggest_name,
     suggest_version,
 )
@@ -117,3 +118,11 @@ def test_name_field_messages_states():
         "widgets.artifact_name.saved_as",
         False,
     )
+
+
+def test_suggest_copy_name_first_free_copy():
+    """A duplicate is '<name>_copy', then '_copy_2', '_copy_3'..."""
+    assert suggest_copy_name("calib", {"calib"}) == "calib_copy"
+    assert suggest_copy_name("calib", {"calib", "calib_copy"}) == "calib_copy_2"
+    taken = {"calib", "calib_copy", "calib_copy_2"}
+    assert suggest_copy_name("calib", taken) == "calib_copy_3"

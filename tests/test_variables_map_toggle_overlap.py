@@ -70,6 +70,7 @@ def _render(monkeypatch, project, map_):
         vars_on_map=None,
         on_download=None,
         downloading_keys=frozenset(),
+        toggling_keys=frozenset(),
     ):
         """Capture on_toggle_map and render nothing."""
         captured["on_toggle_map"] = on_toggle_map

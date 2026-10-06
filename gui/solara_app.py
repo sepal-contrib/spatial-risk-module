@@ -51,7 +51,11 @@ from gui.scripts.project_ui_helpers import (
     overwrite_needed,
     validate_project_name,
 )
-from gui.scripts.tile_proxy import borrow_localtileserver_prefix
+from gui.scripts.tile_proxy import (
+    borrow_localtileserver_prefix,
+    loopback_bridge_needed,
+    prefer_http_proxy,
+)
 from gui.store.project_writers import is_writing
 from gui.store.state_manager import app_state
 from gui.tile.aoi_tile import AoiTile
@@ -66,16 +70,29 @@ from gui.tile.summary_tile import ProjectSummaryTile
 from gui.tile.toolbox_tile import ToolboxTile, allocation_jobs, density_on_map
 from gui.tile.train_tile import TrainTile, train_jobs
 from gui.tile.variables_tile import VariablesTile, vars_on_map
+from gui.widget.enter_key import ENTER_DEFAULT, EnterKeyListener
 from gui.widget.manage_projects import ConfirmDeleteProjectDialog, ManageProjectsDialog
 from gui.widget.pipeline_header import PipelineHeader
 from gui.widget.text_style import MUTED
+from spatialrisk.gdal_env import keep_gdal_sidecars_visible, pin_gdal_num_threads
 from spatialrisk.project import DATA_DIR, Project
 
 # On SEPAL, reuse the raster tiles' jupyter-server-proxy route for the PMTiles
 # vector-tile server (vectortileserver never autodetects one). Must run before
 # any vectortileserver TileClient is built — they are only constructed lazily
-# when a sample layer is added, so after imports is early enough.
+# when a sample layer is added, so after imports is early enough. With a proxy
+# route in place, keep both tile servers off the jupyter-loopback comm bridge
+# (its prefix probe misreads the tile server's 404 and tunnels every tile).
 borrow_localtileserver_prefix()
+prefer_http_proxy()
+
+# localtileserver hides .ovr sidecars process-wide (EMPTY_DIR) from the first
+# map layer on, which makes large rasters render from full resolution — see
+# keep_gdal_sidecars_visible. Order-independent, so after imports is fine.
+keep_gdal_sidecars_visible()
+# It also sets GDAL_NUM_THREADS=ALL_CPUS from that layer on; pin half the cores
+# instead so processing speed doesn't depend on whether the map was used.
+pin_gdal_num_threads()
 
 logger = setup_logging(logger_name="spatial_risk")
 logger.setLevel(logging.DEBUG)
@@ -120,8 +137,11 @@ def _loopback_bridge_widget():
     worker threads, but under voila a ``display()`` outside the initial cell
     execution never reaches the browser — the widget must be mounted in the
     app's own widget tree so its JS half installs the tile-URL interceptors
-    before any local tile layer renders.
+    before any local tile layer renders. ``None`` when both tile servers go
+    through an HTTP proxy instead (SEPAL; see ``prefer_http_proxy``).
     """
+    if not loopback_bridge_needed():
+        return None
     try:
         import jupyter_loopback
 
@@ -543,6 +563,7 @@ def ProjectPanel(on_close=None):
                     color="primary",
                     small=True,
                     disabled=not (validation and validation.valid),
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
     # ---- Discard-unsaved confirm (New while dirty) ----------------------
@@ -570,6 +591,7 @@ def ProjectPanel(on_close=None):
                     on_click=_open_new_dialog,
                     color="error",
                     small=True,
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
     # ---- Overwrite confirm (Save over an existing project) --------------
@@ -600,6 +622,7 @@ def ProjectPanel(on_close=None):
                     on_click=_really_save,
                     color="error",
                     small=True,
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
     # ---- Manage dialog + delete confirmation ----------------------------
@@ -1073,6 +1096,10 @@ def Page():
     # spurious horizontal scrollbar even when the panel fits. The dialog card
     # already clips with `overflow: hidden`, so pin the content's x-axis hidden.
     solara.Style(".dialog-content { overflow-x: hidden !important; }")
+
+    # Enter presses the open modal's default button (the one tagged
+    # ENTER_DEFAULT); the key is read in the browser, see gui/widget/enter_key.
+    EnterKeyListener()
 
     app_title = compute_app_title(
         app_state.project.value, app_state.project_dirty.value

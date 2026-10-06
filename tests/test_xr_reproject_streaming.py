@@ -96,9 +96,17 @@ def test_warp_peak_memory_does_not_grow_with_output(tmp_path, monkeypatch):
     # (parallel.worker_threads) honours this override. Per-worker working
     # set is a constant; with the pool pinned the ratio below is clean.
     monkeypatch.setenv("SPATIAL_RISK_NUM_THREADS", "2")
-
-    peak_small, _ = _traced_peak(tmp_path, 6000)
-    peak_large, out_large = _traced_peak(tmp_path, 12000)
+    # One GDAL thread, whatever earlier tests left behind. A config option, not
+    # setenv: importing the app pins GDAL_NUM_THREADS in os.environ, and any
+    # rasterio.Env that sets it (sampling) restores the value it found as a
+    # config option on exit, which outranks the environment from then on.
+    # Extra GDAL threads keep one more write chunk in flight, a constant
+    # ~40 MB (measured at 2-8: 128 -> 158 MB for these sizes, 189 MB for a
+    # 333 MB output), which the absolute bound below cannot absorb at this
+    # small size; the ratio still holds.
+    with rasterio.Env(GDAL_NUM_THREADS=1):
+        peak_small, _ = _traced_peak(tmp_path, 6000)
+        peak_large, out_large = _traced_peak(tmp_path, 12000)
 
     # Measured with the fix: 111 MB -> 118 MB for 35 MB -> 143 MB outputs.
     assert peak_large < 1.5 * peak_small, (

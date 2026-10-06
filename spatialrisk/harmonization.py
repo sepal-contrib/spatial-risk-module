@@ -175,6 +175,40 @@ def expected_raster_type(var: Any):
     return getattr(var, "raster_type", None)
 
 
+def lacks_categorical_levels(var: Any) -> bool:
+    """True for a categorical layer registered before its categories were stored.
+
+    ``add_as_processed`` scans a categorical output and saves its distinct
+    values as ``categorical_levels``; an output harmonized by an older version
+    has none, and training refuses it. Re-harmonizing re-registers it, so both
+    status checks count such an output as pending.
+    """
+    return (
+        getattr(var, "raster_type", None) == RasterType.categorical
+        and getattr(var, "categorical_levels", None) is None
+    )
+
+
+def layers_missing_categories(project: Any) -> List[str]:
+    """Names of harmonized layers that Harmonize must redo to store categories.
+
+    Only outputs of raw layers: those are what a re-harmonize re-registers.
+    Sorted and de-duplicated (a temporal layer has one output per year).
+    """
+    raw = getattr(project, "raw_variables", None) or {}
+    processed = getattr(project, "processed_variables", None) or {}
+    names = {
+        getattr(output, "name", None)
+        for output in (
+            processed.get(output_key(var))
+            for var in list(raw.values())
+            if is_harmonizable(var)
+        )
+        if output is not None and lacks_categorical_levels(output)
+    }
+    return sorted(n for n in names if n)
+
+
 def _matches_geobox(path: Path, geobox) -> bool:
     """True when the raster at ``path`` sits exactly on ``geobox``.
 
@@ -218,6 +252,8 @@ def is_current(var: Any, output: Any, geobox) -> bool:
     # a no-op.
     if getattr(output, "raster_type", None) != expected_raster_type(var):
         return False  # the layer is harmonized differently now
+    if lacks_categorical_levels(output):
+        return False  # registered before categories were stored
     src_path = getattr(var, "path", None)
     out_path = getattr(output, "path", None)
     if src_path is None or out_path is None:
@@ -375,6 +411,8 @@ def harmonization_status(project: Any) -> HarmonizationStatus:
             # checks it on disk; the pure path must too. Both sides are
             # attribute reads, so it stays free.
             pending.append(key)
+        elif lacks_categorical_levels(output):
+            pending.append(key)  # registered before categories were stored
         elif out_sig == base_sig:
             current.append(key)
         else:

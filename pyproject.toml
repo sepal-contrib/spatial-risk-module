@@ -52,8 +52,8 @@ dependencies = [
     # pysepal 4.0: topology-driven sessions, AoiSpec restore, pysepal.i18n.
     # Upstream release; replaces the SerafiniJose/pysepal@spatial-risk fork pin.
     "pysepal==4.0.0",
-    # jupyter-loopback fork: voila tile-404 fixes, pending upstream PR.
-    "jupyter-loopback @ git+https://github.com/SerafiniJose/jupyter-loopback.git@fix/voila-localhost-proxy-probe",
+    # Stock release; tiles use jupyter-server-proxy, not its comm bridge.
+    "jupyter-loopback[comm]==0.3.3",
 ]
 
 [tool.setuptools.packages.find]
@@ -106,4 +106,4 @@ convention = "google"
 # "determine"). Extend this when adding a locale, after checking each hit is a
 # genuine word and not a real typo. "reencode" is ours: the identifier
 # reencode_in_place, which codespell reads as a misspelling of "re-encode".
-ignore-words-list = "absolue,absorve,ajustement,alignement,ans,anual,approche,attendent,bloc,bord,celles,clases,classe,complet,considere,conter,continuos,continus,convient,eles,erro,espaces,exemple,existant,explicite,fixe,fonction,formule,formules,garantie,gere,hace,initiales,interprete,itens,limite,medias,momento,nome,pares,persistant,posible,projet,projets,reencode,relie,requiere,ressource,ser,somme,termine,termo,transforme,valide,vetor"
+ignore-words-list = "absolue,absorve,ajustement,alignement,ans,anual,approche,attendent,bloc,bord,celles,clases,classe,complet,considere,conter,continuos,continus,convient,eles,erro,espaces,exemple,existant,explicite,fixe,fonction,formule,formules,garantie,gere,hace,initiales,interprete,itens,limite,medias,momento,nome,nomes,pares,persistant,posible,projet,projets,reencode,relie,requiere,ressource,ser,somme,termine,termo,transforme,valide,vetor"

@@ -147,8 +147,9 @@ class GLMModel(BaseRiskModel):
             Stripe worker threads. None lets the resource policy choose;
             1 runs serially on the calling thread.
         """
-        from patsy.highlevel import build_design_matrices
+        from scipy.special import expit
 
+        from spatialrisk.mlmodels.linear_predictor import compile_linear_predictor
         from spatialrisk.mlmodels.windowed_predict import predict_windowed
 
         if self._ml_model is None:
@@ -162,10 +163,41 @@ class GLMModel(BaseRiskModel):
 
         design_info = self._x_design_info
         estimator = self._ml_model
+        if list(estimator.classes_) != [0, 1]:
+            raise ValueError(
+                "GLM classes must be [0, 1] for the risk column, "
+                f"got {list(estimator.classes_)}"
+            )
+        # predict_proba used to catch a model fitted on another design with
+        # sklearn's feature-count check; compile_linear_predictor ignores
+        # trailing coefficients, so a wider coef_ would silently shift them
+        # onto the wrong columns.
+        n_cols = len(design_info.column_names)
+        if estimator.coef_.shape[1] != n_cols:
+            raise ValueError(
+                f"GLM has {estimator.coef_.shape[1]} coefficients but its design "
+                f"has {n_cols} columns: the model was fitted on another design"
+            )
+        predictor = compile_linear_predictor(design_info, estimator.coef_[0])
+        intercept = float(estimator.intercept_[0])
+        logger.info("GLM design: %s", predictor.describe())
 
         def predict_block(block_df, extras):
-            (x,) = build_design_matrices([design_info], block_df, NA_action="drop")
-            return estimator.predict_proba(np.asarray(x))[:, 1]
+            # expit(decision) is exactly what LogisticRegression.predict_proba
+            # applies for a binary model, so this equals predict_proba(...)[:, 1].
+            eta = predictor.eta(block_df)
+            eta += intercept
+            # sklearn's input check used to reject a +-inf feature; the
+            # compiled predictor would turn one into a saturated (or NaN) risk.
+            finite = np.isfinite(eta)
+            if not finite.all():
+                raise ValueError(
+                    "GLM linear predictor is not finite for "
+                    f"{finite.size - np.count_nonzero(finite)} pixel(s): a feature "
+                    "value is infinite or too large"
+                )
+            del finite
+            return expit(eta)
 
         predict_windowed(
             active_dataset.target.path,
@@ -175,7 +207,7 @@ class GLMModel(BaseRiskModel):
             mask=mask,
             mask_values=_mask_values(mask_value),
             workers=workers,
-            n_design_cols=len(design_info.column_names),
+            n_design_cols=predictor.working_set_columns,
             log=logger,
         )
         logger.info("GLM raster written: %s", output_file)

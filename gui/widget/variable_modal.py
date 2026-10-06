@@ -21,6 +21,8 @@ from gui.scripts.predefined_variables import (
     param_specs,
 )
 from gui.widget.artifact_name_field import ArtifactNameField
+from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
+from gui.widget.enter_key import ENTER_DEFAULT
 from gui.widget.text_style import MUTED
 from spatialrisk.variables.models import (
     DataType,
@@ -321,6 +323,10 @@ def VariableModal(
     # keeps a click aimed at an open v-select menu from taking the form with
     # it, and the ESC handler restores the keyboard dismissal it disables (via
     # on_cancel, so the form resets — the old outside-click close did not).
+    # Not closed, but not ignored either: every outside click nudges the
+    # .v-dialog element (content_class, not the card: see dialog_nudge).
+    # Holds hooks — call it unconditionally.
+    nudge, on_click_outside = use_outside_click_nudge(open_.value)
     dialog = rv.Dialog(
         v_model=open_.value,
         on_v_model=open_.set,
@@ -328,11 +334,14 @@ def VariableModal(
         eager=True,
         persistent=True,
         no_click_animation=True,
+        content_class=nudge,
     )
     # rv.use_event is a hook — call it unconditionally.
+    rv.use_event(dialog, "click:outside", on_click_outside)
     rv.use_event(dialog, "keydown.esc", lambda *_: on_cancel())
     with dialog:
         with rv.Card():
+            solara.Style(NUDGE_CSS)
             with rv.CardTitle():
                 solara.Text(title)
 
@@ -403,6 +412,7 @@ def VariableModal(
                     color="primary",
                     small=True,
                     icon_name="mdi-plus",
+                    classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
 

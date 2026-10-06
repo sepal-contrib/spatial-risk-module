@@ -1,5 +1,6 @@
 #!/bin/bash
 # sources the .env file and runs ui.ipynb via voila — the SEPAL app entry path.
+# Open http://127.0.0.1:PORT/voila/render/ui.ipynb
 # Usage: ./run_ui.sh [--port PORT]
 # If no port is provided, defaults to 8911 (run_solara.sh uses 8910)
 
@@ -61,5 +62,12 @@ fi
 export CPL_TMPDIR="${CPL_TMPDIR:-${TMPDIR:-/tmp}/spatial_risk_gdal_$(id -u)}"
 mkdir -p "$CPL_TMPDIR"
 
-# voila ui.ipynb --port=$PORT --no-browser --show_tracebacks=True
-voila ui.ipynb --port=$PORT --no-browser
+# Serve voila from inside jupyter-server, as SEPAL does, and route map tiles
+# through jupyter-server-proxy's /proxy/{port} like SEPAL's
+# LOCALTILESERVER_CLIENT_PREFIX. Standalone `voila ui.ipynb` loads no server
+# extensions, so that route would 404 there. Local only: no token, loopback bind.
+export LOCALTILESERVER_CLIENT_PREFIX="${LOCALTILESERVER_CLIENT_PREFIX:-/proxy/{port}}"
+jupyter server --port="$PORT" --no-browser \
+  --ServerApp.ip=127.0.0.1 --IdentityProvider.token= \
+  --ServerApp.root_dir="$SCRIPT_DIR" \
+  --ServerApp.default_url=/voila/render/ui.ipynb

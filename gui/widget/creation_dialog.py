@@ -14,6 +14,8 @@ import solara
 
 from gui.i18n import t
 from gui.widget.confirm_dialog import ConfirmDialog
+from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
+from gui.widget.enter_key import ENTER_DEFAULT
 
 # Restyle the Advanced-parameters panel to sit in the form's flow: same
 # border/height/label colour as the outlined dense fields, no 24px inset.
@@ -163,7 +165,12 @@ def CreationDialog(
     # click meant to dismiss an open v-select menu closed the whole form: the
     # menu renders detached, so Vuetify's overlay stack does not put it above
     # the dialog here and both read the same click as their own. Vuetify's
-    # persistent "shake" would fire on exactly that click, so it is off too.
+    # persistent "shake" is off too: it also fires on ESC, which closes the
+    # form below, so the outside click is answered from Python instead.
+    # Not closed, but not ignored either: every outside click nudges the
+    # .v-dialog element (content_class, not the card: see dialog_nudge).
+    # Holds hooks — call it unconditionally.
+    nudge, on_click_outside = use_outside_click_nudge(open_.value)
     dialog = rv.Dialog(
         v_model=open_.value,
         on_v_model=lambda v: None if v else close(),
@@ -171,7 +178,10 @@ def CreationDialog(
         eager=True,
         persistent=True,
         no_click_animation=True,
+        content_class=nudge,
     )
+    rv.use_event(dialog, "click:outside", on_click_outside)
+
     # ESC back, which `persistent` otherwise disables: VDialog emits `keydown`
     # regardless, and VSelect stops ESC propagating while its menu is open — so
     # ESC closes an open dropdown first and the form only once none is open.
@@ -183,6 +193,7 @@ def CreationDialog(
                 solara.Text(title)
             with rv.CardText():
                 solara.Style(_ADVANCED_PANEL_CSS)
+                solara.Style(NUDGE_CSS)
                 solara.Column(style="gap:4px;", children=children)
                 if error:
                     # ``type=``, not ``type_=``: reacton's Alert has no ``type_``
@@ -192,12 +203,14 @@ def CreationDialog(
                     rv.Alert(type="error", dense=True, children=[error])
             with rv.CardActions(style_="justify-content: flex-end; gap: 8px;"):
                 solara.Button(t("common.cancel"), on_click=close, text=True, small=True)
+                # Enter presses it — the same validate / replace / launch path.
                 solara.Button(
                     create_label,
                     icon_name=create_icon,
                     color="primary",
                     small=True,
                     on_click=on_create,
+                    classes=[ENTER_DEFAULT],
                 )
 
     _msg = (

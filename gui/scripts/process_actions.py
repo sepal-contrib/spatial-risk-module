@@ -350,7 +350,7 @@ def remove_processed_variable(
     try:
         # Before the del: the file plan is resolved from the registry entry.
         if delete_file:
-            project.delete_variable_files(key)
+            project.delete_variable_files(key, registry="processed")
     finally:
         # A file we could not unlink is not a reason to keep a layer the user
         # asked to drop: the entry goes either way, and the error still reaches
@@ -426,8 +426,9 @@ def postprocess_output_name(project, pp_key: str, step: str):
 
 
 #: What a submitted derived-layer entry will produce: the ``name`` the list
-#: displays and the ``key`` it will be registered under.
-DerivedOutput = namedtuple("DerivedOutput", "name key")
+#: displays, the ``key`` it will be registered under and the ``year`` it
+#: inherits from its source (None for change layers and static sources).
+DerivedOutput = namedtuple("DerivedOutput", "name key year")
 
 
 def derived_output(project, entry) -> "DerivedOutput | None":
@@ -435,24 +436,29 @@ def derived_output(project, entry) -> "DerivedOutput | None":
 
     The two differ for edge/dist: ``add_as_processed`` stores a year-bearing
     variable under ``{name}_{year}`` and ``_create_post_var`` inherits the
-    source layer's year, so ``forest`` (2010) -> dist displays as
-    ``forest_dist`` but registers as ``forest_dist_2010``. Keying a job on the
-    name alone would therefore treat that layer as never registered, and would
-    wrongly conflate two same-named sources from different years.
+    source layer's year, so ``forest`` (2010) -> dist registers as
+    ``forest_dist_2010`` and displays as ``forest_dist (2010)`` (the
+    ``year_label`` every layer list uses). Keying a job on the name alone
+    would treat that layer as never registered, and a yearless display name
+    would list two same-named sources from different years identically.
 
     Change layers carry no year, so their name *is* their key.
     """
+    from gui.scripts.variable_labels import year_label
+
     op = entry["op"]
     if op in ("loss", "gain"):
         name = change_output_name(project, op, entry["start_key"], entry["end_key"])
-        return None if name is None else DerivedOutput(name, name)
+        return None if name is None else DerivedOutput(name, name, None)
 
     pp_key = entry["pp_key"]
     name = postprocess_output_name(project, pp_key, op)
     if name is None:
         return None
     year = getattr(project.processed_variables[pp_key], "year", None)
-    return DerivedOutput(name, f"{name}_{year}" if year else name)
+    return DerivedOutput(
+        year_label(name, year), f"{name}_{year}" if year else name, year
+    )
 
 
 def generate_change_var(project, op: str, start_key: str, end_key: str):

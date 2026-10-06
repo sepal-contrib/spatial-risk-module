@@ -51,6 +51,7 @@
       "unit_ha_yr": "ha/ano",
       "unit_ha": "ha",
       "show_density": "Mostrar mapa de densidade",
+      "error_toggle_density": "Não foi possível exibir o mapa de densidade de '{name}': {exc}",
       "delete_title": "Excluir execução de alocação",
       "delete_message": "Excluir '{name}' e seus arquivos de saída? Esta ação não pode ser desfeita.",
       "provenance_persisted": "tabela da execução do modelo",

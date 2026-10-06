@@ -24,6 +24,9 @@ DENSITY_CMAP_NAME = "RdYlGn_r"
 #: module stays importable without pulling in the numeric core.
 DENSITY_NODATA = -9999.0
 
+#: Bytes of one row strip read by :func:`density_value_range`.
+STRIP_BYTES = 16 * 1024 * 1024
+
 
 def density_layer_key(run_key: str) -> str:
     """Namespaced map-layer key for one allocation run's density raster."""
@@ -42,15 +45,27 @@ def density_value_range(path) -> Tuple[float, float]:
     import numpy as np
     from osgeo import gdal
 
+    # Row strips of ~STRIP_BYTES: an AOI-extent density raster is Float64 over
+    # the whole AOI, and a whole-band read plus its copies took ~24 bytes a
+    # pixel (9.7 GB at 20000 x 20000, measured 2026-10-05).
     ds = gdal.Open(str(path))
     band = ds.GetRasterBand(1)
     nodata = band.GetNoDataValue()
-    arr = band.ReadAsArray().astype("float64")
+    ncol, nrow = band.XSize, band.YSize
+    step = max(1, STRIP_BYTES // (ncol * 8))
+    vmin, vmax = np.inf, -np.inf
+    for y in range(0, nrow, step):
+        arr = band.ReadAsArray(0, y, ncol, min(step, nrow - y))
+        valid = ~np.isnan(arr)
+        if nodata is not None:
+            valid &= arr != nodata
+        if valid.any():
+            vmin = min(vmin, float(arr[valid].min()))
+            vmax = max(vmax, float(arr[valid].max()))
     ds = None
-    valid = arr[arr != nodata] if nodata is not None else arr
-    if valid.size == 0:
+    if vmin > vmax:  # no valid pixel
         return (0.0, 1.0)
-    return (float(np.nanmin(valid)), float(np.nanmax(valid)))
+    return (vmin, vmax)
 
 
 def add_density_on_map(

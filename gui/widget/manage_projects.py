@@ -24,6 +24,7 @@ from gui.scripts.project_ui_helpers import (
     format_size,
     project_count_chips,
 )
+from gui.widget.enter_key import ENTER_DEFAULT
 
 
 @solara.component
@@ -50,10 +51,13 @@ def ManageProjectsDialog(
             clicked *in this dialog*: the two are highlighted by different things
             (chip vs ListItemGroup) because they answer different questions.
             An unsaved new project has no row here, so nothing is badged.
-        on_select / on_load / on_cancel: footer actions.
+        on_select: callback(name) — a row was clicked.
+        on_load: the footer's Load action.
+        on_cancel: the footer's Cancel action, also run on ESC / an outside click.
         on_delete: callback(ProjectInfo) — the row's trash button; the caller
             opens the confirm dialog. This widget never touches the disk.
-        busy / error: load-in-progress flag and error text.
+        busy: a load is in progress.
+        error: the load's error text, if any.
     """
     query, set_query = solara.use_state("")
 
@@ -132,20 +136,30 @@ def ManageProjectsDialog(
                                                     rv.Chip(
                                                         children=[chip.label],
                                                         x_small=True,
-                                                        color="primary" if chip.accent else None,
-                                                        text_color="white" if chip.accent else None,
+                                                        color="primary"
+                                                        if chip.accent
+                                                        else None,
+                                                        text_color="white"
+                                                        if chip.accent
+                                                        else None,
                                                     )
                                             rv.ListItemSubtitle(
                                                 children=[
-                                                    t("project.dialog_load_modified",
-                                                      time_ago=format_relative(info.modified, now))
+                                                    t(
+                                                        "project.dialog_load_modified",
+                                                        time_ago=format_relative(
+                                                            info.modified, now
+                                                        ),
+                                                    )
                                                 ]
                                             )
                                         else:
                                             rv.ListItemSubtitle(
                                                 children=[
                                                     info.error
-                                                    or t("project.dialog_load_unreadable")
+                                                    or t(
+                                                        "project.dialog_load_unreadable"
+                                                    )
                                                 ]
                                             )
                                     with rv.ListItemAction():
@@ -170,6 +184,8 @@ def ManageProjectsDialog(
                     color="primary",
                     small=True,
                     disabled=load_disabled,
+                    # Enter presses it — a disabled button ignores the press.
+                    classes=[ENTER_DEFAULT],
                 )
 
 
@@ -191,11 +207,13 @@ def ConfirmDeleteProjectDialog(
         open: bool — whether the dialog is shown.
         name: str — the project being deleted (also what must be typed).
         size_bytes: int — folder size, so the user sees what they are losing.
-        on_cancel / on_confirm: callbacks. The caller closes the dialog.
+        on_cancel: callback — dismissed. The caller closes the dialog.
+        on_confirm: callback — delete. The caller closes the dialog.
         is_open_project: the target is the project currently open — it will close.
         writer_active: a background task is still writing into this project, so
             delete is refused: its auto-save would re-create the folder.
-        busy / error: delete-in-progress flag and failure text.
+        busy: a delete is in progress.
+        error: the delete's failure text, if any.
     """
     typed, set_typed = solara.use_state("")
 
@@ -209,6 +227,12 @@ def ConfirmDeleteProjectDialog(
     can_delete = (
         delete_confirm_valid(typed, name or "") and not writer_active and not busy
     )
+
+    def confirm_if_typed():
+        # The disabled button is the browser's copy of this gate; a press sent
+        # before the last keystroke reached the kernel still lands here.
+        if can_delete:
+            on_confirm()
 
     with rv.Dialog(
         v_model=open,
@@ -268,8 +292,12 @@ def ConfirmDeleteProjectDialog(
                 )
                 solara.Button(
                     t("project.dialog_delete_confirm"),
-                    on_click=on_confirm,
+                    on_click=confirm_if_typed,
                     color="error",
                     small=True,
                     disabled=not can_delete,
+                    # Enter in the name field deletes — but only once the name
+                    # is typed: until then the button is disabled, and a
+                    # disabled button ignores the press.
+                    classes=[ENTER_DEFAULT],
                 )

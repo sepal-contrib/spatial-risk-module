@@ -5,11 +5,12 @@ import logging
 import os
 import uuid
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from box import Box
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from spatialrisk.gdal_env import configure_gdal_tmpdir
 from spatialrisk.log_utils import log_progress
@@ -69,6 +70,23 @@ def _stringify_paths(obj: Any) -> Any:
     return obj
 
 
+@dataclass
+class _SharedState:
+    """The project-wide values every copy of an open project reads and writes.
+
+    See ``Project._shared``. A dataclass so two projects holding equal values
+    still compare equal (reacton skips re-renders on ``==`` props).
+    """
+
+    base_raster: Optional["LocalRasterVar"] = None
+    aoi: Optional[Dict[str, Any]] = None
+
+
+# Set through the constructor or model_copy(update=...) like fields, but stored
+# in Project._shared rather than on each copy.
+_SHARED_FIELDS = ("base_raster", "aoi")
+
+
 class Project(BaseModel):
     """
     A Pydantic model representing a deforestation risk analysis project.
@@ -90,18 +108,55 @@ class Project(BaseModel):
     processed_variables: Dict[str, Union["LocalVectorVar", "LocalRasterVar"]] = Field(
         default_factory=dict
     )
-    base_raster: Optional["LocalRasterVar"] = None
     models: Dict[str, Any] = Field(default_factory=dict)
     datasets: Dict[str, Any] = Field(default_factory=dict)
     samples: Dict[str, Any] = Field(default_factory=dict)
     predictions: Dict[str, Any] = Field(default_factory=dict)
     evaluations: Dict[str, Any] = Field(default_factory=dict)
     allocations: Dict[str, Any] = Field(default_factory=dict)
-    # AOI descriptor (GUI-populated, library-agnostic): light metadata only
-    # (method, name, gee, admin, geometry_file). The geometry itself lives in a
-    # sidecar ``aoi.geojson`` in the project folder, written/read by the GUI —
-    # the project model stays free of geopandas/pysepal types. None when no AOI.
-    aoi: Optional[Dict[str, Any]] = None
+    # The reference raster and the AOI, shared by every shallow copy of this
+    # project. The GUI republishes the open project as a ``model_copy()`` after
+    # almost every action, and a background job saves and republishes the copy
+    # it started with when it finishes. The registries above are dicts those
+    # copies share, so a job's copy never misses what happened meanwhile; these
+    # two used to be per-copy fields, so a job started before the user set the
+    # reference wrote its reference-less copy over the manifest and the app.
+    # A shallow copy keeps this same object (``model_copy`` copies the private
+    # dict, not its values); a deep copy gets its own.
+    _shared: _SharedState = PrivateAttr(default_factory=_SharedState)
+
+    def __init__(self, **data: Any) -> None:
+        """Build a project; ``base_raster`` and ``aoi`` are accepted like fields."""
+        shared = {name: data.pop(name) for name in _SHARED_FIELDS if name in data}
+        super().__init__(**data)
+        for name, value in shared.items():
+            setattr(self, name, value)
+
+    @property
+    def base_raster(self) -> Optional["LocalRasterVar"]:
+        """The reference raster every layer is harmonized onto (None if unset)."""
+        return self._shared.base_raster
+
+    @base_raster.setter
+    def base_raster(self, value: Optional["LocalRasterVar"]) -> None:
+        """Set (or clear) the reference raster for every copy of this project."""
+        self._shared.base_raster = value
+
+    @property
+    def aoi(self) -> Optional[Dict[str, Any]]:
+        """AOI descriptor (GUI-populated, library-agnostic), None when no AOI.
+
+        Light metadata only (method, name, gee, admin, geometry_file). The
+        geometry itself lives in a sidecar ``aoi.geojson`` in the project
+        folder, written/read by the GUI — the project model stays free of
+        geopandas/pysepal types.
+        """
+        return self._shared.aoi
+
+    @aoi.setter
+    def aoi(self, value: Optional[Dict[str, Any]]) -> None:
+        """Set (or clear) the AOI descriptor for every copy of this project."""
+        self._shared.aoi = value
 
     def _relink_backrefs(self) -> None:
         """Point every contained variable/model/prediction's ``.project`` at self.
@@ -136,9 +191,20 @@ class Project(BaseModel):
     def model_copy(self, *, update=None, deep=False) -> "Project":
         """Copy the project and re-link all child ``.project`` back-references.
 
-        See ``_relink_backrefs`` for why this is required.
+        See ``_relink_backrefs`` for why this is required. A shallow copy keeps
+        sharing ``base_raster`` and ``aoi`` with this project (see ``_shared``);
+        one that overrides either through ``update`` stops sharing them.
         """
+        update = dict(update or {})
+        shared = {name: update.pop(name) for name in _SHARED_FIELDS if name in update}
         copied = super().model_copy(update=update, deep=deep)
+        if shared:
+            # An explicit override makes a copy that no longer tracks this one.
+            copied._shared = _SharedState(
+                **{name: getattr(self, name) for name in _SHARED_FIELDS}
+            )
+            for name, value in shared.items():
+                setattr(copied, name, value)
         copied._relink_backrefs()
         return copied
 
@@ -604,7 +670,9 @@ class Project(BaseModel):
         del self.allocations[key]
         return True
 
-    def delete_variable_files(self, key: str) -> List[Path]:
+    def delete_variable_files(
+        self, key: str, registry: Optional[str] = None
+    ) -> List[Path]:
         """Delete the on-disk files of the variable registered under *key*.
 
         Files only — the registry entry, the reference raster and the map layer
@@ -613,10 +681,12 @@ class Project(BaseModel):
         :func:`~spatialrisk.variables.file_cleanup.plan_variable_files` refuses:
         a file outside the project folder, or one another variable still uses.
         Ask it first if you want to tell the user *why* before deleting.
+        *registry* ("raw" or "processed") picks between a raw layer and its
+        harmonized output, which share a key.
         """
         from spatialrisk.variables.file_cleanup import plan_variable_files
 
-        plan = plan_variable_files(self, key)
+        plan = plan_variable_files(self, key, registry)
         removed = [path for path in plan.files if self._safe_unlink(path)]
         if removed:
             logger.info(
@@ -801,6 +871,8 @@ class Project(BaseModel):
                     "target_name": dataset.target.name if dataset.target else None,
                     "target_year": dataset.target.year if dataset.target else None,
                     "feature_names": [f.name for f in dataset.features],
+                    # Each temporal feature carries its own year (None = static).
+                    "feature_years": [f.year for f in dataset.features],
                 }
 
         # Serialize registered samples (location-only; the GPKG is the truth).
@@ -1018,15 +1090,18 @@ class Project(BaseModel):
                 )
                 target_name = ds_data.get("target_name")
                 feature_names = ds_data.get("feature_names", [])
+                # Per-feature years; projects saved before they existed have
+                # none, and their temporal features all use the dataset year.
+                feature_years = dict(
+                    zip(feature_names, ds_data.get("feature_years") or [])
+                )
                 if target_name:
-                    # The dataset's stored year applies to temporal features and is
-                    # already restored via the constructor above. Only pass it to
-                    # set_target when the target itself is temporal, since set_target
-                    # rejects a year argument for static targets.
+                    # set_target rejects a year argument for static targets.
                     target_is_temporal = project.is_temporal(target_name)
+                    target_year = ds_data.get("target_year") or ds_data.get("year")
                     ds.set_target(
                         target_name,
-                        year=ds_data.get("year") if target_is_temporal else None,
+                        year=target_year if target_is_temporal else None,
                     )
                 if feature_names:
                     missing = [
@@ -1041,7 +1116,15 @@ class Project(BaseModel):
                             f"processed variables, skipped: {missing}"
                         )
                     if valid_names:
-                        ds.set_features(valid_names)
+                        ds.set_features(
+                            valid_names,
+                            years={
+                                n: feature_years[n]
+                                for n in valid_names
+                                if feature_years.get(n) is not None
+                                and project.is_temporal(n)
+                            },
+                        )
                 project.datasets[key] = ds
             print(f"Loaded {len(project.datasets)} dataset(s)")
 

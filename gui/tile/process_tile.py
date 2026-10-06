@@ -19,16 +19,22 @@ from gui.scripts.solara_threads import (
 )
 from gui.scripts.variable_identity import base_raster_key, is_base_raster
 from gui.store.project_writers import writing
-from gui.tile.derived_map import derived_on_map, use_derived_map_toggle
+from gui.tile.derived_map import (
+    derived_on_map,
+    derived_toggle_inflight,
+    use_derived_map_toggle,
+)
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.creation_dialog import CreationDialog
 from gui.widget.help import InfoButton
+from gui.widget.product_table import BUSY_CLASSES, BUSY_ICON, HOURGLASS_CSS
 from gui.widget.text_style import MUTED
 from gui.widget.variable_list import HarmonizationVariableList
 from spatialrisk.harmonization import (
     HarmonizationStatus,
     harmonization_status,
     harmonization_status_from_disk,
+    layers_missing_categories,
 )
 from spatialrisk.variables.file_cleanup import FilePlan
 
@@ -98,12 +104,14 @@ def ReferenceStrip(project, on_open, pending=False):
     needed.
 
     ``pending`` is True while the reference warp runs on its worker thread: the
-    strip then says so, carries a progress bar and stops opening the form,
-    because the old reference it still holds is about to be replaced and the UI
-    is otherwise unchanged (the warp no longer freezes it, so nothing else
-    signals that work is happening). Disabling it is what keeps the user from
-    typing a correction that ``on_set_base`` would only have to refuse — and the
-    pending line it carries is the reason, so the disabled state is not mute.
+    strip then says so, swaps its crosshairs for the app's busy hourglass and
+    stops opening the form, because the old reference it still holds is about
+    to be replaced and the UI is otherwise unchanged (the warp no longer freezes
+    it, so nothing else signals that work is happening). Ignoring clicks is what
+    keeps the user from typing a correction that ``on_set_base`` would only have
+    to refuse — and the pending line it carries is the reason, so the busy state
+    is not mute. It ignores them through ``sr-busy`` rather than ``disabled``,
+    like every other busy button, so the hourglass keeps its grey.
     """
     p = project.value
     base = p.base_raster if p is not None else None
@@ -122,23 +130,28 @@ def ReferenceStrip(project, on_open, pending=False):
     # solara.Style needs a container to render into — at a component's top
     # level it is silently dropped, and the strip then overflows its button.
     with solara.Column(style="width:100%;gap:0;"):
-        solara.Style(STRIP_CSS)
+        solara.Style(STRIP_CSS + HOURGLASS_CSS)
         # The label is built as `children=`, not a nested `with`: reacton
         # reparents elements passed this way, and it keeps the two text lines
         # inside the button's own content box where the CSS above can reach.
         solara.Button(
-            classes=["sr-reference-strip"],
             block=True,
             outlined=True,
-            color="primary" if base is not None else "warning",
+            color=None if pending else ("primary" if base is not None else "warning"),
             style=STRIP_STYLE,
             on_click=on_open,
-            disabled=pending,
+            # sr-busy on the button, the flip on the hourglass alone: on the
+            # button it would also spin the chevron.
+            classes=["sr-reference-strip"] + (["sr-busy"] if pending else []),
             children=[
                 solara.Row(
                     style="width:100%;align-items:center;gap:8px;flex-wrap:nowrap;",
                     children=[
-                        rv.Icon(children=["mdi-crosshairs-gps"], small=True),
+                        rv.Icon(
+                            children=[BUSY_ICON if pending else "mdi-crosshairs-gps"],
+                            small=True,
+                            class_="sr-hourglass" if pending else "",
+                        ),
                         solara.Column(
                             style=(
                                 "gap:0;align-items:flex-start;"
@@ -157,8 +170,6 @@ def ReferenceStrip(project, on_open, pending=False):
                 )
             ],
         )
-        if pending:
-            solara.ProgressLinear(True)
 
 
 @solara.component
@@ -172,11 +183,18 @@ def BaseProjectionForm(
     set_resolution,
     on_auto_utm,
     autofill_pending,
+    utm_pending=False,
 ):
     """Reference & projection form (Select, EPSG ⌖ + resolution).
 
     Rendered as the body of ``CreationDialog``, which owns the submit and
     cancel actions — the form itself is fields only.
+
+    The EPSG field starts empty: the analysis CRS is the user's call, so
+    choosing a raster never fills it in. The ⌖ icon in the field's append slot
+    suggests the raster's UTM zone on request, and carries a tooltip saying
+    so — ``append_icon`` alone cannot hold one. ``utm_pending`` is True while
+    that suggestion is read off the websocket loop.
 
     A separate component because ``rv.use_event`` is a hook and must run
     unconditionally every render — ProcessTile early-returns before the form
@@ -186,6 +204,16 @@ def BaseProjectionForm(
     (not ``.value``): value-equal ``model_copy`` snapshots would suppress
     child re-renders.
     """
+    utm_tooltip = t("tiles.process.auto_utm_tooltip")
+    # A clickable v-icon renders as a real <button> (focusable, keyboard
+    # activated) at the old append icon's size; an icon v-btn is taller than
+    # the dense field's append slot and would sit off-centre in it.
+    utm_icon = rv.Icon(
+        children=["mdi-crosshairs-gps"],
+        v_on="tooltip.on",
+        disabled=utm_pending,
+        attributes={"aria-label": utm_tooltip},
+    )
     with solara.Column(style="gap:14px;"):
         rv.Select(
             label=t("tiles.process.base_raster_label"),
@@ -197,7 +225,7 @@ def BaseProjectionForm(
             hint=t("tiles.process.base_raster_hint"),
         )
         with solara.Row(style="gap:8px;align-items:flex-start;flex-wrap:nowrap;"):
-            epsg_field = rv.TextField(
+            rv.TextField(
                 label=t("tiles.process.epsg_label"),
                 v_model=epsg,
                 on_v_model=set_epsg,
@@ -206,7 +234,27 @@ def BaseProjectionForm(
                 placeholder=t("tiles.process.epsg_placeholder"),
                 style_="flex:1 1 55%;min-width:0;",
                 hint=t("tiles.process.epsg_hint"),
-                append_icon="mdi-crosshairs-gps",
+                loading=utm_pending,
+                # A named child (``slot="append"``), not a ``v_slots`` entry:
+                # ipyvue hands an unscoped ``v_slots`` entry to the field as a
+                # proxied scoped slot, and Vue 2.6 drops that proxy from
+                # ``$slots`` the next time the field re-renders from Python —
+                # editing the code made the ⌖ icon vanish. A named child is
+                # resolved into ``$slots`` afresh on every render.
+                children=[
+                    rv.Tooltip(
+                        slot="append",
+                        top=True,
+                        v_slots=[
+                            {
+                                "name": "activator",
+                                "variable": "tooltip",
+                                "children": [utm_icon],
+                            }
+                        ],
+                        children=[utm_tooltip],
+                    )
+                ],
             )
             rv.TextField(
                 label=t("tiles.process.resolution_label"),
@@ -218,7 +266,7 @@ def BaseProjectionForm(
                 style_="flex:1 1 45%;min-width:0;",
                 hint=t("tiles.process.resolution_hint"),
             )
-        rv.use_event(epsg_field, "click:append", lambda *_: on_auto_utm())
+        rv.use_event(utm_icon, "click", lambda *_: on_auto_utm())
         # Non-blocking: CreationDialog's two channels both stop the user
         # (validate() -> error Alert, will_replace() -> confirm), and neither
         # says "go ahead, but know this". Rendering it here also lets it
@@ -292,6 +340,9 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             )
             removed = True
         if removed:
+            # Saved now, like every other removal: a raster deleted above while
+            # the project file still lists it would come back on reopen.
+            p.save()
             project.set(p.model_copy())
 
     p = project.value
@@ -303,64 +354,107 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # default empty, so after a load the "Base raster" Select looked unset. Keyed
     # on the stored base's key, so it fires when a project is loaded (or the base
     # changes) but not on an in-progress dropdown selection. We restore the
-    # stored CRS / resolution too — recomputing them (see autofill_base) could
-    # diverge for a non-UTM base CRS.
+    # stored CRS / resolution too: nothing else fills the EPSG (it starts empty
+    # by design, see autofill_base), and a recomputed resolution could differ
+    # from the stored one.
+    #
+    # Keyed on the project as well: this tile is mounted once per session, so
+    # the form's state outlives the project it was filled for. Without the
+    # name, a project with no reference (or one referenced on the same layer
+    # key) kept the previous project's layer and CRS, and could submit them as
+    # its own grid. By name, not object: tiles republish the open project as a
+    # model_copy, which must not wipe what the user is typing.
+    project_name = getattr(p, "project_name", None)
     restored_key = base_raster_key(p)
 
     def _restore_base_form():
         if not restored_key:
+            # No stored reference (a new or another project, or its source
+            # layer was edited away): the form is empty, never a leftover.
+            set_base_key("")
+            set_epsg("")
+            set_resolution("30")  # the use_state default
             return
         set_base_key(restored_key)
-        if p.base_raster.default_crs:
-            set_epsg(str(p.base_raster.default_crs))
+        crs = p.base_raster.default_crs
+        set_epsg(str(crs) if crs else "")
         if p.base_raster.default_resolution:
             set_resolution(str(round(p.base_raster.default_resolution)))
 
-    solara.use_effect(_restore_base_form, [restored_key])
+    solara.use_effect(_restore_base_form, [project_name, restored_key])
 
     @solara.lab.use_task(
         dependencies=[base_key], raise_error=False, prefer_threaded=True
     )
     async def autofill_base():
-        """On base-raster selection, pre-fill EPSG (UTM) + resolution; stay editable."""
+        """On base-raster selection, pre-fill its resolution; stay editable.
+
+        Never the EPSG: which CRS the analysis runs in is the user's call, so
+        the field stays empty until they type a code or ask for the raster's
+        UTM zone with the ⌖ icon (``suggest_utm``). The native pixel size is a
+        property of the layer rather than a choice, so it is still offered.
+        """
         if p is None or not base_key:
             return
         var = p.raw_variables.get(base_key)
         if var is None:
             return
         # The selection already backs the current base raster (e.g. restored
-        # after a project load): keep its stored CRS / resolution rather than
-        # recomputing them from the source file, which could differ (e.g. a
-        # non-UTM base CRS).
+        # after a project load): keep its stored resolution rather than
+        # recomputing it from the source file, which could differ.
         if is_base_raster(p, var):
             return
         res = await asyncio.to_thread(process_actions.base_raster_resolution, var)
         if res:
             set_resolution(str(round(res)))
-        path = getattr(var, "path", None)
-        if path is None:
-            return  # not downloaded yet — auto-UTM needs the GeoTIFF on disk
-        set_epsg(await asyncio.to_thread(process_actions.auto_utm_epsg, path))
 
-    def on_auto_utm():
-        # The ⌖ icon has no disabled state — gate here (was the old
-        # button's ``disabled=not base_key or autofill_base.pending``).
-        if p is None or not base_key or autofill_base.pending:
-            return
+    # What the form is about as of the latest render: the project, the chosen
+    # raster and the EPSG text. ``suggest_utm`` compares it after its await
+    # with what the click saw, so a zone computed for another project or
+    # raster, or one the user has typed over meanwhile (the field stays
+    # editable while it loads), never lands in the field.
+    latest_form = solara.use_ref((project_name, base_key, epsg))
+    latest_form.current = (project_name, base_key, epsg)
+
+    @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
+    async def suggest_utm(asked, path):
+        """The reference raster's UTM zone, read off the websocket loop.
+
+        Opening the raster (and the PROJ lookup behind the estimate) used to
+        run inside the ⌖ click handler, which freezes every session until it
+        returns; now that the icon is the only way to the suggestion, it runs
+        here instead.
+        """
         try:
-            base = p.raw_variables[base_key]
-            path = getattr(base, "path", None)
-            if path is None:
-                notifications.error(
-                    t("tiles.process.error_download_first"),
-                    timeout=ERROR_TOAST_TIMEOUT,
-                )
-                return
-            set_epsg(process_actions.auto_utm_epsg(path))
+            code = await asyncio.to_thread(process_actions.auto_utm_epsg, path)
         except Exception as exc:
             notifications.error(
                 t("tiles.process.error_auto_utm", exc=exc), timeout=ERROR_TOAST_TIMEOUT
             )
+            return
+        if latest_form.current == asked:
+            set_epsg(code)
+
+    def on_auto_utm():
+        """⌖ click: refuse what needs no disk to refuse, then hand off."""
+        # One suggestion at a time: re-invoking the task would cancel the one
+        # in flight at its await (see gui/scripts/solara_threads).
+        if suggest_utm.pending:
+            return
+        if p is None or not base_key:
+            # Used to return in silence, which read as a dead icon.
+            notifications.warning(
+                t("tiles.process.error_pick_reference"), timeout=ERROR_TOAST_TIMEOUT
+            )
+            return
+        path = getattr(p.raw_variables.get(base_key), "path", None)
+        if path is None:
+            notifications.error(
+                t("tiles.process.error_download_first"),
+                timeout=ERROR_TOAST_TIMEOUT,
+            )
+            return
+        suggest_utm(latest_form.current, path)
 
     _VALIDATION_MESSAGES = {
         "need_epsg": "tiles.process.error_need_epsg",
@@ -558,7 +652,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         # likewise a dialog.
         ReferenceStrip(
             project=project,
-            on_open=lambda: reference_open.set(True),
+            # The strip ignores clicks while the warp runs, but not the
+            # keyboard: Enter on the focused strip must not open the form.
+            on_open=lambda: (
+                None if "reference" in reference_inflight else reference_open.set(True)
+            ),
             pending="reference" in reference_inflight,
         )
 
@@ -627,8 +725,23 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             or "reference" in reference_inflight,
             on_toggle_map=on_toggle_map,
             derived_on_map=derived_on_map,
+            # Read here so the tile subscribes: the row is an hourglass while it adds.
+            toggling_keys=derived_toggle_inflight.value,
             on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
         )
+
+        # Training needs each categorical layer's categories, stored when it is
+        # harmonized; layers harmonized by an older version have none and
+        # count as pending, so Harmonize all redoes them.
+        missing_categories = layers_missing_categories(p) if p is not None else []
+        if missing_categories:
+            solara.Warning(
+                t(
+                    "tiles.process.reharmonize_categories",
+                    names=", ".join(missing_categories),
+                ),
+                dense=True,
+            )
 
         # Only the still-resolving case needs a line of its own: until the
         # status lands no row can state one. Once it does, every row says its
@@ -647,11 +760,15 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             )
 
         # Same icon as the per-row action, same shape as Step 2's Download-all
-        # under its source list.
+        # under its source list; outlined with the grey hourglass while a run is
+        # in flight (as Download-all does).
+        solara.Style(HOURGLASS_CSS)
         solara.Button(
             t("tiles.process.harmonize_all_button"),
-            icon_name="mdi-hammer",
-            color="primary",
+            icon_name=BUSY_ICON if run_in_flight else "mdi-hammer",
+            classes=BUSY_CLASSES if run_in_flight else [],
+            color=None if run_in_flight else "primary",
+            outlined=run_in_flight,
             small=True,
             block=True,
             on_click=run_processing,
@@ -667,13 +784,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # with every layer already on the reference grid a run rewrites
             # nothing, and the sentence that used to say so is gone, so the
             # button carries it — as Download-all does with no cloud layers left.
-            disabled=run_in_flight
-            or not has_base
-            or nothing_pending
-            or "reference" in reference_inflight,
+            # A run in flight is the hourglass instead (BUSY_CLASSES ignores
+            # clicks without the faded disabled look).
+            disabled=not run_in_flight
+            and (not has_base or nothing_pending or "reference" in reference_inflight),
         )
-        if processing.value:
-            solara.ProgressLinear(True)
 
     # `will_replace` is the creation flow's overwrite guard; setting a reference
     # is idempotent, so there is nothing to confirm.
@@ -697,12 +812,13 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 set_resolution=set_resolution,
                 on_auto_utm=on_auto_utm,
                 autofill_pending=autofill_base.pending,
+                utm_pending=suggest_utm.pending,
             )
         ],
     )
 
     _files = (
-        delete_prompt(p, pending_remove)
+        delete_prompt(p, pending_remove, registry="processed")
         if (p is not None and pending_remove)
         else DeletePrompt(plan=FilePlan())
     )

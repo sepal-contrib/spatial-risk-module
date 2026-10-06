@@ -90,9 +90,12 @@ def variable_files(var) -> List[Path]:
     return list(dict.fromkeys(found))
 
 
+_REGISTRIES = {"raw": "raw_variables", "processed": "processed_variables"}
+
+
 def _registered_variables(project):
     """(key, var) for everything that can hold a path: both registries + base."""
-    for attr in ("raw_variables", "processed_variables"):
+    for attr in _REGISTRIES.values():
         for key, var in (getattr(project, attr, None) or {}).items():
             yield key, var
     base = getattr(project, "base_raster", None)
@@ -100,9 +103,15 @@ def _registered_variables(project):
         yield getattr(base, "name", "base_raster"), base
 
 
-def _find(project, key: str):
-    """The variable stored under *key*, in either registry (None if unknown)."""
-    for attr in ("raw_variables", "processed_variables"):
+def _find(project, key: str, registry: Optional[str] = None):
+    """The variable stored under *key* (None if unknown).
+
+    A harmonized output is stored under its raw layer's key, so *registry*
+    ("raw" or "processed") says which of the two is meant. Without it the raw
+    registry is searched first.
+    """
+    attrs = [_REGISTRIES[registry]] if registry else list(_REGISTRIES.values())
+    for attr in attrs:
         var = (getattr(project, attr, None) or {}).get(key)
         if var is not None:
             return var
@@ -116,13 +125,16 @@ def _size(path: Path) -> int:
         return 0
 
 
-def plan_variable_files(project, key: str) -> FilePlan:
+def plan_variable_files(project, key: str, registry: Optional[str] = None) -> FilePlan:
     """What deleting the variable stored under *key* would remove from disk.
+
+    *registry* ("raw" or "processed") picks between a raw layer and its
+    harmonized output, which share a key; see :func:`_find`.
 
     Pure: nothing is unlinked, nothing is created (in particular this never
     touches ``project.folders``, whose getter builds the whole folder tree).
     """
-    var = _find(project, key)
+    var = _find(project, key, registry)
     files = variable_files(var)
     if not files:
         return FilePlan()
@@ -137,8 +149,9 @@ def plan_variable_files(project, key: str) -> FilePlan:
         return FilePlan(blocked="outside_project", all_files=found)
 
     mine = {f.resolve() for f in found}
+    # Identity, not the key: a raw layer and its output share one.
     for other_key, other in _registered_variables(project):
-        if other_key == key or other is var:
+        if other is var:
             continue
         if mine & {f.resolve() for f in variable_files(other)}:
             return FilePlan(blocked="shared", blocked_by=other_key, all_files=found)

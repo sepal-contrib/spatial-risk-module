@@ -428,7 +428,7 @@ def test_tiling_status_has_colour_icon_and_label_in_every_locale():
     from gui.widget.product_table import STATUS_COLORS, STATUS_ICONS
 
     assert STATUS_COLORS["tiling"] == "info"
-    assert "mdi-spin" in STATUS_ICONS["tiling"]
+    assert STATUS_ICONS["tiling"] == STATUS_ICONS["running"]
     for locale_dir in (Path("gui") / "messages").iterdir():
         data = json.loads((locale_dir / "widgets.json").read_text(encoding="utf-8"))
         assert data["widgets"]["product_table"]["status_tiling"], locale_dir.name

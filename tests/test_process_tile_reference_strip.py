@@ -22,6 +22,7 @@ from pysepal.solara.notifications.state import ToastType
 from gui.i18n import t
 from gui.scripts import process_actions
 from gui.tile import process_tile
+from gui.widget.product_table import BUSY_ICON
 from spatialrisk.harmonization import HarmonizationStatus
 from spatialrisk.project import Project
 from spatialrisk.variables.local_raster_var import LocalRasterVar
@@ -167,9 +168,14 @@ def _btn_by_label(rc, label):
     return hits[0]
 
 
-def _submit_reference(rc, epsg_code="EPSG:5490"):
-    """Open the strip's form, fill it in and press Set."""
-    _strip(rc).click()
+def _submit_reference(rc, epsg_code="EPSG:5490", via_strip=True):
+    """Open the strip's form, fill it in and press Set.
+
+    ``via_strip=False`` skips the opening click, for a form that is already
+    open.
+    """
+    if via_strip:
+        _strip(rc).click()
     rc.find(vw.Select).widget.v_model = "fc_2020"
     # Choosing the raster kicks off autofill_base on a worker thread; let it
     # land before grabbing widget refs it would re-render out from under.
@@ -259,7 +265,9 @@ def test_submitting_the_dialog_warps_off_the_render_thread(monkeypatch):
         assert calls == [("fc_2020", "EPSG:5490", 30.0, False)]
         _settle(rc)
         assert t("tiles.process.reference_pending") in list(_leaves(_strip(rc)))
-        assert rc.find(vw.ProgressLinear).widgets, "no progress bar while warping"
+        # The strip's own hourglass says so (#38); no extra bar under it.
+        assert BUSY_ICON in list(_leaves(_strip(rc))), "no hourglass while warping"
+        assert not rc.find(vw.ProgressLinear).widgets, "redundant progress bar"
     finally:
         release.set()
         # Let the worker release its in-flight key: it is module-level, so a
@@ -279,9 +287,13 @@ def test_the_strip_stops_inviting_a_change_while_a_warp_runs(monkeypatch):
 
     A country-scale warp takes minutes. Leaving the strip live would invite a
     correction the app cannot apply — the claim is already taken, so that
-    submit could only be refused. Disabling the one entry point is the honest
+    submit could only be refused. Closing the one entry point is the honest
     gate, and the pending line on the strip itself says why. It must come back
     once the warp lands, or the reference becomes unchangeable for the session.
+
+    Closed means the busy hourglass that ignores clicks (``sr-busy``, #38), not
+    ``disabled``; a click that still reaches the server (the keyboard) must not
+    open the form either.
     """
     release = threading.Event()
     monkeypatch.setattr(
@@ -293,15 +305,23 @@ def test_the_strip_stops_inviting_a_change_while_a_warp_runs(monkeypatch):
 
     rc = _render(_project(with_base=False))
     try:
-        assert _strip(rc).disabled is False, "the strip starts open for business"
+
+        def busy():
+            return "sr-busy" in str(_strip(rc).class_ or "").split()
+
+        assert not busy(), "the strip starts open for business"
         _submit_reference(rc)
         assert _wait_until(lambda: "reference" in process_tile.reference_inflight)
         _settle(rc)
-        assert _strip(rc).disabled is True, "the strip still invites a change"
+        assert busy(), "the strip still invites a change"
+        assert _strip(rc).disabled is not True, "busy, not faded to disabled"
+        _strip(rc).click()  # what Enter on the focused strip does
+        _settle(rc)
+        assert _reference_dialog(rc).v_model is not True, "the form opened mid-warp"
 
         release.set()
         assert _wait_until(
-            lambda: _strip(rc).disabled is False
+            lambda: not busy()
         ), "the strip never re-opened after the warp landed"
     finally:
         release.set()
@@ -379,34 +399,37 @@ def test_the_row_actions_close_while_a_warp_runs(monkeypatch):
 def test_a_second_submit_is_refused_out_loud_not_dropped(monkeypatch):
     """One warp at a time — and the user hears about the one that was refused.
 
-    ``disabled=`` is a render-time prop and reaches the browser a round-trip
-    after the claim, so a click can still get the form open mid-warp. That is
-    the dangerous path: ``CreationDialog.do_launch`` closes the dialog for any
-    launch that returns, so a silent refusal is indistinguishable from a
-    successful submit and the user walks away believing their corrected EPSG
-    applied. The claim must hold AND the refusal must be audible.
+    The strip will not open the form mid-warp, but a form opened just before
+    the claim landed (the claim is module-level, so another session's warp
+    takes it too) is still there to submit. That is the dangerous path:
+    ``CreationDialog.do_launch`` closes the dialog for any launch that returns,
+    so a silent refusal is indistinguishable from a successful submit and the
+    user walks away believing their corrected EPSG applied. The claim must hold
+    AND the refusal must be audible.
     """
     calls = []
-    release = threading.Event()
     bus = NotificationBus()
     monkeypatch.setattr(process_tile, "use_notifications", lambda: Notifier(bus))
-
-    def _slow_set_base(p, key, epsg, res, auto_save=True):
-        calls.append(epsg)
-        release.wait(5.0)
-
-    monkeypatch.setattr(process_actions, "set_base_raster", _slow_set_base)
+    monkeypatch.setattr(
+        process_actions,
+        "set_base_raster",
+        lambda p, key, epsg, res, auto_save=True: calls.append(epsg),
+    )
     monkeypatch.setattr(Project, "save", lambda self, *a, **kw: None)
 
     rc = _render(_project(with_base=False))
+    claimed = False
     try:
-        _submit_reference(rc, epsg_code="EPSG:5490")
-        assert _wait_until(lambda: calls == ["EPSG:5490"]), "the first warp never ran"
+        _strip(rc).click()  # the form is open...
+        _settle(rc)
+        # ...when a warp starts elsewhere and takes the claim.
+        claimed = process_tile.reference_inflight.claim("reference")
+        assert claimed
 
-        _submit_reference(rc, epsg_code="EPSG:32721")  # the user's correction
+        _submit_reference(rc, epsg_code="EPSG:32721", via_strip=False)
 
-        time.sleep(0.2)  # a second worker would have appended by now
-        assert calls == ["EPSG:5490"], f"the correction started a warp too: {calls}"
+        time.sleep(0.2)  # a worker would have appended by now
+        assert calls == [], f"the correction started a warp: {calls}"
         warned = [
             toast.message
             for toast in bus.toasts.value
@@ -416,14 +439,9 @@ def test_a_second_submit_is_refused_out_loud_not_dropped(monkeypatch):
             t("tiles.process.reference_already_running") in warned
         ), f"the refusal was silent; toasts were {bus.toasts.value}"
     finally:
-        release.set()
-        # Asserted after the block, never inside ``finally`` — see the comment
-        # in test_submitting_the_dialog_warps_off_the_render_thread.
-        released = _wait_until(
-            lambda: "reference" not in process_tile.reference_inflight
-        )
+        if claimed:
+            process_tile.reference_inflight.release("reference")
         rc.close()
-    assert released, "the warp worker never gave its in-flight key back"
 
 
 def test_the_dialog_refuses_an_empty_form_instead_of_silently_disabling():

@@ -487,3 +487,45 @@ def test_harmonize_all_stays_live_while_a_layer_is_pending(monkeypatch):
         assert _harmonize_all(rc).disabled is False
     finally:
         rc.close()
+
+
+def test_harmonize_all_is_the_hourglass_while_a_run_is_in_flight(monkeypatch):
+    """A run in flight swaps the hammer for the hourglass, not a spinner (#38).
+
+    The button ignores clicks through ``sr-busy`` instead of fading to the
+    disabled grey, and goes back to the hammer once the run is over.
+    """
+    from gui.widget.product_table import BUSY_ICON
+
+    monkeypatch.setattr(
+        process_tile,
+        "harmonization_status",
+        lambda p: HarmonizationStatus(pending=["layer0"], current=["layer1"]),
+    )
+
+    def icon(btn):
+        return [str(i.children[0]) for i in btn.children if isinstance(i, vw.Icon)]
+
+    project = solara.reactive(_project_with_base(2), equals=lambda a, b: a is b)
+    processing = solara.reactive(True)
+    _box, rc = reacton.render(
+        process_tile.ProcessTile(project=project, processing=processing),
+        handle_error=False,
+    )
+    try:
+        btn = _harmonize_all(rc)
+        assert icon(btn) == [BUSY_ICON]
+        assert "sr-busy" in (btn.class_ or "")
+        assert btn.disabled is False and not btn.loading
+        # Outlined and uncoloured: the grey hourglass would read poorly on the
+        # blue fill, and it is grey everywhere else in the app.
+        assert btn.outlined is True and not btn.color
+        assert not rc.find(vw.ProgressLinear).widgets  # the hourglass says it
+
+        processing.set(False)
+        assert _wait_until(lambda: icon(_harmonize_all(rc)) == ["mdi-hammer"])
+        assert "sr-busy" not in (_harmonize_all(rc).class_ or "")
+        assert _harmonize_all(rc).color == "primary"
+        assert not _harmonize_all(rc).outlined
+    finally:
+        rc.close()

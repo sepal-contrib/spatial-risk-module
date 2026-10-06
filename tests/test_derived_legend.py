@@ -11,9 +11,10 @@ from gui.tile import derived_map
 class _Var:
     """A minimal stand-in for a LocalRasterVar, enough for style resolution."""
 
-    def __init__(self, name="forest_gfc_edge", history=("edge",)):
+    def __init__(self, name="forest_gfc_edge", history=("edge",), year=None):
         """Build a fake processed raster variable."""
         self.name = name
+        self.year = year
         self.raster_type = "continuous"
         self.tags = []
         self.processing_history = list(history)
@@ -51,6 +52,13 @@ def test_derived_legend_is_keyed_by_the_derived_layer_key():
         "30",
         "1000",
     ]
+
+
+def test_derived_legend_label_names_the_year():
+    """Two years of the same layer on the map get legends that tell them apart."""
+    legend = derived_map._derived_legend("forest_gfc_edge_2010", _Var(year=2010))
+    assert legend.label.literal == "forest_gfc_edge (2010)"
+    assert derived_map._derived_legend("k", _Var()).label.literal == "forest_gfc_edge"
 
 
 def test_drop_derived_from_map_unregisters_the_legend():

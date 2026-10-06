@@ -53,6 +53,24 @@ def mw_window_options(project, model_key):
     return sorted(int(w) for w in getattr(model, "win_size_list", None) or [])
 
 
+def missing_model_variables(project, model_key, dataset_key):
+    """Variables the ML model's formula uses that the dataset has no feature for.
+
+    Lets the Predict dialog refuse a doomed run up front instead of letting
+    patsy fail mid-inference with ``NameError: name 'x' is not defined``.
+    Returns [] for non-ML families (they resolve their own layers) and for
+    anything it cannot check — apply() re-validates regardless.
+    """
+    if not is_ml_family(model_key):
+        return []
+    model = (getattr(project, "models", None) or {}).get(model_key)
+    dataset = (getattr(project, "datasets", None) or {}).get(dataset_key)
+    check = getattr(model, "missing_variables", None)
+    if check is None or dataset is None:
+        return []
+    return check(dataset)
+
+
 def _raster_variables(project):
     """The project's processed raster variables, keyed by storage key."""
     variables = getattr(project, "processed_variables", None) or {}

@@ -12,6 +12,7 @@ import pytest
 
 from spatialrisk import gdal_env
 from spatialrisk.gdal_env import (
+    INFERENCE_MIN_STRIPE_ROWS,
     INFERENCE_WORKERS_ENV,
     ResourceLedger,
     inference_working_set,
@@ -109,17 +110,49 @@ def test_policy_never_exceeds_the_memory_budget(monkeypatch):
     assert plan.by_memory == 2
 
 
-def test_policy_shrinks_the_stripe_before_going_below_one_worker(monkeypatch):
-    """A stripe that cannot fit even one worker shrinks but never below one tile row."""
+def test_policy_halves_below_the_tile_height_until_one_worker_fits(monkeypatch):
+    """A 256-row stripe that cannot fit one worker halves to 128/64/32 rows."""
     monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
-    plan = _plan(free_bytes=1 * GiB, width=50000, tile_rows=256, gdal_cache_bytes=0)
+    full = _plan(free_bytes=16 * GiB, width=50000, tile_rows=256, gdal_cache_bytes=0)
+    one_tile_row = full.stripe_bytes
+    # budget = free * 0.5; make it fit ~0.3 of a 256-row stripe -> 64 rows fit (0.25)
+    free = int(one_tile_row * 0.3 / 0.5)
+    plan = _plan(free_bytes=free, width=50000, tile_rows=256, gdal_cache_bytes=0)
+    assert plan.rows_per_stripe == 64
+    assert 256 % plan.rows_per_stripe == 0
     assert plan.workers == 1
-    assert plan.rows_per_stripe % 256 == 0
-    assert plan.rows_per_stripe < 256 * 1 or plan.rows_per_stripe == 256
-    # a 50k-wide 256-row stripe is > 500 MB at ~100 B/px, so it cannot shrink
-    # below one tile row: the floor holds and the serial path is still allowed
-    assert plan.rows_per_stripe == 256
+    assert plan.stripe_bytes <= plan.memory_budget_bytes
+    assert plan.over_budget_bytes == 0
+
+
+def test_policy_stops_halving_at_the_minimum_and_reports_the_overrun(monkeypatch):
+    """Below INFERENCE_MIN_STRIPE_ROWS the plan runs anyway and says by how much."""
+    monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
+    plan = _plan(free_bytes=64 << 20, width=50000, tile_rows=256, gdal_cache_bytes=0)
+    assert plan.rows_per_stripe == INFERENCE_MIN_STRIPE_ROWS
+    assert plan.workers == 1
     assert plan.stripe_bytes > plan.memory_budget_bytes
+    assert plan.over_budget_bytes == plan.stripe_bytes - plan.memory_budget_bytes
+
+
+def test_policy_never_halves_an_explicit_stripe_height(monkeypatch):
+    """rows_per_stripe given by the caller is honoured even when it overruns."""
+    monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
+    plan = _plan(
+        free_bytes=64 << 20,
+        width=50000,
+        tile_rows=256,
+        gdal_cache_bytes=0,
+        rows_per_stripe=256,
+    )
+    assert plan.rows_per_stripe == 256
+    assert plan.over_budget_bytes > 0
+
+
+def test_fitting_plans_report_no_overrun(monkeypatch):
+    """The common case: over_budget_bytes is 0 when the stripe fits."""
+    monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
+    assert _plan().over_budget_bytes == 0
 
 
 def test_policy_shrinks_a_tall_stripe_in_tile_rows(monkeypatch):
@@ -132,6 +165,25 @@ def test_policy_shrinks_a_tall_stripe_in_tile_rows(monkeypatch):
     plan = _plan(tile_rows=64, free_bytes=free)
     assert plan.workers == 1
     assert plan.rows_per_stripe == 128
+
+
+def test_policy_shrinks_in_tile_rows_before_halving(monkeypatch):
+    """Stage 1 (whole tile rows) runs to completion before stage 2 ever halves.
+
+    A caller with ``tile_rows`` below the 256-row target starts taller; pick a
+    budget stage 1 alone satisfies at 192 rows (3 tile rows of 64) so that a
+    halving-first policy, which would jump straight to 128, is distinguishable
+    from the required tile-rows-first order.
+    """
+    monkeypatch.delenv(INFERENCE_WORKERS_ENV, raising=False)
+    tall = _plan(
+        rows_per_stripe=None, tile_rows=64, free_bytes=16 * GiB, gdal_cache_bytes=0
+    )
+    full = tall.stripe_bytes  # 256 rows == 4 tile rows of 64
+    # budget between 192 rows (0.75x) and 256 rows (1x) of the full stripe.
+    free = int(full * 0.8 / 0.5)
+    plan = _plan(tile_rows=64, free_bytes=free, gdal_cache_bytes=0)
+    assert plan.rows_per_stripe == 192
 
 
 def test_policy_honours_an_explicit_stripe_height(monkeypatch):
@@ -311,16 +363,34 @@ def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path
 
     The policy sizes the pool as ``budget // stripe_bytes``, so the estimate
     must be at least what one extra worker really adds. Measured in fresh
-    processes (VmHWM) on a 4 x 3000x3000 float32 stack, mirroring
-    ``tests/test_sampling_pool.py``'s sampling-side probe.
+    processes (VmHWM) on a 7-feature 2048x3000 float32 stack, mirroring
+    ``tests/test_sampling_pool.py``'s sampling-side probe. Seven float32
+    features satisfy 8F > sum(itemsizes) + 24, the shape where the engine's
+    read phase, not the model, sets a GLM stripe's peak; the stack's 5 %
+    nodata per layer makes this a coarse check of that phase, whose exact
+    pin is ``test_read_phase_peak_fits_the_charge`` in
+    ``tests/test_windowed_predict.py``. The plan is made with the working
+    width the probe's run really charged, read off the engine's plan line,
+    so the pin follows the model's charge instead of a number copied here.
     """
     probe = Path(__file__).resolve().parents[1] / "benchmarks" / "_inference_probe.py"
+    height, width, n_features = 2048, 3000, 7
 
     def run(workers):
         d = tmp_path / f"w{workers}"
         d.mkdir()
         out = subprocess.run(
-            [sys.executable, str(probe), str(d), str(workers)],
+            [
+                sys.executable,
+                str(probe),
+                str(d),
+                str(workers),
+                "--size",
+                str(height),
+                str(width),
+                "--features",
+                str(n_features),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -329,12 +399,13 @@ def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path
         return json.loads(out.stdout.strip().splitlines()[-1])
 
     one, four = run(1), run(4)
+    assert one["n_design_cols"] == four["n_design_cols"]
     plan = plan_inference(
-        width=3000,
+        width=width,
         tile_rows=256,
-        n_features=4,
-        feature_itemsizes=[4, 4, 4, 4],
-        n_design_cols=5,
+        n_features=n_features,
+        feature_itemsizes=[4] * n_features,
+        n_design_cols=four["n_design_cols"],
         with_mask=False,
         with_extra=False,
         cores=8,
@@ -344,5 +415,6 @@ def test_pool_peak_memory_grows_at_most_one_estimated_stripe_per_worker(tmp_path
     extra_bytes = (four["peak_kib"] - one["peak_kib"]) * 1024
     assert extra_bytes <= 3 * plan.stripe_bytes, (
         f"one={one['peak_kib']} KiB four={four['peak_kib']} KiB "
-        f"stripe={plan.stripe_bytes / 1024:.0f} KiB"
+        f"stripe={plan.stripe_bytes / 1024:.0f} KiB "
+        f"({four['n_design_cols']} working cols charged)"
     )
