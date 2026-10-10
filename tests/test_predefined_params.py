@@ -193,7 +193,7 @@ def test_threshold_reaches_the_gee_expression(monkeypatch):
     """
     import types
 
-    import gui.scripts.predefined_variables as pv
+    import gui.scripts.predefined.forest as forest_mod
 
     calls = []
 
@@ -207,9 +207,11 @@ def test_threshold_reaches_the_gee_expression(monkeypatch):
 
             return _call
 
-    monkeypatch.setattr(pv, "ee", types.SimpleNamespace(Image=lambda *a, **k: _Rec()))
+    monkeypatch.setattr(
+        forest_mod, "ee", types.SimpleNamespace(Image=lambda *a, **k: _Rec())
+    )
 
-    pv._get_forest_gfc("AOI", 2020, tree_cover_threshold=45)
+    forest_mod._get_forest_gfc("AOI", 2020, tree_cover_threshold=45)
 
     assert ("gte", (45,)) in calls
 
@@ -298,15 +300,15 @@ def test_resolve_bare_temperature_key():
 # ---------------------------------------------------------------------------
 
 
-def _fake_ee_recording_filter_bounds(monkeypatch):
-    """Stub ``ee`` so every ``filterBounds`` argument is recorded.
+def _fake_ee_recording_filter_bounds(monkeypatch, module):
+    """Stub ``module.ee`` so every ``filterBounds`` argument is recorded.
 
     Returns the list of recorded arguments and the fake AOI whose
-    ``geometry().bounds()`` is the ``"BOUNDS"`` sentinel.
+    ``geometry().bounds()`` is the ``"BOUNDS"`` sentinel. ``_aoi_bounds`` lives
+    in ``aoi.py`` with the real ``ee``; the fake AOI is not an ``ee.Geometry``,
+    so it takes the ``aoi.geometry().bounds()`` branch.
     """
     import types
-
-    import gui.scripts.predefined_variables as pv
 
     seen = []
 
@@ -340,15 +342,19 @@ def _fake_ee_recording_filter_bounds(monkeypatch):
         Filter=_Rec(),
         Geometry=_Geometry,
     )
-    monkeypatch.setattr(pv, "ee", fake_ee)
+    monkeypatch.setattr(module, "ee", fake_ee)
     return seen, _Aoi()
 
 
 @pytest.mark.parametrize(
-    "layer",
-    ["_get_protected_area", "_get_forest_tmf", "_get_rivers"],
+    "theme, layer",
+    [
+        ("infrastructure", "_get_protected_area"),
+        ("forest", "_get_forest_tmf"),
+        ("water", "_get_rivers"),
+    ],
 )
-def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, layer):
+def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, theme, layer):
     """``filterBounds`` gets the AOI's bounding rectangle.
 
     Filtering a collection by the AOI object (or its ``geometry()``) makes
@@ -358,11 +364,12 @@ def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, layer):
     The pre-filter is only an optimisation — the layer is clipped to the AOI
     afterwards — so its bounds are sufficient.
     """
-    import gui.scripts.predefined_variables as pv
+    import importlib
 
-    seen, aoi = _fake_ee_recording_filter_bounds(monkeypatch)
+    module = importlib.import_module(f"gui.scripts.predefined.{theme}")
+    seen, aoi = _fake_ee_recording_filter_bounds(monkeypatch, module)
 
-    getattr(pv, layer)(aoi, 2010)
+    getattr(module, layer)(aoi, 2010)
 
     assert seen, "layer is expected to pre-filter with filterBounds"
     assert all(arg == "BOUNDS" for arg in seen), seen

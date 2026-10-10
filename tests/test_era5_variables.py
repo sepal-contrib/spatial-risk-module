@@ -35,8 +35,10 @@ def _record_recipe(monkeypatch, func, *args, **kwargs):
         calls.append(("ImageCollection", (collection_id,)))
         return _Rec(calls)
 
+    import gui.scripts.predefined.climate as climate_mod
+
     monkeypatch.setattr(
-        pv, "ee", types.SimpleNamespace(ImageCollection=_image_collection)
+        climate_mod, "ee", types.SimpleNamespace(ImageCollection=_image_collection)
     )
     func(*args, **kwargs)
     return calls
