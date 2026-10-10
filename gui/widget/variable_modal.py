@@ -17,11 +17,14 @@ from gui.scripts import variable_palettes as palettes
 from gui.scripts import variable_probes as probes
 from gui.scripts.legend_data import Label, format_number, variable_spec_from_vis
 from gui.scripts.predefined_variables import (
+    GROUP_ORDER,
     PREDEFINED_CATALOGUE,
+    advanced_param_specs,
+    basic_param_specs,
     build_predefined_name,
+    changed_advanced_count,
     coerce_param_values,
     default_param_values,
-    param_specs,
 )
 from gui.widget.artifact_name_field import ArtifactNameField
 from gui.widget.band_select import (
@@ -68,11 +71,20 @@ _VECTOR_EXTENSIONS = [".geojson", ".gpkg", ".shp", ".json"]
 
 
 def _predefined_items():
-    """Build dropdown items at render time so labels respect the active locale."""
-    return [
-        {"text": t(meta["label_key"]), "value": key}
-        for key, meta in PREDEFINED_CATALOGUE.items()
-    ]
+    """Dropdown items grouped by theme, built at render time for the locale.
+
+    Vuetify renders ``{"header": ...}`` items as non-selectable subheaders.
+    """
+    items = []
+    for group in GROUP_ORDER:
+        keys = [k for k, m in PREDEFINED_CATALOGUE.items() if m.get("group") == group]
+        if not keys:
+            continue
+        items.append({"header": t(f"vars.predefined_group.{group}")})
+        items.extend(
+            {"text": t(PREDEFINED_CATALOGUE[k]["label_key"]), "value": k} for k in keys
+        )
+    return items
 
 
 def _source_items():
@@ -108,6 +120,18 @@ def _type_display(var_type: str) -> str:
     return t(key) if key else var_type
 
 
+def _raw_params(values):
+    """Form state for param values: lists stay lists (multichoice), the rest text.
+
+    Stringifying a list would turn ``["large", "major"]`` into the text
+    ``"['large', 'major']"`` and break the multiple select.
+    """
+    return {
+        k: list(v) if isinstance(v, (list, tuple)) else str(v)
+        for k, v in values.items()
+    }
+
+
 @solara.component
 def VariableModal(
     open_: solara.Reactive[bool],
@@ -135,6 +159,9 @@ def VariableModal(
     # Raw (string) values for the selected predefined layer's declared params,
     # keyed by param key. Coerced to ints on submit.
     params_raw, set_params_raw = solara.use_state({})
+    # Advanced parameters section: collapsed on layer selection, opened on edit
+    # when the saved values differ from the defaults.
+    advanced_open, set_advanced_open = solara.use_state(False)
     file_path, set_file_path = solara.use_state("")
     asset_id, set_asset_id = solara.use_state("")
     scale, set_scale = solara.use_state("")
@@ -224,6 +251,7 @@ def VariableModal(
         set_source(SOURCES[0])
         set_predefined_key("")
         set_params_raw({})
+        set_advanced_open(False)
         set_var_type(VAR_TYPES[0])
         set_name("")
         set_year("")
@@ -253,10 +281,14 @@ def VariableModal(
         set_source(initial_entry.get("source", "custom"))
         set_predefined_key(initial_entry.get("predefined_key", ""))
         initial_key = initial_entry.get("predefined_key", "")
-        initial_params = initial_entry.get("params") or default_param_values(
-            initial_key
-        )
-        set_params_raw({k: str(v) for k, v in initial_params.items()})
+        # Defaults under the saved values: a legacy or partial ``params``
+        # still seeds every knob it lacks.
+        initial_params = {
+            **default_param_values(initial_key),
+            **(initial_entry.get("params") or {}),
+        }
+        set_params_raw(_raw_params(initial_params))
+        set_advanced_open(changed_advanced_count(initial_key, initial_params) > 0)
         set_var_type(initial_entry.get("type", VAR_TYPES[0]))
         set_name(initial_entry.get("name", ""))
         set_year(str(initial_entry.get("year") or ""))
@@ -417,7 +449,8 @@ def VariableModal(
         The previous layer's values must not leak across.
         """
         set_predefined_key(key or "")
-        set_params_raw({k: str(v) for k, v in default_param_values(key or "").items()})
+        set_params_raw(_raw_params(default_param_values(key or "")))
+        set_advanced_open(False)
 
     def _submit_predefined():
         if not predefined_key:
@@ -430,7 +463,15 @@ def VariableModal(
             return
         values, bad_param = coerce_param_values(predefined_key, params_raw)
         if bad_param is not None:
-            if bad_param.get("type", "int") == "choice":
+            kind = bad_param.get("type", "int")
+            if kind == "multichoice":
+                set_error(
+                    t(
+                        "vars.modal.error_param_multichoice",
+                        label=t(bad_param["label_key"]),
+                    )
+                )
+            elif kind == "choice":
                 set_error(
                     t(
                         "vars.modal.error_param_choice",
@@ -684,6 +725,8 @@ def VariableModal(
                         key_exists,
                         params_raw,
                         set_params_raw,
+                        advanced_open,
+                        set_advanced_open,
                     )
                 else:
                     _render_custom_fields(
@@ -748,6 +791,8 @@ def _render_predefined_fields(
     key_exists,
     params_raw,
     set_params_raw,
+    advanced_open,
+    set_advanced_open,
 ):
     """Fields shown when source == 'predefined'."""
     rv.Select(
@@ -780,48 +825,20 @@ def _render_predefined_fields(
                 outlined=True,
             )
 
-        # Layer-specific knobs declared by the catalogue (e.g. forest_gfc's
-        # tree-cover threshold). Rendered generically, like MODEL_REGISTRY
-        # params in the model dialog — no per-layer branching here.
-        for spec in param_specs(predefined_key):
-            pkey = spec["key"]
-            if spec.get("type", "int") == "choice":
-                rv.Select(
-                    label=t(spec["label_key"]),
-                    items=[
-                        {"text": t(spec["option_label_key_prefix"] + o), "value": o}
-                        for o in spec["options"]
-                    ],
-                    # Same no-fallback contract as the TextField below: show
-                    # exactly what will be submitted.
-                    v_model=params_raw.get(pkey, ""),
-                    on_v_model=lambda v, k=pkey: set_params_raw(
-                        lambda prev: {**prev, k: v or ""}
-                    ),
-                    dense=True,
-                    outlined=True,
-                    hint=t(spec["hint_key"]),
-                    persistent_hint=True,
-                )
-                continue
-            rv.TextField(
-                label=t(spec["label_key"]),
-                # No catalogue-default fallback: the field must show exactly
-                # what will be submitted. coerce_param_values reads params_raw
-                # directly, so displaying a default the state does not hold
-                # would show a valid number while submit rejected it as blank.
-                # Seeding with the defaults is the job of on_select_predefined.
-                v_model=str(params_raw.get(pkey, "")),
-                # Functional update: two params edited in quick succession must
-                # each build on the latest state, not on this render's snapshot.
-                on_v_model=lambda v, k=pkey: set_params_raw(
-                    lambda prev: {**prev, k: v}
-                ),
-                dense=True,
-                outlined=True,
-                type="number",
-                hint=t(spec["hint_key"]),
-                persistent_hint=True,
+        # Layer-specific knobs declared by the catalogue, rendered generically
+        # (no per-layer branching here). Basic knobs first; advanced ones sit
+        # in a collapsed section.
+        for spec in basic_param_specs(predefined_key):
+            _render_param_field(spec, params_raw, set_params_raw)
+        advanced = advanced_param_specs(predefined_key)
+        if advanced:
+            _render_advanced_section(
+                predefined_key,
+                advanced,
+                params_raw,
+                set_params_raw,
+                advanced_open,
+                set_advanced_open,
             )
 
         # Read-only info fields
@@ -849,6 +866,108 @@ def _render_predefined_fields(
                 key=storage_key,
             ),
             style=MUTED + "font-size:0.8rem;padding:0 4px 4px;",
+        )
+
+
+def _render_param_field(spec, params_raw, set_params_raw):
+    """One catalogue param as a form field (int, choice or multichoice).
+
+    The field shows exactly what will be submitted: no catalogue-default
+    fallback for display (seeding defaults is ``on_select_predefined``'s job),
+    and every update is functional so two quick edits build on the latest
+    state rather than this render's snapshot.
+    """
+    pkey = spec["key"]
+    kind = spec.get("type", "int")
+    if kind == "multichoice":
+        rv.Select(
+            label=t(spec["label_key"]),
+            items=[
+                {
+                    "text": t(spec["option_label_key_prefix"] + o["value"]),
+                    "value": o["value"],
+                }
+                for o in spec["options"]
+            ],
+            v_model=list(params_raw.get(pkey) or []),
+            on_v_model=lambda v, k=pkey: set_params_raw(
+                lambda prev: {**prev, k: list(v or [])}
+            ),
+            multiple=True,
+            chips=True,
+            small_chips=True,
+            dense=True,
+            outlined=True,
+            hint=t(spec["hint_key"]),
+            persistent_hint=True,
+        )
+        return
+    if kind == "choice":
+        rv.Select(
+            label=t(spec["label_key"]),
+            items=[
+                {"text": t(spec["option_label_key_prefix"] + o), "value": o}
+                for o in spec["options"]
+            ],
+            v_model=params_raw.get(pkey, ""),
+            on_v_model=lambda v, k=pkey: set_params_raw(
+                lambda prev: {**prev, k: v or ""}
+            ),
+            dense=True,
+            outlined=True,
+            hint=t(spec["hint_key"]),
+            persistent_hint=True,
+        )
+        return
+    rv.TextField(
+        label=t(spec["label_key"]),
+        v_model=str(params_raw.get(pkey, "")),
+        on_v_model=lambda v, k=pkey: set_params_raw(lambda prev: {**prev, k: v}),
+        dense=True,
+        outlined=True,
+        type="number",
+        hint=t(spec["hint_key"]),
+        persistent_hint=True,
+    )
+
+
+def _render_advanced_section(
+    predefined_key, specs, params_raw, set_params_raw, advanced_open, set_advanced_open
+):
+    """Collapsed "Advanced parameters" block: a toggle row, then the specs.
+
+    The toggle is a ``solara.Button`` — ``rv.Btn(on_click=)`` drops clicks.
+    The label carries "(n changed)" so a collapsed section still shows that
+    non-default values are in play.
+    """
+    n_changed = changed_advanced_count(predefined_key, params_raw)
+    label = t("vars.modal.advanced_toggle")
+    if n_changed:
+        label = f"{label} {t('vars.modal.advanced_changed', n=n_changed)}"
+    solara.Button(
+        label,
+        icon_name="mdi-chevron-up" if advanced_open else "mdi-chevron-down",
+        on_click=lambda: set_advanced_open(not advanced_open),
+        text=True,
+        small=True,
+        style="justify-content:flex-start;padding:0 4px;margin:4px 0;"
+        "text-transform:none;",
+    )
+    if not advanced_open:
+        return
+    defaults = _raw_params({s["key"]: s["default"] for s in specs})
+    with solara.Div(
+        style="padding-left:8px;margin-bottom:8px;"
+        "border-left:2px solid rgba(128,128,128,0.35);"
+    ):
+        for spec in specs:
+            _render_param_field(spec, params_raw, set_params_raw)
+        solara.Button(
+            t("vars.modal.advanced_reset"),
+            icon_name="mdi-restore",
+            on_click=lambda: set_params_raw(lambda prev: {**prev, **defaults}),
+            text=True,
+            x_small=True,
         )
 
 

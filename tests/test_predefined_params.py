@@ -116,43 +116,17 @@ def test_roundtrip_is_exact():
         )
 
 
-def test_suffix_values_can_never_reach_four_digits():
-    """Guard: a four-digit suffix would be parsed as a year downstream.
+def test_resolve_rejects_non_canonical_suffixes():
+    """Only the name ``build_predefined_name`` emits resolves.
 
-    ``spatialrisk.evaluation.interval_from_target`` pulls years out of a name
-    with a four-consecutive-digits regex. Int params must keep ``max`` below
-    1000; choice params must have digit-free option strings. Additionally,
-    choice options must be underscore-free since ``resolve_predefined`` splits
-    the name suffix on ``_``.
-    """
-    for key in PREDEFINED_CATALOGUE:
-        for spec in param_specs(key):
-            if spec.get("type", "int") == "choice":
-                assert all(
-                    not any(ch.isdigit() for ch in str(option))
-                    for option in spec["options"]
-                ), f"{key}.{spec['key']} has a digit-bearing option"
-                # resolve_predefined splits on _, so underscores break roundtrip
-                assert all(
-                    "_" not in str(option) for option in spec["options"]
-                ), f"{key}.{spec['key']} has an underscore-bearing option"
-            else:
-                assert (
-                    spec["max"] < 1000
-                ), f"{key}.{spec['key']} allows a 4-digit suffix"
-
-
-def test_resolve_is_not_injective_over_non_canonical_suffixes():
-    """Documented limit of the inverse property (see resolve_predefined).
-
-    The inverse holds for every name ``build_predefined_name`` emits. It is not
-    injective over arbitrary strings: a zero-padded suffix parses to the same
-    values. Unreachable from the UI, where values are coerced to ``int`` before
-    the name is built — pinned here so the docstring stays honest.
+    ``resolve_predefined`` rebuilds the name from the parsed values and
+    rejects any mismatch, so a zero-padded suffix is no longer an alias of
+    the canonical one. The UI never produced such names (values are coerced
+    to ``int`` before the name is built).
     """
     canonical = build_predefined_name("forest_gfc", {"tree_cover_threshold": 30})
     assert canonical == "forest_gfc_tc30"
-    assert resolve_predefined("forest_gfc_tc030") == resolve_predefined(canonical)
+    assert resolve_predefined("forest_gfc_tc030") == (None, {})
 
 
 def test_coerce_accepts_valid_form_text():

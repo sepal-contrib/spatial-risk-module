@@ -121,3 +121,24 @@ def test_a_plain_string_data_type_still_renders():
     )
 
     assert any(x.startswith("raster · ") for x in _texts(rc))
+
+
+def test_source_list_keeps_the_param_summary_out_of_the_subtitle():
+    """Params live in the Details dialog; the subtitle stays type · origin."""
+    project = _project()
+    project.value.raw_variables["rivers_wlmc"] = LocalRasterVar.model_construct(
+        name="rivers_wlmc",
+        path="/x/rivers_wlmc.tif",
+        project=project.value,
+        data_type=DataType.raster,
+        raster_type=RasterType.categorical,
+        active=True,
+    )
+    _box, rc = reacton.render(
+        SourceVariableList(project=project, on_remove=lambda key: None),
+        handle_error=False,
+    )
+    texts = _texts(rc)
+    assert "rivers_wlmc" in texts
+    assert f"raster · {t('widgets.variable_list.chip_local')}" in texts
+    assert not any("Water classes" in x for x in texts)

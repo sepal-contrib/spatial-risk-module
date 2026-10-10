@@ -356,6 +356,7 @@ class GEEVar(Variable):
                     active=True,
                     tags=self.tags.copy(),  # Copy tags from GEEVar
                     vis_params=self.vis_params,
+                    params=self.params,
                     year=self.year,
                 )
                 local_vars.append(local_var)

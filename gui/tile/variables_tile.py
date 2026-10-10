@@ -508,6 +508,7 @@ def _build_predefined(entry: dict, project):
         aoi=aoi_ee,
         project=project,
         year=year,
+        params=entry.get("params") or None,
         # Export/prefill scale for sources whose native resolution is far from
         # the 30 m download fallback (e.g. ERA5-Land at ~11 km).
         default_scale=cat.get("default_scale"),

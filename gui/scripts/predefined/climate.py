@@ -49,6 +49,7 @@ ENTRIES = {
     "precipitation": {
         "label_key": "vars.predefined.precipitation",
         "description_key": "vars.predefined_info.precipitation",
+        "group": "climate",
         "var_type": "GEEVar",
         "raster_type": "continuous",
         "temporal": True,
@@ -64,6 +65,7 @@ ENTRIES = {
     "temperature_2m": {
         "label_key": "vars.predefined.temperature_2m",
         "description_key": "vars.predefined_info.temperature_2m",
+        "group": "climate",
         "var_type": "GEEVar",
         "raster_type": "continuous",
         "temporal": True,
@@ -71,7 +73,7 @@ ENTRIES = {
         # The metric is a choice param baked into the variable name
         # (temperature_2m_median) so two metrics coexist as separate
         # variables. Options must stay digit-free — see the four-digit
-        # suffix constraint on forest_gfc's params above.
+        # suffix constraint on forest_gfc's params in forest.py.
         "params": [
             {
                 "key": "aggregation",

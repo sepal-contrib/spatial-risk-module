@@ -54,6 +54,7 @@ ENTRIES = {
     "protected_area": {
         "label_key": "vars.predefined.protected_area",
         "description_key": "vars.predefined_info.protected_area",
+        "group": "infrastructure",
         "var_type": "GEEVar",
         "raster_type": "categorical",
         "temporal": False,
@@ -63,6 +64,7 @@ ENTRIES = {
     "roads": {
         "label_key": "vars.predefined.roads",
         "description_key": "vars.predefined_info.roads",
+        "group": "infrastructure",
         "var_type": "GEEVar",
         "raster_type": "categorical",
         "temporal": False,
@@ -72,6 +74,7 @@ ENTRIES = {
     "towns": {
         "label_key": "vars.predefined.towns",
         "description_key": "vars.predefined_info.towns",
+        "group": "infrastructure",
         "var_type": "GEEVar",
         "raster_type": "categorical",
         "temporal": True,

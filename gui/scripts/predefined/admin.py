@@ -20,6 +20,7 @@ ENTRIES = {
     "subj": {
         "label_key": "vars.predefined.subj",
         "description_key": "vars.predefined_info.subj",
+        "group": "admin",
         "var_type": "GEEVar",
         "raster_type": "categorical",
         "temporal": False,

@@ -17,10 +17,10 @@
       "altitude": "Elevation (m) from the [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003) digital elevation model, clipped to your AOI. Continuous.",
       "slope": "Terrain slope (degrees) computed from the [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003) elevation with Earth Engine's `ee.Terrain.slope`. Continuous.",
       "protected_area": "Binary mask (1 = inside a protected area) built by rasterizing the designated/inscribed/established/proposed polygons of the [WDPA — World Database on Protected Areas](https://developers.google.com/earth-engine/datasets/catalog/WCMC_WDPA_current_polygons).",
-      "rivers": "Binary mask of rivers and streams from the [OSM Water Layer](https://gee-community-catalog.org/projects/osm_water/) (surface-water classes), clipped to your AOI.",
+      "rivers": "Binary mask of water from the [OSM Water Layer](https://gee-community-catalog.org/projects/osm_water/), clipped to your AOI. By default large lakes and rivers, major rivers, canals and small streams count as water (ocean excluded); change the classes under Advanced parameters.",
       "roads": "Binary mask of roads rasterized from [OpenStreetMap](https://www.openstreetmap.org/) road geometries, clipped to your AOI.",
       "forest_gfc": "Forest/non-forest mask (1 = forest) for the chosen year, derived from [Hansen Global Forest Change](https://developers.google.com/earth-engine/datasets/catalog/UMD_hansen_global_forest_change_2025_v1_13): pixels above the tree-cover threshold in 2000 minus loss up to that year. Temporal.",
-      "forest_tmf": "Forest/non-forest mask (1 = forest) for the chosen year from the [JRC Tropical Moist Forest](https://developers.google.com/earth-engine/datasets/catalog/projects_JRC_TMF_v1_2024_AnnualChanges) annual-change product (undisturbed forest kept as forest). Temporal.",
+      "forest_tmf": "Forest/non-forest mask (1 = forest) at 1 January of the chosen year from the [JRC Tropical Moist Forest](https://developers.google.com/earth-engine/datasets/catalog/projects_JRC_TMF_v1_2024_AnnualChanges) annual-change product. By default only undisturbed forest counts; Advanced parameters can add degraded forest and regrowth. Temporal.",
       "towns": "Binary urban-area mask (1 = built-up + populated) for the nearest epoch, from [JRC GHSL](https://developers.google.com/earth-engine/datasets/catalog/JRC_GHSL_P2023A_GHS_BUILT_S) population and built-surface layers. Temporal (5-year epochs).",
       "subj": "Categorical raster of level-2 administrative subjurisdictions from [FAO GAUL](https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level2), each zone given a distinct value. Used for JNR-style stratification.",
       "precipitation": "Total annual precipitation (mm/year) for the chosen year, summing the 12 monthly totals of [ERA5-Land Monthly Aggregates](https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_MONTHLY_AGGR) (~11 km). Continuous. Temporal.",
@@ -107,7 +107,31 @@
       "error_year_required": "Year is required for this variable.",
       "error_param_range": "{label} must be a whole number between {min} and {max}.",
       "error_param_choice": "{label} must be one of: {options}.",
-      "error_name_required": "Variable name is required."
+      "error_name_required": "Variable name is required.",
+      "param_water_classes": "Water classes",
+      "param_water_classes_hint": "OSM Water Layer classes mapped as water (1). A non-default selection adds a code to the variable name (e.g. rivers_wlmc).",
+      "water_large": "Large lake or river",
+      "water_major": "Major river",
+      "water_canal": "Canal",
+      "water_stream": "Small stream",
+      "water_ocean": "Ocean",
+      "param_tmf_definition": "Forest definition",
+      "param_tmf_definition_hint": "TMF classes counted as forest. A non-default choice is added to the variable name (e.g. forest_tmf_degraded).",
+      "tmf_def_undisturbed": "Undisturbed forest only",
+      "tmf_def_degraded": "Undisturbed + degraded forest",
+      "tmf_def_regrowth": "Undisturbed + degraded + regrowth",
+      "advanced_toggle": "Advanced parameters",
+      "advanced_changed": "({n} changed)",
+      "advanced_reset": "Reset to defaults",
+      "error_param_multichoice": "Select at least one option for {label}."
+    },
+    "predefined_group": {
+      "terrain": "Terrain",
+      "infrastructure": "Infrastructure",
+      "water": "Water",
+      "forest": "Forest",
+      "climate": "Climate",
+      "admin": "Administrative units"
     }
   }
 }

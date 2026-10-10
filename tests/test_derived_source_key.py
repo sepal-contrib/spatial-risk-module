@@ -58,3 +58,44 @@ def test_yearless_derived_still_matches_by_name():
     assert (
         derived_source_key(_P(), "loss_forest_gfc_2015_2020", "?") == "forest_gfc_2015"
     )
+
+
+class _Params:
+    """A default and a parameterised setting of the same layer."""
+
+    def __init__(self):
+        self.raw_variables = {
+            "rivers": SimpleNamespace(name="rivers"),
+            "rivers_wlmc": SimpleNamespace(name="rivers_wlmc"),
+        }
+
+
+def test_longest_raw_name_wins():
+    """``rivers_wlmc_dist`` comes from ``rivers_wlmc``, not from ``rivers``."""
+    assert derived_source_key(_Params(), "rivers_wlmc_dist", "?") == "rivers_wlmc"
+    assert derived_source_key(_Params(), "rivers_dist", "?") == "rivers"
+
+
+def test_match_requires_a_name_boundary():
+    """``riversx`` is not derived from ``rivers``."""
+    assert derived_source_key(_Params(), "riversx", "?") == "?"
+
+
+class _PrefixAndYear:
+    """A shorter name with a matching year next to the longer exact name."""
+
+    def __init__(self):
+        self.raw_variables = {
+            "forest_tmf_2020": SimpleNamespace(name="forest_tmf", year=2020),
+            "forest_tmf_degraded": SimpleNamespace(
+                name="forest_tmf_degraded", year=2015
+            ),
+        }
+
+
+def test_longest_name_beats_year_of_a_shorter_name():
+    """The year only breaks ties among entries with the longest matching name."""
+    assert (
+        derived_source_key(_PrefixAndYear(), "forest_tmf_degraded_dist", "?", year=2020)
+        == "forest_tmf_degraded"
+    )

@@ -19,22 +19,38 @@ def derived_source_key(p, var_name, fallback, year=None):
 
     A name can belong to several raw variables (one temporal layer, one entry
     per year), and a reprojected copy keeps its source's ``year``, so prefer the
-    candidate whose year matches. Change layers carry no year — their span lives
-    in ``tags`` — and fall back to the first name match.
+    candidate whose year matches, among entries with the longest matching name.
+    Change layers carry no year — their span lives in ``tags`` — and fall back
+    to the first entry with the longest matching name.
     """
     base = var_name
     for prefix in ("loss_", "gain_"):
         if base.startswith(prefix):
             base = base[len(prefix) :]
             break
-    matches = [
-        k for k, raw_var in p.raw_variables.items() if base.startswith(raw_var.name)
-    ]
+    # Longest name first, matched at a "_" boundary: with both ``rivers`` and
+    # ``rivers_wlmc`` in the project, ``rivers_wlmc_dist`` belongs to the
+    # latter, and ``riversx`` belongs to neither.
+    matches = sorted(
+        (
+            k
+            for k, raw_var in p.raw_variables.items()
+            if base == raw_var.name or base.startswith(raw_var.name + "_")
+        ),
+        key=lambda k: len(p.raw_variables[k].name),
+        reverse=True,
+    )
+    if not matches:
+        return fallback
+    # The year only breaks ties within the longest-name tier: a shorter name
+    # with a matching year must not beat the longest exact source.
+    longest = p.raw_variables[matches[0]].name
+    matches = [k for k in matches if p.raw_variables[k].name == longest]
     if year is not None:
         for key in matches:
             if getattr(p.raw_variables[key], "year", None) == year:
                 return key
-    return matches[0] if matches else fallback
+    return matches[0]
 
 
 def _source_subtitle(var, is_cloud: bool) -> str:

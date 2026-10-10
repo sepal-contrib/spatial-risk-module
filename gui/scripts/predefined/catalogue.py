@@ -39,3 +39,8 @@ def _merge(themes):
 PREDEFINED_CATALOGUE = _merge(_THEMES)
 
 PREDEFINED_NAMES = list(PREDEFINED_CATALOGUE.keys())
+
+# Order of the group headers in the Add Variable dropdown. Each later part that
+# adds a theme module appends its group here; the catalogue lint requires every
+# group to have at least one entry and an i18n label.
+GROUP_ORDER = ("terrain", "infrastructure", "water", "forest", "climate", "admin")

@@ -112,6 +112,41 @@ def test_grid_field_follows_the_lists_status():
     )
 
 
+def _rivers_project(**raw_attrs):
+    raw = _named(
+        "LocalRasterVar",
+        name="rivers_wlmc",
+        data_type="raster",
+        year=None,
+        raster_type=RasterType.categorical,
+        path="/x/rivers_wlmc.tif",
+        **raw_attrs,
+    )
+    return SimpleNamespace(raw_variables={"rivers_wlmc": raw}, processed_variables={})
+
+
+def test_predefined_row_lists_its_stored_params():
+    """The values saved on the layer show as fields, defaults included."""
+    project = _rivers_project(params={"classes": ["large", "major", "canal"]})
+    rows = dict(harmonized_details(project, "rivers_wlmc").rows)
+    assert rows[t("vars.modal.param_water_classes")] == (
+        f"{t('vars.modal.water_large')}, {t('vars.modal.water_major')}, "
+        f"{t('vars.modal.water_canal')}"
+    )
+
+
+def test_layer_saved_without_params_reads_them_from_its_name():
+    """Projects written before params were stored still show them."""
+    stored = dict(
+        harmonized_details(
+            _rivers_project(params={"classes": ["large", "major", "canal"]}),
+            "rivers_wlmc",
+        ).rows
+    )
+    legacy = dict(harmonized_details(_rivers_project(), "rivers_wlmc").rows)
+    assert legacy == stored
+
+
 def test_gone_rows_have_no_details():
     """No project, no key or a deleted variable: nothing to show, nothing raised."""
     assert harmonized_details(None, "slope_2020") is None

@@ -17,10 +17,10 @@
       "altitude": "Altitude (m) do modelo digital de elevação [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003), recortada para a sua área de interesse. Contínua.",
       "slope": "Declividade do terreno (graus) calculada a partir da elevação [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003) com `ee.Terrain.slope` do Earth Engine. Contínua.",
       "protected_area": "Máscara binária (1 = dentro de uma área protegida) construída pela rasterização dos polígonos designados/inscritos/estabelecidos/propostos da [WDPA — World Database on Protected Areas](https://developers.google.com/earth-engine/datasets/catalog/WCMC_WDPA_current_polygons).",
-      "rivers": "Máscara binária de rios e córregos da [OSM Water Layer](https://gee-community-catalog.org/projects/osm_water/) (classes de água superficial), recortada para a sua área de interesse.",
+      "rivers": "Máscara binária de água da [OSM Water Layer](https://gee-community-catalog.org/projects/osm_water/), recortada para a sua área de interesse. Por padrão contam como água os lagos e rios grandes, os rios principais, os canais e os córregos (oceano excluído); altere as classes em Parâmetros avançados.",
       "roads": "Máscara binária de estradas rasterizadas a partir das geometrias viárias do [OpenStreetMap](https://www.openstreetmap.org/), recortada para a sua área de interesse.",
       "forest_gfc": "Máscara floresta/não floresta (1 = floresta) para o ano escolhido, derivada do [Hansen Global Forest Change](https://developers.google.com/earth-engine/datasets/catalog/UMD_hansen_global_forest_change_2025_v1_13): pixels acima do limiar de cobertura arbórea em 2000 menos a perda até aquele ano. Temporal.",
-      "forest_tmf": "Máscara floresta/não floresta (1 = floresta) para o ano escolhido, do produto de mudanças anuais [JRC Tropical Moist Forest](https://developers.google.com/earth-engine/datasets/catalog/projects_JRC_TMF_v1_2024_AnnualChanges) (floresta não perturbada mantida como floresta). Temporal.",
+      "forest_tmf": "Máscara floresta/não floresta (1 = floresta) em 1º de janeiro do ano escolhido, do produto de mudanças anuais [JRC Tropical Moist Forest](https://developers.google.com/earth-engine/datasets/catalog/projects_JRC_TMF_v1_2024_AnnualChanges). Por padrão só conta a floresta não perturbada; em Parâmetros avançados é possível incluir floresta degradada e regeneração. Temporal.",
       "towns": "Máscara binária de área urbana (1 = construída + povoada) para a época mais próxima, das camadas de população e superfície construída do [JRC GHSL](https://developers.google.com/earth-engine/datasets/catalog/JRC_GHSL_P2023A_GHS_BUILT_S). Temporal (épocas de 5 anos).",
       "subj": "Raster categórico das subjurisdições administrativas de nível 2 do [FAO GAUL](https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level2), com um valor distinto para cada zona. Usado na estratificação no estilo JNR.",
       "precipitation": "Precipitação total anual (mm/ano) do ano escolhido, somando os 12 totais mensais do [ERA5-Land Monthly Aggregates](https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_MONTHLY_AGGR) (~11 km). Contínua. Temporal.",
@@ -107,7 +107,31 @@
       "error_year_required": "O ano é obrigatório para esta variável.",
       "error_param_range": "{label} deve ser um número inteiro entre {min} e {max}.",
       "error_param_choice": "{label} deve ser um de: {options}.",
-      "error_name_required": "O nome da variável é obrigatório."
+      "error_name_required": "O nome da variável é obrigatório.",
+      "param_water_classes": "Classes de água",
+      "param_water_classes_hint": "Classes da OSM Water Layer mapeadas como água (1). Uma seleção diferente da padrão adiciona um código ao nome da variável (ex.: rivers_wlmc).",
+      "water_large": "Lago ou rio grande",
+      "water_major": "Rio principal",
+      "water_canal": "Canal",
+      "water_stream": "Córrego",
+      "water_ocean": "Oceano",
+      "param_tmf_definition": "Definição de floresta",
+      "param_tmf_definition_hint": "Classes do TMF consideradas floresta. Uma escolha diferente da padrão é adicionada ao nome da variável (ex.: forest_tmf_degraded).",
+      "tmf_def_undisturbed": "Somente floresta não perturbada",
+      "tmf_def_degraded": "Floresta não perturbada + degradada",
+      "tmf_def_regrowth": "Não perturbada + degradada + regeneração",
+      "advanced_toggle": "Parâmetros avançados",
+      "advanced_changed": "(alterados: {n})",
+      "advanced_reset": "Restaurar padrões",
+      "error_param_multichoice": "Selecione pelo menos uma opção para {label}."
+    },
+    "predefined_group": {
+      "terrain": "Terreno",
+      "infrastructure": "Infraestrutura",
+      "water": "Água",
+      "forest": "Floresta",
+      "climate": "Clima",
+      "admin": "Unidades administrativas"
     }
   }
 }

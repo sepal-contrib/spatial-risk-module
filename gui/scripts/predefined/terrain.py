@@ -18,6 +18,7 @@ ENTRIES = {
     "altitude": {
         "label_key": "vars.predefined.altitude",
         "description_key": "vars.predefined_info.altitude",
+        "group": "terrain",
         "var_type": "GEEVar",
         "raster_type": "continuous",
         "temporal": False,
@@ -31,6 +32,7 @@ ENTRIES = {
     "slope": {
         "label_key": "vars.predefined.slope",
         "description_key": "vars.predefined_info.slope",
+        "group": "terrain",
         "var_type": "GEEVar",
         "raster_type": "continuous",
         "temporal": False,

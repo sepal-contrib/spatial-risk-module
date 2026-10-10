@@ -22,31 +22,60 @@ def _get_forest_gfc(aoi, year, tree_cover_threshold=30):
     return forest2000_thr.where(loss.lt(year - 2000), 0).rename("B1")
 
 
-def _get_forest_tmf(aoi, year):
-    """JRC Tropical Moist Forest — forest cover at a given year.
+# JRC TMF v1_2024 AnnualChanges (bands Dec1990..Dec2024). Part C imports it.
+TMF_ANNUAL_CHANGES = "projects/JRC/TMF/v1_2024/AnnualChanges"
+
+# JRC TMF AnnualChanges classes: 1 undisturbed, 2 degraded, 3 deforested,
+# 4 regrowth, 5 water, 6 other. Each definition lists the classes kept as
+# forest; dict order is the option order in the modal.
+TMF_FOREST_CLASSES = {
+    "undisturbed": (1,),
+    "degraded": (1, 2),
+    "regrowth": (1, 2, 4),
+}
+
+
+def tmf_definition_param():
+    """The TMF forest-definition param spec (fresh dict; shared with Part C)."""
+    return {
+        "key": "definition",
+        "label_key": "vars.modal.param_tmf_definition",
+        "hint_key": "vars.modal.param_tmf_definition_hint",
+        "type": "choice",
+        "default": "undisturbed",
+        "options": list(TMF_FOREST_CLASSES),
+        "option_label_key_prefix": "vars.modal.tmf_def_",
+        "suffix_prefix": "",
+        "advanced": True,
+    }
+
+
+def _get_forest_tmf(aoi, year, definition="undisturbed"):
+    """JRC Tropical Moist Forest — forest cover at 1 January of ``year``.
 
     Reads the AnnualChanges ``Dec{year-1}`` band and reduces it to a binary
-    forest mask (1 = forest, 0 = non-forest), matching the temporal forest_gfc
-    structure. The TMF AnnualChange classes are 1 = undisturbed, 2 = degraded,
-    3 = deforested, 4 = regrowth, 5 = water, 6 = other. This expression keeps
-    class 1 as forest: ``where(eq(2), 1)`` is overwritten by the subsequent
-    ``where(neq(1), 0)`` (which references the original band), so degraded
-    pixels resolve to 0 — preserving the behaviour of notebooks/
-    1.variables_factory.ipynb verbatim.
+    forest mask (1 = forest, 0 = non-forest) using the classes of
+    ``definition`` (see ``TMF_FOREST_CLASSES``). The default ``undisturbed``
+    keeps the expression inherited from notebooks/1.variables_factory.ipynb
+    verbatim — it reduces to class 1 only, because ``where(neq(1), 0)``
+    reads the original band — so default downloads stay byte-identical. The
+    kwarg default must match the catalogue spec's ``default``.
     """
-    tmf = (
-        ee.ImageCollection("projects/JRC/TMF/v1_2024/AnnualChanges")
-        .filterBounds(_aoi_bounds(aoi))
-        .mosaic()
-    )
+    tmf = ee.ImageCollection(TMF_ANNUAL_CHANGES).filterBounds(_aoi_bounds(aoi)).mosaic()
     band = tmf.select("Dec" + str(year - 1))
-    return band.where(band.eq(2), 1).where(band.neq(1), 0).clip(aoi).rename("B1")
+    if definition == "undisturbed":
+        forest = band.where(band.eq(2), 1).where(band.neq(1), 0)
+    else:
+        classes = list(TMF_FOREST_CLASSES[definition])
+        forest = band.remap(classes, [1] * len(classes), 0)
+    return forest.clip(aoi).rename("B1")
 
 
 ENTRIES = {
     "forest_gfc": {
         "label_key": "vars.predefined.forest_gfc",
         "description_key": "vars.predefined_info.forest_gfc",
+        "group": "forest",
         "var_type": "GEEVar",
         "raster_type": "categorical",
         "temporal": True,
@@ -87,10 +116,15 @@ ENTRIES = {
     "forest_tmf": {
         "label_key": "vars.predefined.forest_tmf",
         "description_key": "vars.predefined_info.forest_tmf",
+        "group": "forest",
         "var_type": "GEEVar",
         "raster_type": "categorical",
         "temporal": True,
-        "years": list(range(2001, 2025)),
+        # Forest at 1 Jan of ``year`` reads AnnualChanges Dec{year-1}; TMF
+        # v1_2024 carries Dec1990..Dec2024, so years run to 2025. Bump this
+        # alongside the asset ID in ``_get_forest_tmf``.
+        "years": list(range(2001, 2026)),
+        "params": [tmf_definition_param()],
         "get_image": _get_forest_tmf,
         "vis_params": {"palette": ["ffffff", "2e7d32"], "min": 0, "max": 1},
         "legend_class_keys": ("legend.class.non_forest", "legend.class.forest"),

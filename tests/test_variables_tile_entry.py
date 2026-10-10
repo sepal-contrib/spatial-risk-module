@@ -150,6 +150,7 @@ def test_build_predefined_forwards_params_to_get_image(monkeypatch):
     assert seen["params"] == {"tree_cover_threshold": 45}
     assert seen["year"] == 2020
     assert var.name == "forest_gfc_tc45"  # suffix kept: it names the output file
+    assert var.params == {"tree_cover_threshold": 45}  # kept for the Details dialog
 
 
 def test_build_predefined_without_params_is_unchanged(monkeypatch):

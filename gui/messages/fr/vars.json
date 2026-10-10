@@ -17,10 +17,10 @@
       "altitude": "Altitude (m) issue du modèle numérique de terrain [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003), découpée sur votre zone d'intérêt. Continue.",
       "slope": "Pente du terrain (degrés) calculée à partir de l'altitude [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003) avec `ee.Terrain.slope` d'Earth Engine. Continue.",
       "protected_area": "Masque binaire (1 = à l'intérieur d'une aire protégée) construit par rastérisation des polygones désignés/inscrits/établis/proposés de la [WDPA — World Database on Protected Areas](https://developers.google.com/earth-engine/datasets/catalog/WCMC_WDPA_current_polygons).",
-      "rivers": "Masque binaire des cours d'eau et ruisseaux issu de l'[OSM Water Layer](https://gee-community-catalog.org/projects/osm_water/) (classes d'eau de surface), découpé sur votre zone d'intérêt.",
+      "rivers": "Masque binaire de l'eau issu de l'[OSM Water Layer](https://gee-community-catalog.org/projects/osm_water/), découpé sur votre zone d'intérêt. Par défaut, les grands lacs et fleuves, les rivières principales, les canaux et les petits cours d'eau comptent comme eau (océan exclu) ; modifiez les classes dans Paramètres avancés.",
       "roads": "Masque binaire des routes rastérisées à partir des géométries routières d'[OpenStreetMap](https://www.openstreetmap.org/), découpé sur votre zone d'intérêt.",
       "forest_gfc": "Masque forêt/non-forêt (1 = forêt) pour l'année choisie, dérivé de [Hansen Global Forest Change](https://developers.google.com/earth-engine/datasets/catalog/UMD_hansen_global_forest_change_2025_v1_13) : les pixels au-dessus du seuil de couvert arboré en 2000 moins la perte jusqu'à cette année. Temporel.",
-      "forest_tmf": "Masque forêt/non-forêt (1 = forêt) pour l'année choisie, issu du produit de changements annuels [JRC Tropical Moist Forest](https://developers.google.com/earth-engine/datasets/catalog/projects_JRC_TMF_v1_2024_AnnualChanges) (la forêt non perturbée reste de la forêt). Temporel.",
+      "forest_tmf": "Masque forêt/non-forêt (1 = forêt) au 1er janvier de l'année choisie, issu du produit de changements annuels [JRC Tropical Moist Forest](https://developers.google.com/earth-engine/datasets/catalog/projects_JRC_TMF_v1_2024_AnnualChanges). Par défaut, seule la forêt non perturbée compte ; les Paramètres avancés permettent d'ajouter la forêt dégradée et la repousse. Temporel.",
       "towns": "Masque binaire des zones urbaines (1 = bâti + peuplé) pour l'époque la plus proche, issu des couches de population et de surface bâtie [JRC GHSL](https://developers.google.com/earth-engine/datasets/catalog/JRC_GHSL_P2023A_GHS_BUILT_S). Temporel (époques de 5 ans).",
       "subj": "Raster catégoriel des sous-juridictions administratives de niveau 2 issu de [FAO GAUL](https://developers.google.com/earth-engine/datasets/catalog/FAO_GAUL_2015_level2), chaque zone recevant une valeur distincte. Utilisé pour la stratification de type JNR.",
       "precipitation": "Précipitations totales annuelles (mm/an) de l'année choisie, en sommant les 12 totaux mensuels d'[ERA5-Land Monthly Aggregates](https://developers.google.com/earth-engine/datasets/catalog/ECMWF_ERA5_LAND_MONTHLY_AGGR) (~11 km). Continue. Temporelle.",
@@ -107,7 +107,31 @@
       "error_year_required": "L'année est requise pour cette variable.",
       "error_param_range": "{label} doit être un nombre entier compris entre {min} et {max}.",
       "error_param_choice": "{label} doit être l'une de : {options}.",
-      "error_name_required": "Le nom de la variable est requis."
+      "error_name_required": "Le nom de la variable est requis.",
+      "param_water_classes": "Classes d'eau",
+      "param_water_classes_hint": "Classes de l'OSM Water Layer cartographiées comme eau (1). Une sélection différente de celle par défaut ajoute un code au nom de la variable (p. ex. rivers_wlmc).",
+      "water_large": "Grand lac ou fleuve",
+      "water_major": "Rivière principale",
+      "water_canal": "Canal",
+      "water_stream": "Petit cours d'eau",
+      "water_ocean": "Océan",
+      "param_tmf_definition": "Définition de la forêt",
+      "param_tmf_definition_hint": "Classes TMF comptées comme forêt. Un choix différent de celui par défaut est ajouté au nom de la variable (p. ex. forest_tmf_degraded).",
+      "tmf_def_undisturbed": "Forêt non perturbée uniquement",
+      "tmf_def_degraded": "Forêt non perturbée + dégradée",
+      "tmf_def_regrowth": "Non perturbée + dégradée + repousse",
+      "advanced_toggle": "Paramètres avancés",
+      "advanced_changed": "(modifiés : {n})",
+      "advanced_reset": "Rétablir les valeurs par défaut",
+      "error_param_multichoice": "Sélectionnez au moins une option pour {label}."
+    },
+    "predefined_group": {
+      "terrain": "Relief",
+      "infrastructure": "Infrastructures",
+      "water": "Eau",
+      "forest": "Forêt",
+      "climate": "Climat",
+      "admin": "Unités administratives"
     }
   }
 }
