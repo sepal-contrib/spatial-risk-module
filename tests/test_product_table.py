@@ -636,3 +636,80 @@ def test_i18n_action_keys_exist_in_every_locale():
             table = json.loads(f.read_text())["widgets"]["product_table"]
             for k in keys:
                 assert table.get(k), (d.name, k)
+
+
+# --- Stage 1 Task 3: clamped row errors with a details dialog ----------------
+
+
+def _texts(w):
+    """Every string under a widget, in document order."""
+    out = []
+
+    def walk(x):
+        for c in getattr(x, "children", None) or []:
+            if isinstance(c, str):
+                out.append(c)
+            else:
+                walk(c)
+
+    walk(w)
+    return out
+
+
+def test_error_line_is_clamped_with_a_details_link():
+    """A long row error clamps to two lines and opens its full text in a dialog."""
+    import ipyvuetify as vw
+    import reacton
+
+    from gui.i18n import t
+    from gui.widget.product_table import ProductTable
+
+    t("common.close")  # prime the catalog (first t() in a first render)
+    msg = "E" * 600
+    rows = [
+        {
+            "key": "r",
+            "cells": [{"type": "text", "value": "a"}],
+            "actions": [],
+            "error": msg,
+        }
+    ]
+    _box, rc = reacton.render(
+        ProductTable(title="t", columns=[{"label": "c"}], rows=rows, empty_text=""),
+        handle_error=False,
+    )
+    try:
+        widgets = _all_widgets(rc)
+        errs = [
+            w
+            for w in widgets
+            if isinstance(w, vw.Html)
+            and getattr(w, "children", None) == [msg]
+            and "-webkit-line-clamp:2" in (w.style_ or "")
+        ]
+        assert len(errs) == 1
+        assert "-webkit-box-orient:vertical" in errs[0].style_
+        assert "overflow:hidden" in errs[0].style_
+
+        details = t("widgets.product_table.error_details")
+        btns = [b for b in _all_btns(rc) if details in _texts(b)]
+        assert len(btns) == 1
+
+        dialogs = [w for w in widgets if isinstance(w, vw.Dialog)]
+        assert len(dialogs) == 1
+        assert dialogs[0].v_model is False
+
+        btns[0].fire_event("click", {})
+
+        dialogs = [w for w in _all_widgets(rc) if isinstance(w, vw.Dialog)]
+        assert dialogs[0].v_model is True
+        pre_nodes = [
+            w
+            for w in _all_widgets(rc)
+            if isinstance(w, vw.Html)
+            and w.tag == "pre"
+            and getattr(w, "children", None) == [msg]
+        ]
+        assert pre_nodes and "white-space:pre-wrap" in pre_nodes[0].style_
+    finally:
+        rc.close()

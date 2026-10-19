@@ -39,7 +39,11 @@ HEADER_CELL = (
     "text-overflow:ellipsis;white-space:nowrap;"
 )
 # Full-width line under a failed row (grid rows have no subtitle slot).
-ERROR_LINE = "grid-column:1/-1;padding:0 8px 5px;font-size:0.75rem;"
+# Two-line clamp: a long failure message ends in "details" (full text in a dialog).
+ERROR_LINE = (
+    "grid-column:1/-1;padding:0 8px 5px;font-size:0.75rem;"
+    "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"
+)
 
 # Chips live in flexible columns, so a long label (a "Base" tag next to a long
 # variable name, a dataset's target name) squeezes the chip below its content
@@ -435,6 +439,52 @@ def _render_slots(actions: list):
 
 
 @solara.component
+def _RowError(message: str):
+    """Full-width failure line: clamped to two lines, "details" opens the rest."""
+    open_, set_open = solara.use_state(False)
+    details = t("widgets.product_table.error_details")
+    close = t("common.close")
+    with rv.Html(
+        tag="div",
+        style_="grid-column:1/-1;display:flex;align-items:flex-start;min-width:0;",
+    ):
+        rv.Html(
+            tag="span",
+            class_="error--text",
+            style_=ERROR_LINE + "flex:1 1 auto;min-width:0;",
+            children=[message],
+        )
+        solara.Button(
+            details,
+            on_click=lambda: set_open(True),
+            text=True,
+            x_small=True,
+            style="flex:0 0 auto;text-transform:none;",
+            attributes={"title": details, "aria-label": details},
+        )
+    with rv.Dialog(
+        v_model=open_,
+        on_v_model=lambda v: set_open(bool(v)),
+        max_width="560px",
+    ):
+        with rv.Card():
+            with rv.CardText():
+                rv.Html(
+                    tag="pre",
+                    style_="white-space:pre-wrap;word-break:break-word;font-size:0.8rem;",
+                    children=[message],
+                )
+            with rv.CardActions(style_="justify-content:flex-end;"):
+                solara.Button(
+                    close,
+                    on_click=lambda: set_open(False),
+                    text=True,
+                    small=True,
+                    attributes={"title": close, "aria-label": close},
+                )
+
+
+@solara.component
 def _Row(row: dict, grid: str, show_actions: bool):
     """One grid row.
 
@@ -460,12 +510,7 @@ def _Row(row: dict, grid: str, show_actions: bool):
             with rv.Html(tag="div", style_=CELL_RIGHT):
                 _render_slots(row.get("actions", []))
         if row.get("error"):
-            rv.Html(
-                tag="span",
-                class_="error--text",
-                style_=ERROR_LINE,
-                children=[str(row["error"])],
-            )
+            _RowError(str(row["error"]))
     # rv.use_event is a hook — call it unconditionally, gate inside the handler.
     rv.use_event(content, "click", lambda *_: on_click() if on_click else None)
 

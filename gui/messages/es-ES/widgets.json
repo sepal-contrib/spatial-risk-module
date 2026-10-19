@@ -179,7 +179,8 @@
       "action_dismiss": "Descartar",
       "action_more": "Más acciones",
       "verb_download": "Descargar",
-      "verb_harmonize": "Armonizar"
+      "verb_harmonize": "Armonizar",
+      "error_details": "detalles"
     },
     "artifact_name": {
       "label": "Nombre",
