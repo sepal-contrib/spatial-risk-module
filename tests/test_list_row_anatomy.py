@@ -129,7 +129,6 @@ def _models():
             project=_project(models={"m": m}),
             train_jobs=jobs,
             model_labels={"rf": "RF"},
-            on_cancel=_noop,
             on_dismiss=_noop,
             on_delete=_noop,
             on_open=_noop,
