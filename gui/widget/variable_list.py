@@ -101,9 +101,24 @@ def SourceVariableList(
                     "loading": key in toggling_keys,
                 }
             )
+        # Edit and delete rewrite the files a running download is writing, so
+        # they freeze on that row (map and the rest stay live).
+        frozen = key in downloading_keys
         if on_edit is not None:
-            actions.append({"kind": "edit", "on_click": lambda *_, k=key: on_edit(k)})
-        actions.append({"kind": "delete", "on_click": lambda *_, k=key: on_remove(k)})
+            actions.append(
+                {
+                    "kind": "edit",
+                    "on_click": lambda *_, k=key: on_edit(k),
+                    "disabled": frozen,
+                }
+            )
+        actions.append(
+            {
+                "kind": "delete",
+                "on_click": lambda *_, k=key: on_remove(k),
+                "disabled": frozen,
+            }
+        )
 
         name_chips = (
             [
@@ -350,7 +365,12 @@ def HarmonizationVariableList(
             )
         if output is not None and on_remove is not None:
             actions.append(
-                {"kind": "delete", "on_click": lambda *_, k=out_key: on_remove(k)}
+                {
+                    "kind": "delete",
+                    "on_click": lambda *_, k=out_key: on_remove(k),
+                    # The run is rewriting this output; deleting it now races it.
+                    "disabled": key in running,
+                }
             )
 
         name_chips = (

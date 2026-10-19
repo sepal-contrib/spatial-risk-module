@@ -501,7 +501,7 @@ def InferenceTile(project, map_=None, sepal_client=None, legend_port=None):
         )
 
         if form_error:
-            rv.Alert(type_="error", dense=True, children=[form_error])
+            rv.Alert(type="error", dense=True, children=[form_error])
 
         # Outputs list
         InferenceOutputList(

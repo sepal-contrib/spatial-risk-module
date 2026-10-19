@@ -12,17 +12,15 @@ logger = logging.getLogger("spatial_risk")
 
 
 @solara.component
-def TrainModelList(
-    project, train_jobs, model_labels, on_cancel, on_dismiss, on_delete, on_open
-):
+def TrainModelList(project, train_jobs, model_labels, on_dismiss, on_delete, on_open):
     """Models table: one row per registered model plus in-flight/failed jobs.
 
     Args:
         project: solara.Reactive[Project] — source of project.models.
         train_jobs: solara.Reactive[list] — transient session job dicts.
         model_labels: dict model_type -> human label.
-        on_cancel: callback(job_id) — cancel a running job.
         on_dismiss: callback(job_id) — discard a failed/cancelled job row.
+            A running job offers no action: training cannot be interrupted.
         on_delete: callback(model_key) — delete a registered model (confirmed
             by the tile).
         on_open: callback(model_key) — open the read-only details dialog for a
@@ -39,9 +37,9 @@ def TrainModelList(
                 {"kind": "delete", "on_click": lambda *_, k=r["key"]: on_delete(k)},
             ]
         elif r["status"] == "running":
-            actions = [
-                {"kind": "cancel", "on_click": lambda *_, i=r["job_id"]: on_cancel(i)}
-            ]
+            # Training cannot be interrupted (the worker has no cancel hook), so
+            # a Cancel button only hid the row while the fit kept running.
+            actions = []
         else:
             actions = [
                 {"kind": "dismiss", "on_click": lambda *_, i=r["job_id"]: on_dismiss(i)}

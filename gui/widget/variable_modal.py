@@ -715,7 +715,7 @@ def VariableModal(
                     )
 
                 if error:
-                    rv.Alert(type_="error", dense=True, children=[error])
+                    rv.Alert(type="error", dense=True, children=[error])
 
             with rv.CardActions(style_="justify-content: flex-end; gap: 8px;"):
                 solara.Button(

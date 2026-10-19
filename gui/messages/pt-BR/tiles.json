@@ -109,6 +109,9 @@
     },
     "dataset": {
       "header": "### Conjunto de dados",
+      "details_title": "Detalhes do conjunto de dados — {key}",
+      "details_year_label": "Ano",
+      "details_categorical_label": "Variáveis categóricas",
       "description": "Reúna as camadas com as quais um modelo aprende: um alvo (o que prever) e as variáveis preditoras.",
       "info_header": "Sobre alvos e variáveis preditoras",
       "info_md": "Um conjunto de dados nomeia as camadas nas quais um modelo treina e prediz:\n\n- **Alvo** — a variável que o modelo aprende a prever: uma máscara de evento binária em que **1 = evento** e 0 = sem evento. Normalmente uma camada de *perda* por desmatamento gerada na etapa Camadas derivadas a partir de dois anos de cobertura florestal.\n- **Variáveis preditoras** — as camadas explicativas que o modelo relaciona ao alvo: altitude, declividade, distância até a borda da floresta / estradas / rios / cidades, áreas protegidas etc.\n- **Ano** — uma variável temporal (uma camada por ano) aparece uma vez por ano, p. ex. *forest (2015)*: escolhê-la escolhe a camada daquele ano. Cada variável pode usar um ano diferente.\n\nO registro valida que cada camada existe no disco e compartilha a grade comum da etapa Harmonização. Crie conjuntos de dados separados para os períodos de calibração e validação, assim você pode treinar em um e avaliar no outro.",
@@ -251,6 +254,8 @@
     },
     "evaluation": {
       "header": "### Avaliação",
+      "confirm_delete_title": "Excluir avaliação?",
+      "confirm_delete_message": "Excluir a avaliação '{key}'? Isso a remove do projeto e exclui os seus arquivos. Esta ação não pode ser desfeita.",
       "description": "Pontue os mapas de predição contra uma referência única para que mapas de conjuntos de dados diferentes sejam comparáveis. Cada execução salva aparece abaixo — clique nela para ver a sua tabela.",
       "info_header": "Sobre a avaliação de mapas",
       "info_md": "Cada avaliação pontua um ou mais mapas de predição contra uma única **referência** escolhida pelo usuário, para que mapas treinados em conjuntos de dados diferentes possam ser comparados em condições iguais.\n\nA referência é definida por três entradas:\n\n- **Referência — desmatamento observado** — o raster do desmatamento que de fato ocorreu durante o período de validação.\n- **Floresta no início do período** — o raster de cobertura florestal no início desse período.\n- **Intervalo (anos)** — a duração do período (preenchido a partir do nome da camada de referência quando possível).\n\nPara cada mapa selecionado, a área é agregada em células quadradas do(s) **tamanho(s) de célula** escolhido(s) (em pixels) e a taxa de desmatamento predita é comparada com a observada em cada célula. Índices de precisão:\n\n- **MedAE** — erro absoluto mediano\n- **R²** — coeficiente de determinação\n- **RMSE** — raiz do erro quadrático médio\n- **wRMSE** — RMSE ponderado pela área florestal de cada célula\n\nDeixe a seleção de mapas vazia para avaliar todas as predições registradas. **Recalcular a taxa de desmatamento** reconstrói as taxas observadas em vez de reutilizar as armazenadas em cache. Cada execução é salva com o projeto e listada nesta aba; abra uma linha para ver a tabela completa.",

@@ -17,14 +17,20 @@ def DatasetList(
     on_edit: Optional[Callable[[str], None]] = None,
     on_remove: Optional[Callable[[str], None]] = None,
     on_duplicate: Optional[Callable[[str], None]] = None,
+    on_open: Optional[Callable[[str], None]] = None,
 ):
-    """Table of registered datasets with duplicate, edit and remove actions."""
+    """Table of registered datasets with duplicate, edit and remove actions.
+
+    ``on_open`` adds a details action that opens the read-only dataset dialog.
+    """
     p = project.value
     datasets = (p.datasets if p is not None else {}) or {}
 
     rows = []
     for key, ds in datasets.items():
         actions = []
+        if on_open is not None:
+            actions.append({"kind": "open", "on_click": lambda *_, k=key: on_open(k)})
         if on_duplicate is not None:
             actions.append(
                 {"kind": "duplicate", "on_click": lambda *_, k=key: on_duplicate(k)}

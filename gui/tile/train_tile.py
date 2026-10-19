@@ -209,9 +209,6 @@ def TrainTile(project):
             job_id,
         )
 
-    def on_cancel(job_id):
-        _update_job(job_id, skip_if_cancelled=False, status="cancelled")
-
     def on_dismiss(job_id):
         # Failed/cancelled job rows only — never touches the model registry.
         train_jobs.set([j for j in train_jobs.value if j["id"] != job_id])
@@ -247,7 +244,6 @@ def TrainTile(project):
             project=project,
             train_jobs=train_jobs,
             model_labels={k: model_short_label(k) for k in MODEL_KEYS},
-            on_cancel=on_cancel,
             on_dismiss=on_dismiss,
             on_delete=set_pending_delete,
             on_open=set_details_key,

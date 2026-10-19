@@ -323,6 +323,14 @@ def ToolboxTile(project, map_=None, sepal_client=None, legend_port=None):
                         style=MUTED + "font-size:0.8rem;",
                     )
 
+                solara.Button(
+                    t("toolbox.allocation.new"),
+                    icon_name="mdi-plus",
+                    color="primary",
+                    small=True,
+                    block=True,
+                    on_click=open_new_form,
+                )
                 AllocationList(
                     rows=rows,
                     on_delete=set_pending_delete,
@@ -332,12 +340,6 @@ def ToolboxTile(project, map_=None, sepal_client=None, legend_port=None):
                     toggling_keys=density_inflight.value,
                     on_edit=on_edit,
                     on_dismiss=on_dismiss,
-                )
-                solara.Button(
-                    t("toolbox.allocation.new"),
-                    icon_name="mdi-plus",
-                    block=True,
-                    on_click=open_new_form,
                 )
 
         ConfirmDialog(
