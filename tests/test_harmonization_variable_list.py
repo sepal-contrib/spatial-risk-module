@@ -162,7 +162,7 @@ def test_harmonize_button_is_live_only_where_there_is_work():
     project = solara.reactive(_project())
     rc, calls = _render(project, HarmonizationStatus(pending=["roads"], current=["fc"]))
     try:
-        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-hammer"]]
+        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-play"]]
         assert [b.disabled for b in hammer] == [True, False, False]
         hammer[1].click()
         assert calls == ["roads"]
@@ -191,12 +191,12 @@ def test_running_row_shows_the_hourglass_and_every_button_is_frozen():
         harmonize_disabled=True,
     )
     try:
-        icons = ("mdi-hammer", BUSY_ICON)
+        icons = ("mdi-play", BUSY_ICON)
         hammer = [b for b in _buttons(rc) if b.children[0].children[0] in icons]
         assert [b.children[0].children[0] for b in hammer] == [
-            "mdi-hammer",
+            "mdi-play",
             BUSY_ICON,
-            "mdi-hammer",
+            "mdi-play",
         ]
         assert [b.disabled for b in hammer] == [True, False, True]
         assert [bool(b.class_ and "sr-busy" in b.class_) for b in hammer] == [
@@ -216,7 +216,7 @@ def test_status_none_reads_as_checking():
     rc, _ = _render(project, None)
     try:
         assert t("widgets.product_table.status_checking") in _status_labels(rc)
-        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-hammer"]]
+        hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-play"]]
         # Nothing is known yet for local layers, so nothing local is runnable.
         assert [b.disabled for b in hammer] == [True, True, False]
     finally:

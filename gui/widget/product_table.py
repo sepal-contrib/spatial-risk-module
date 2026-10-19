@@ -15,6 +15,7 @@ from typing import Optional
 
 import reacton.ipyvuetify as rv
 import solara
+import solara.lab
 
 from gui.i18n import t
 from gui.widget.text_style import MUTED
@@ -27,7 +28,9 @@ HEADER_EXTRA = (
 )
 ROW_EXTRA = "padding:5px 8px;border-bottom:1px solid rgba(0,0,0,0.08);"
 CELL = "display:flex;align-items:center;gap:4px;min-width:0;"
-CELL_RIGHT = "display:flex;align-items:center;justify-content:flex-end;gap:0;"
+CELL_RIGHT = (
+    "display:flex;align-items:center;justify-content:flex-end;gap:0;padding-right:8px;"
+)
 NAME_CELL = "display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;"
 # Header labels clip like data cells so a narrow column never overlaps its
 # neighbour (grid items need min-width:0 + block display for ellipsis to apply).
@@ -112,12 +115,32 @@ _ACTION_ICONS = {
     "edit": "mdi-pencil-outline",
     "duplicate": "mdi-content-copy",
     "delete": "mdi-delete-outline",
-    "download": "mdi-cloud-download-outline",
-    "harmonize": "mdi-hammer",
+    "run": "mdi-play",
+    "retry": "mdi-refresh",
+    "rerun": "mdi-refresh",
     "cancel": "mdi-stop-circle",
     "open": "mdi-information-outline",
     "dismiss": "mdi-close",
 }
+
+# Fixed action slots (spec: one action layout). Slots 1-3 hold one action each;
+# slot 4 is the "more" menu and collects every action mapped to it.
+ACTION_SLOT = {
+    "run": 1,
+    "cancel": 1,
+    "retry": 1,
+    "rerun": 1,
+    "map_toggle": 2,
+    "open": 3,
+    "edit": 4,
+    "duplicate": 4,
+    "delete": 4,
+    "dismiss": 4,
+}
+SLOT_WIDTH = "28px"
+MORE_ICON = "mdi-dots-vertical"
+# Order of the entries inside the "more" menu.
+MORE_ORDER = ("edit", "duplicate", "dismiss", "delete")
 
 
 # Busy state, app-wide: an hourglass that flips instead of Vuetify's spinner
@@ -179,7 +202,7 @@ def action_color(kind: str, is_on: bool = False, override=None):
         return override
     if kind == "map_toggle":
         return "primary" if is_on else None
-    if kind in ("download", "harmonize", "open"):
+    if kind in ("run", "retry", "open"):
         return "primary"
     return None
 
@@ -303,11 +326,24 @@ def _render_cell(cell: dict, first: bool):
             _render_chip(item, shrink=False)
 
 
+def action_label(act: dict) -> str:
+    """Tooltip / aria-label of an action: explicit label, else the kind's word."""
+    kind = act["kind"]
+    if act.get("disabled") and act.get("disabled_reason") and not act.get("loading"):
+        return str(act["disabled_reason"])
+    if act.get("label"):
+        return str(act["label"])
+    if kind == "map_toggle":
+        kind = "map_off" if act.get("is_on", False) else "map_on"
+    return t(f"widgets.product_table.action_{kind}")
+
+
 def _render_action(act: dict):
     kind = act["kind"]
     is_on = act.get("is_on", False)
     color = action_color(kind, is_on, override=act.get("color"))
     loading = act.get("loading", False)
+    label = action_label(act)
     # A busy action is the grey hourglass that ignores clicks (BUSY_CLASSES),
     # not a disabled button, whose faded look reads as "unavailable".
     solara.Button(
@@ -320,7 +356,79 @@ def _render_action(act: dict):
         color=None if loading else color,
         disabled=act.get("disabled", False) and not loading,
         classes=BUSY_CLASSES if loading else [],
+        attributes={"title": label, "aria-label": label},
     )
+
+
+def _slot_actions(actions: list) -> dict:
+    """Group a row's actions by slot; slots 1-3 take at most one each."""
+    slots: dict = {1: [], 2: [], 3: [], 4: []}
+    for act in actions:
+        slot = ACTION_SLOT[act["kind"]]
+        slots[slot].append(act)
+        assert (
+            slot == 4 or len(slots[slot]) == 1
+        ), f"two actions for slot {slot}: {[a['kind'] for a in slots[slot]]}"
+    slots[4].sort(key=lambda a: MORE_ORDER.index(a["kind"]))
+    return slots
+
+
+@solara.component
+def _MoreMenu(actions: list):
+    """Slot 4: the vertical-dots button and its menu of text items."""
+    open_, set_open = solara.use_state(False)
+    label = t("widgets.product_table.action_more")
+    with rv.Html(tag="div", style_="display:flex;") as activator:
+        solara.Button(
+            "",
+            icon_name=MORE_ICON,
+            icon=True,
+            text=True,
+            x_small=True,
+            attributes={"title": label, "aria-label": label},
+        )
+    with solara.lab.Menu(
+        activator=activator,
+        open_value=open_,
+        on_open_value=set_open,
+        close_on_content_click=True,
+    ):
+        # solara's Menu already wraps its children in a v-list.
+        with rv.Html(tag="div", style_="display:flex;flex-direction:column;"):
+            for act in actions:
+                text = action_label(act)
+
+                def _go(act=act):
+                    set_open(False)
+                    act["on_click"]()
+
+                solara.Button(
+                    text,
+                    icon_name=action_icon(
+                        act["kind"], act.get("is_on", False), act.get("loading", False)
+                    ),
+                    on_click=_go,
+                    text=True,
+                    block=True,
+                    disabled=act.get("disabled", False),
+                    style="justify-content:flex-start;",
+                    attributes={"title": text, "aria-label": text},
+                )
+
+
+def _render_slots(actions: list):
+    """Exactly four fixed boxes: lifecycle, map, details, more."""
+    slots = _slot_actions(actions)
+    box = (
+        f"display:flex;justify-content:center;width:{SLOT_WIDTH};flex:0 0 {SLOT_WIDTH};"
+    )
+    for n in (1, 2, 3):
+        with rv.Html(tag="div", style_=box):
+            for act in slots[n]:
+                _render_action(act)
+    with rv.Html(tag="div", style_=box):
+        if slots[4]:
+            _MoreMenu(slots[4])
 
 
 @solara.component
@@ -347,8 +455,7 @@ def _Row(row: dict, grid: str, show_actions: bool):
                 _render_cell(cell, first=i == 0)
         if show_actions:
             with rv.Html(tag="div", style_=CELL_RIGHT):
-                for act in row.get("actions", []):
-                    _render_action(act)
+                _render_slots(row.get("actions", []))
         if row.get("error"):
             rv.Html(
                 tag="span",

@@ -9,7 +9,9 @@ def test_action_icons_standardized():
     assert action_icon("map_toggle", is_on=True) == "mdi-map-minus"
     assert action_icon("edit") == "mdi-pencil-outline"
     assert action_icon("delete") == "mdi-delete-outline"
-    assert action_icon("download") == "mdi-cloud-download-outline"
+    assert action_icon("run") == "mdi-play"
+    assert action_icon("retry") == "mdi-refresh"
+    assert action_icon("rerun") == "mdi-refresh"
     assert action_icon("cancel") == "mdi-stop-circle"
     # The details action reads as "what is this / how was it made", not
     # "peek at a table" — several of the dialogs it opens show no table.
@@ -31,7 +33,9 @@ def test_action_colors_are_theme_tokens_never_literal_grey():
     assert action_color("map_toggle", is_on=True) == "primary"
     assert action_color("edit") is None
     assert action_color("delete") is None
-    assert action_color("download") == "primary"
+    assert action_color("run") == "primary"
+    assert action_color("retry") == "primary"
+    assert action_color("rerun") is None
     assert action_color("open") == "primary"
     # An explicit per-action override still wins.
     assert action_color("delete", override="error") == "error"
@@ -114,8 +118,8 @@ def test_harmonization_statuses_and_action_are_in_the_vocabulary():
     assert STATUS_COLORS["harmonized"] == "success"
     assert STATUS_COLORS["pending"] == "grey"
     assert STATUS_COLORS["not_downloaded"] == "warning"
-    assert action_icon("harmonize") == "mdi-hammer"
-    assert action_color("harmonize") == "primary"
+    assert action_icon("run") == "mdi-play"
+    assert action_color("run") == "primary"
 
 
 def test_busy_actions_show_the_hourglass():
@@ -125,9 +129,9 @@ def test_busy_actions_show_the_hourglass():
     assert BUSY_ICON == "mdi-timer-sand"
     assert action_icon("map_toggle", is_on=False, loading=True) == BUSY_ICON
     assert action_icon("map_toggle", is_on=True, loading=True) == BUSY_ICON
-    assert action_icon("download", loading=True) == BUSY_ICON
-    assert action_icon("harmonize", loading=True) == BUSY_ICON
-    assert action_icon("download") == "mdi-cloud-download-outline"
+    assert action_icon("run", loading=True) == BUSY_ICON
+    assert action_icon("retry", loading=True) == BUSY_ICON
+    assert action_icon("run") == "mdi-play"
 
 
 def test_the_hourglass_is_one_grey_everywhere():
@@ -151,8 +155,8 @@ def test_the_hourglass_is_one_grey_everywhere():
             "key": "a",
             "cells": [{"value": "a"}],
             "actions": [
-                {"kind": "download", "on_click": lambda: None, "loading": True},
-                {"kind": "harmonize", "on_click": lambda: None},
+                {"kind": "run", "on_click": lambda: None, "loading": True},
+                {"kind": "open", "on_click": lambda: None},
             ],
         }
     ]
@@ -169,7 +173,7 @@ def test_the_hourglass_is_one_grey_everywhere():
             if b.icon and b.children and getattr(b.children[0], "children", None)
         }
         assert not btns["mdi-timer-sand"].color  # busy: the CSS grey
-        assert btns["mdi-hammer"].color == "primary"  # idle keeps its tone
+        assert btns["mdi-information-outline"].color == "primary"  # idle keeps its tone
     finally:
         rc.close()
 
@@ -350,3 +354,248 @@ def test_status_labels_fit_in_every_locale():
         for k in ("status_blocked", "status_queued", "status_outdated"):
             assert table[k], (d.name, k)
         assert "{input}" in table["status_blocked"], d.name
+
+
+# --- Stage 1 Task 2: fixed action slots, more menu, tooltips ------------------
+
+
+def _kids(w):
+    """Children plus a solara Menu's activator (held in its own trait)."""
+    kids = list(getattr(w, "activator", None) or [])
+    kids += list(getattr(w, "children", None) or [])
+    return [c for c in kids if not isinstance(c, str)]
+
+
+def _noop():
+    return None
+
+
+def _all_widgets(rc):
+    import ipyvuetify as vw
+
+    out = []
+
+    def walk(w):
+        out.append(w)
+        for c in _kids(w):
+            walk(c)
+
+    for w in rc.find(vw.Html).widgets:
+        walk(w)
+    return out
+
+
+def _slot_boxes(rc):
+    """The four 28px action boxes of the (single) row."""
+    return [
+        w
+        for w in _all_widgets(rc)
+        if "width:28px" in (getattr(w, "style_", None) or "")
+        and "justify-content:center" in w.style_
+    ]
+
+
+def _btn_icon(b):
+    return str(b.children[0].children[0])
+
+
+def _acts(*kinds):
+    return [{"kind": k, "on_click": _noop} for k in kinds]
+
+
+def test_actions_render_in_fixed_slots():
+    """Scrambled actions land in their fixed slots; delete hides in the menu."""
+    import ipyvuetify as vw
+
+    rc = _render_table(
+        [{"type": "text", "value": "a"}],
+        actions=_acts("delete", "map_toggle", "open", "run"),
+    )
+    try:
+        boxes = _slot_boxes(rc)
+        assert len(boxes) == 4
+        icons = [[_btn_icon(b) for b in _descendants(box, vw.Btn)] for box in boxes]
+        assert icons == [
+            ["mdi-play"],
+            ["mdi-map-plus"],
+            ["mdi-information-outline"],
+            ["mdi-dots-vertical", "mdi-delete-outline"],  # button, then menu item
+        ]
+        # delete lives only inside the menu, never in a slot 1-3 box
+        for box in boxes[:3]:
+            assert "mdi-delete-outline" not in [
+                _btn_icon(b) for b in _descendants(box, vw.Btn)
+            ]
+        assert "mdi-delete-outline" in [
+            _btn_icon(b) for b in _descendants(boxes[3], vw.Btn)
+        ]
+    finally:
+        rc.close()
+
+
+def _descendants(w, cls):
+    out = []
+
+    def walk(x):
+        if isinstance(x, cls):
+            out.append(x)
+        for c in _kids(x):
+            walk(c)
+
+    walk(w)
+    return out
+
+
+def _all_btns(rc):
+    import ipyvuetify as vw
+
+    return [w for w in _all_widgets(rc) if isinstance(w, vw.Btn)]
+
+
+def test_empty_slots_keep_icons_aligned():
+    """Every row has four slot boxes; the map button is always in box 2."""
+    import ipyvuetify as vw
+
+    for kinds in (("map_toggle",), ("run", "map_toggle", "open", "delete")):
+        rc = _render_table([{"type": "text", "value": "a"}], actions=_acts(*kinds))
+        try:
+            boxes = _slot_boxes(rc)
+            assert len(boxes) == 4
+            maps = [_btn_icon(b) for b in _descendants(boxes[1], vw.Btn)]
+            assert maps == ["mdi-map-plus"]
+        finally:
+            rc.close()
+
+
+def test_every_action_has_a_tooltip_and_aria_label():
+    """Every button carries a title equal to its aria-label."""
+    rc = _render_table(
+        [{"type": "text", "value": "a"}],
+        actions=_acts("run", "map_toggle", "open", "delete"),
+    )
+    try:
+        btns = _all_btns(rc)
+        assert len(btns) >= 4
+        for b in btns:
+            title = b.attributes.get("title")
+            assert title and title == b.attributes.get("aria-label")
+    finally:
+        rc.close()
+
+
+def test_disabled_action_tooltip_gives_the_reason():
+    """A disabled action's tooltip is its reason."""
+    acts = [
+        {
+            "kind": "run",
+            "on_click": _noop,
+            "disabled": True,
+            "disabled_reason": "Needs download",
+        }
+    ]
+    rc = _render_table([{"type": "text", "value": "a"}], actions=acts)
+    try:
+        run = [b for b in _all_btns(rc) if _btn_icon(b) == "mdi-play"][0]
+        assert run.disabled
+        assert run.attributes["title"] == "Needs download"
+    finally:
+        rc.close()
+
+
+def test_explicit_label_is_the_tooltip():
+    """An explicit action label is the tooltip and aria-label."""
+    acts = [{"kind": "run", "on_click": _noop, "label": "Download"}]
+    rc = _render_table([{"type": "text", "value": "a"}], actions=acts)
+    try:
+        run = [b for b in _all_btns(rc) if _btn_icon(b) == "mdi-play"][0]
+        assert run.attributes["title"] == run.attributes["aria-label"] == "Download"
+    finally:
+        rc.close()
+
+
+def test_two_actions_in_one_single_slot_is_an_error():
+    """Two actions for one single-action slot is a programming error."""
+    import pytest
+
+    from gui.widget.product_table import _slot_actions
+
+    with pytest.raises(AssertionError):
+        _slot_actions(_acts("run", "cancel"))
+
+
+def test_more_menu_lists_edit_duplicate_dismiss_delete_in_order():
+    """The more menu orders edit, duplicate, dismiss, delete."""
+    from gui.i18n import t
+    from gui.widget.product_table import _slot_actions, action_label
+
+    slots = _slot_actions(_acts("delete", "dismiss", "duplicate", "edit", "run"))
+    assert [a["kind"] for a in slots[4]] == [
+        "edit",
+        "duplicate",
+        "dismiss",
+        "delete",
+    ]
+    assert [action_label(a) for a in slots[4]] == [
+        t(f"widgets.product_table.action_{k}")
+        for k in ("edit", "duplicate", "dismiss", "delete")
+    ]
+
+
+def test_more_menu_renders_its_items_in_order():
+    """The rendered menu shows the button then its items in order."""
+    import reacton
+
+    from gui.i18n import t
+    from gui.widget.product_table import _MoreMenu, _slot_actions
+
+    slots = _slot_actions(_acts("delete", "edit", "dismiss", "duplicate"))
+    t("common.close")
+    _box, rc = reacton.render(_MoreMenu(slots[4]), handle_error=False)
+    try:
+        icons = [_btn_icon(b) for b in _all_btns_of(rc) if b.children]
+        assert icons == [
+            "mdi-dots-vertical",
+            "mdi-pencil-outline",
+            "mdi-content-copy",
+            "mdi-close",
+            "mdi-delete-outline",
+        ]
+    finally:
+        rc.close()
+
+
+def _all_btns_of(rc):
+    import ipyvuetify as vw
+
+    out = []
+
+    def walk(x):
+        if isinstance(x, vw.Btn):
+            out.append(x)
+        for c in _kids(x):
+            walk(c)
+
+    for w in rc.find().widgets:
+        walk(w)
+    return out
+
+
+def test_i18n_action_keys_exist_in_every_locale():
+    """Action and verb keys exist in every locale."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "gui" / "messages"
+    keys = [
+        f"action_{k}"
+        for k in (
+            "run cancel retry rerun map_on map_off open edit duplicate delete "
+            "dismiss more"
+        ).split()
+    ] + ["verb_download", "verb_harmonize"]
+    for d in root.iterdir():
+        f = d / "widgets.json"
+        if f.exists():
+            table = json.loads(f.read_text())["widgets"]["product_table"]
+            for k in keys:
+                assert table.get(k), (d.name, k)

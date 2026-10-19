@@ -85,7 +85,8 @@ def SourceVariableList(
         if on_download is not None and is_cloud:
             actions.append(
                 {
-                    "kind": "download",
+                    "kind": "run",
+                    "label": t("widgets.product_table.verb_download"),
                     "on_click": lambda *_, k=key: on_download(k),
                     "loading": key in downloading_keys,
                     "disabled": key in downloading_keys,
@@ -330,7 +331,8 @@ def HarmonizationVariableList(
 
         actions = [
             {
-                "kind": "harmonize",
+                "kind": "run",
+                "label": t("widgets.product_table.verb_harmonize"),
                 "on_click": lambda *_, k=key: on_harmonize(k),
                 "loading": key in running,
                 "disabled": harmonize_disabled

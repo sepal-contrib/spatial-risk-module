@@ -165,7 +165,21 @@
       "status_checking": "checking…",
       "status_blocked": "Needs {input}",
       "status_queued": "Queued",
-      "status_outdated": "Outdated"
+      "status_outdated": "Outdated",
+      "action_run": "Run",
+      "action_cancel": "Cancel",
+      "action_retry": "Retry",
+      "action_rerun": "Run again",
+      "action_map_on": "Show on map",
+      "action_map_off": "Remove from map",
+      "action_open": "Details",
+      "action_edit": "Edit",
+      "action_duplicate": "Duplicate",
+      "action_delete": "Delete",
+      "action_dismiss": "Dismiss",
+      "action_more": "More actions",
+      "verb_download": "Download",
+      "verb_harmonize": "Harmonize"
     },
     "artifact_name": {
       "label": "Name",

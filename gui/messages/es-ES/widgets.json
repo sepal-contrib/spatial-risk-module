@@ -165,7 +165,21 @@
       "status_checking": "comprobando…",
       "status_blocked": "Requiere {input}",
       "status_queued": "En cola",
-      "status_outdated": "Obsoleto"
+      "status_outdated": "Obsoleto",
+      "action_run": "Ejecutar",
+      "action_cancel": "Cancelar",
+      "action_retry": "Reintentar",
+      "action_rerun": "Ejecutar de nuevo",
+      "action_map_on": "Mostrar en el mapa",
+      "action_map_off": "Quitar del mapa",
+      "action_open": "Detalles",
+      "action_edit": "Editar",
+      "action_duplicate": "Duplicar",
+      "action_delete": "Eliminar",
+      "action_dismiss": "Descartar",
+      "action_more": "Más acciones",
+      "verb_download": "Descargar",
+      "verb_harmonize": "Armonizar"
     },
     "artifact_name": {
       "label": "Nombre",
