@@ -748,3 +748,74 @@ def test_blocked_status_fallback_uses_the_translated_input_word():
     assert t("widgets.product_table.input_generic") != (
         "widgets.product_table.input_generic"
     )
+
+
+# --- Task 7 fixes: header alignment and one cell font size --------------------
+
+
+def _px(style: str, prop: str) -> float:
+    import re
+
+    m = re.search(rf"(?<![\w-]){prop}:\s*([\d.]+)px", style)
+    assert m, (prop, style)
+    return float(m.group(1))
+
+
+def test_actions_header_right_edge_matches_the_last_action_slot():
+    """The header label ends where the 'more' icon does.
+
+    The action cell pads CELL_RIGHT on the right, and the 20px icon sits
+    centred in its 28px slot (4px inset). The header cell must pad by the sum.
+    """
+    from gui.widget.product_table import CELL_RIGHT, SLOT_WIDTH
+
+    rc = _render_table([{"type": "text", "value": "a"}])
+    try:
+        headers = [
+            w
+            for w in _all_widgets(rc)
+            if "text-align:right" in (getattr(w, "style_", None) or "")
+        ]
+        assert len(headers) == 1
+        inset = (_px(f"x:{SLOT_WIDTH}", "x") - 20) / 2
+        assert _px(headers[0].style_, "padding-right") == (
+            _px(CELL_RIGHT, "padding-right") + inset
+        )
+    finally:
+        rc.close()
+
+
+def test_plain_text_cells_share_one_font_size():
+    """A text cell without a subtitle or size gets the same 0.875rem as a name."""
+    rc = _render_table(
+        [
+            {"type": "text", "value": "2001", "muted": True},
+            {"type": "text", "value": "roads", "subtitle": "s"},
+            {"type": "text", "value": "sized", "size": "0.8rem"},
+        ]
+    )
+    try:
+        holders = {w.children[0]: w for w in _leaf_holders(rc)}
+        assert "font-size:0.875rem;" in holders["2001"].style_
+        assert "font-size:0.875rem;" in holders["roads"].style_
+        style = holders["sized"].style_
+        assert style.index("font-size:0.875rem;") < style.index("font-size:0.8rem;")
+    finally:
+        rc.close()
+
+
+def test_delete_confirm_button_uses_the_verb_of_the_dialog_titles():
+    """es-ES titles say 'Eliminar', so the shared confirm button must too."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "gui" / "messages" / "es-ES"
+    common = json.loads((root / "common.json").read_text(encoding="utf-8"))
+    tiles = json.loads((root / "tiles.json").read_text(encoding="utf-8"))
+    titles = [
+        tiles["tiles"][k]["confirm_remove_title"]
+        for k in ("variables", "process", "dataset", "postprocess")
+        if k in tiles.get("tiles", {})
+    ]
+    assert titles, "tile layout changed; update this test"
+    assert all(common["common"]["remove"] in x for x in titles)

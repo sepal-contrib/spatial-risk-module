@@ -31,6 +31,9 @@ CELL = "display:flex;align-items:center;gap:4px;min-width:0;"
 CELL_RIGHT = (
     "display:flex;align-items:center;justify-content:flex-end;gap:0;padding-right:8px;"
 )
+# The header's "ACTIONS" label ends where the last action icon does: the cell
+# tail (CELL_RIGHT, 8px) plus the 4px inset of a 20px icon in its 28px slot.
+ACTIONS_HEADER_RIGHT = "padding-right:12px;"
 NAME_CELL = "display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;"
 # Header labels clip like data cells so a narrow column never overlaps its
 # neighbour (grid items need min-width:0 + block display for ellipsis to apply).
@@ -77,6 +80,7 @@ W_STATUS = "96px"
 # Every cell's text element clips to its column with an ellipsis; the full text
 # rides along as a native ``title`` (see ``cell_title``).
 CLIP = "min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"
+TEXT_SIZE = "font-size:0.875rem;"
 SUBTITLE = MUTED + "font-size:0.75rem;"
 
 # Vuetify theme tokens, so status chips follow the app accent in light and dark.
@@ -313,8 +317,9 @@ def _render_cell(cell: dict, first: bool):
                 _render_chip(item)
         return
 
-    # "text" (default)
-    style = ""
+    # "text" (default). One size for every plain cell (a year must not render at
+    # the inherited body size); a caller's ``size`` comes after and wins.
+    style = TEXT_SIZE
     if cell.get("muted"):
         style += MUTED
     if cell.get("size"):
@@ -328,7 +333,7 @@ def _render_cell(cell: dict, first: bool):
                 tag="div",
                 style_="display:flex;flex-direction:column;min-width:0;flex:1 1 auto;",
             ):
-                _clipped(text, text, "font-size:0.875rem;" + style)
+                _clipped(text, text, style)
                 _clipped(str(subtitle), str(subtitle), SUBTITLE)
         else:
             _clipped(text, text, style)
@@ -594,7 +599,11 @@ def ProductTable(
                         rv.Html(
                             tag="span",
                             style_=HEADER_CELL
-                            + ("text-align:right;" if is_actions else ""),
+                            + (
+                                "text-align:right;" + ACTIONS_HEADER_RIGHT
+                                if is_actions
+                                else ""
+                            ),
                             children=[lbl],
                         )
                 # No .key(row["key"]) here: row keys are display identity, not
