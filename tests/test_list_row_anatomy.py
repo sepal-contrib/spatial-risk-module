@@ -237,9 +237,9 @@ def test_every_row_has_every_column(factory):
     assert seen["rows"][-1]["cells"][-1]["type"] == "status"
 
 
-def test_harmonization_columns_are_name_chip_year_status():
-    """Harmonization columns are name chip year status."""
-    from gui.widget.product_table import W_CHIP, W_YEAR
+def test_harmonization_columns_are_name_year_status():
+    """Harmonization columns are name, year, status (no always-raster type)."""
+    from gui.widget.product_table import W_YEAR
 
     mod, component, kwargs = _harmonization()
     seen = {}
@@ -255,7 +255,7 @@ def test_harmonization_columns_are_name_chip_year_status():
         rc.close()
     finally:
         mod.ProductTable = original
-    assert [c["width"] for c in seen["columns"]] == [W_NAME, W_CHIP, W_YEAR, W_STATUS]
+    assert [c["width"] for c in seen["columns"]] == [W_NAME, W_YEAR, W_STATUS]
 
 
 def test_source_status_is_pending_for_cloud_ready_for_local():

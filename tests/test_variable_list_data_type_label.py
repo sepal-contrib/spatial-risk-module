@@ -77,8 +77,11 @@ def test_source_list_chip_shows_the_bare_data_type():
     assert not any("DataType.raster" in x for x in texts)
 
 
-def test_harmonization_list_chip_shows_the_bare_data_type():
-    """Step 3's type chip — the same expression, copied."""
+def test_harmonization_list_has_no_type_column():
+    """Step 3 drops the type: every harmonized output is a raster.
+
+    A column reading "raster" on every row only took width from the name.
+    """
     _box, rc = reacton.render(
         HarmonizationVariableList(
             project=_project(),
@@ -89,7 +92,8 @@ def test_harmonization_list_chip_shows_the_bare_data_type():
     )
     texts = _texts(rc)
 
-    assert "raster" in texts
+    assert "raster" not in texts
+    assert t("widgets.variable_list.source_col_type") not in texts
     assert "DataType.raster" not in texts
 
 

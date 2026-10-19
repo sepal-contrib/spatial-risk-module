@@ -8,7 +8,7 @@ from gui.i18n import t
 from gui.scripts.map_helpers import is_mappable
 from gui.scripts.product_rows import derived_rows
 from gui.scripts.variable_identity import is_base_raster
-from gui.widget.product_table import W_CHIP, W_NAME, W_STATUS, W_YEAR, ProductTable
+from gui.widget.product_table import W_NAME, W_STATUS, W_YEAR, ProductTable
 
 
 def derived_source_key(p, var_name, fallback, year=None):
@@ -334,10 +334,6 @@ def HarmonizationVariableList(
         row_status = harmonization_row_status(key, var, status, running, is_cloud)
         out_key = output_key(var)
         output = processed.get(out_key)
-        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
-        # test is true for its members too and would render the member itself —
-        # which str() spells "DataType.raster".
-        data_type_label = getattr(var.data_type, "value", var.data_type)
 
         actions = [
             {
@@ -384,7 +380,6 @@ def HarmonizationVariableList(
                 "key": key,
                 "cells": [
                     {"type": "text", "value": var.name, "chips": name_chips},
-                    {"type": "chip", "value": data_type_label, "color": "primary"},
                     {
                         "type": "text",
                         "value": str(var.year) if getattr(var, "year", None) else "—",
@@ -396,11 +391,13 @@ def HarmonizationVariableList(
             }
         )
 
+    # No type column: every harmonized output is a raster (vectors are
+    # rasterized), so it said "raster" on every row while the name, the one
+    # cell that tells rows apart, was ellipsised to a few letters.
     ProductTable(
         title=t("widgets.variable_list.harmonization_title"),
         columns=[
             {"label": t("widgets.variable_list.source_col_name"), "width": W_NAME},
-            {"label": t("widgets.variable_list.source_col_type"), "width": W_CHIP},
             {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
             {
                 "label": t("widgets.variable_list.harmonization_col_status"),
