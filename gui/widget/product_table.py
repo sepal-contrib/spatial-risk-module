@@ -215,6 +215,9 @@ def status_label(cell: dict) -> str:
     progress = cell.get("progress")
     if status == "running" and progress is not None:
         return f"{round(min(max(progress, 0.0), 1.0) * 100)} %"
+    if status == "blocked":
+        # No label: never show the raw "{input}" placeholder.
+        return t("widgets.product_table.status_blocked", input="input")
     if status in STATUS_ICONS:
         return t(f"widgets.product_table.status_{status}")
     return str(status)
@@ -318,7 +321,7 @@ def _render_cell(cell: dict, first: bool):
                 tag="div",
                 style_="display:flex;flex-direction:column;min-width:0;flex:1 1 auto;",
             ):
-                _clipped(text, text, style + "font-size:0.875rem;")
+                _clipped(text, text, "font-size:0.875rem;" + style)
                 _clipped(str(subtitle), str(subtitle), SUBTITLE)
         else:
             _clipped(text, text, style)

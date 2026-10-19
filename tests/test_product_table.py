@@ -356,6 +356,43 @@ def test_status_labels_fit_in_every_locale():
         assert "{input}" in table["status_blocked"], d.name
 
 
+def test_status_blocked_without_a_label_has_no_raw_placeholder():
+    """A blocked cell with no label never shows the literal "{input}"."""
+    from gui.widget.product_table import status_label
+
+    text = status_label({"type": "status", "status": "blocked"})
+    assert "{" not in text and text.startswith("needs")
+
+
+def test_status_words_are_lowercase_initial_in_every_locale():
+    """Status column casing: every word starts lowercase."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "gui" / "messages"
+    for d in root.iterdir():
+        f = d / "widgets.json"
+        if not f.exists():
+            continue
+        table = json.loads(f.read_text())["widgets"]["product_table"]
+        for k, v in table.items():
+            if k.startswith("status_"):
+                assert v[0] == v[0].lower(), (d.name, k, v)
+
+
+def test_subtitle_name_lets_the_caller_size_win():
+    """The default 0.875rem comes before the caller's size, so theirs wins."""
+    rc = _render_table(
+        [{"type": "text", "value": "m1", "subtitle": "s", "size": "1.2rem"}]
+    )
+    try:
+        holders = {w.children[0]: w for w in _leaf_holders(rc)}
+        style = holders["m1"].style_
+        assert style.index("font-size:0.875rem;") < style.index("font-size:1.2rem;")
+    finally:
+        rc.close()
+
+
 # --- Stage 1 Task 2: fixed action slots, more menu, tooltips ------------------
 
 
