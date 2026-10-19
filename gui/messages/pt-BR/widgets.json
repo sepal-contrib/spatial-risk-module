@@ -154,7 +154,7 @@
     },
     "product_table": {
       "status_running": "em execução",
-      "status_tiling": "gerando tiles",
+      "status_tiling": "ladrilhando",
       "status_ready": "pronto",
       "status_completed": "concluído",
       "status_failed": "falhou",
@@ -162,7 +162,10 @@
       "status_harmonized": "harmonizada",
       "status_pending": "pendente",
       "status_not_downloaded": "não baixada",
-      "status_checking": "verificando…"
+      "status_checking": "verificando…",
+      "status_blocked": "Requer {input}",
+      "status_queued": "Na fila",
+      "status_outdated": "Obsoleto"
     },
     "artifact_name": {
       "label": "Nome",

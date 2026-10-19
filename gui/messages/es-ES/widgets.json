@@ -154,15 +154,18 @@
     },
     "product_table": {
       "status_running": "en ejecución",
-      "status_tiling": "generando teselas",
+      "status_tiling": "teselando",
       "status_ready": "listo",
       "status_completed": "completado",
       "status_failed": "falló",
       "status_cancelled": "cancelado",
       "status_harmonized": "armonizada",
       "status_pending": "pendiente",
-      "status_not_downloaded": "sin descargar",
-      "status_checking": "comprobando…"
+      "status_not_downloaded": "sin bajar",
+      "status_checking": "comprobando…",
+      "status_blocked": "Requiere {input}",
+      "status_queued": "En cola",
+      "status_outdated": "Obsoleto"
     },
     "artifact_name": {
       "label": "Nombre",

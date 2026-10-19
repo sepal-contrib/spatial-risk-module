@@ -154,15 +154,18 @@
     },
     "product_table": {
       "status_running": "en cours",
-      "status_tiling": "création des tuiles",
+      "status_tiling": "tuilage",
       "status_ready": "prêt",
       "status_completed": "terminé",
       "status_failed": "échec",
       "status_cancelled": "annulé",
       "status_harmonized": "harmonisée",
       "status_pending": "en attente",
-      "status_not_downloaded": "non téléchargée",
-      "status_checking": "vérification…"
+      "status_not_downloaded": "non chargée",
+      "status_checking": "contrôle…",
+      "status_blocked": "Requiert {input}",
+      "status_queued": "En file",
+      "status_outdated": "Obsolète"
     },
     "artifact_name": {
       "label": "Nom",

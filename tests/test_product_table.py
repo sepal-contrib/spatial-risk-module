@@ -95,35 +95,6 @@ def test_product_table_renders_duplicate_row_keys():
     rc.close()
 
 
-def test_actions_width_fits_the_widest_row():
-    """The Actions column is sized to the busiest row, not to the maximum.
-
-    It used to be a flat 112px — room for four buttons even when a table
-    only ever shows two, stealing ~50px from the ellipsised name column
-    beside it.
-    """
-    from gui.widget.product_table import actions_width_for
-
-    two = actions_width_for([{"actions": [1, 2]}, {"actions": [1]}])
-    four = actions_width_for([{"actions": [1, 2]}, {"actions": [1, 2, 3, 4]}])
-    assert two.endswith("px") and four.endswith("px")
-    assert int(two[:-2]) < int(four[:-2])
-    # Two x-small icon buttons (20px each) must still fit, with margin to spare.
-    assert 48 <= int(two[:-2]) <= 72
-    # A table whose rows carry no actions still needs room for the header label.
-    assert int(actions_width_for([{"actions": []}])[:-2]) >= 48
-
-
-def test_name_cell_carries_a_full_text_tooltip():
-    """A truncated name must stay readable on hover."""
-    from gui.widget.product_table import name_tooltip
-
-    assert name_tooltip({"type": "text", "value": "a_very_long_name"}) == {
-        "title": "a_very_long_name"
-    }
-    assert name_tooltip({"type": "status", "status": "ready"}) == {}
-
-
 def test_harmonization_statuses_and_action_are_in_the_vocabulary():
     """Step 3's per-variable list reuses the status cell and action column."""
     from gui.i18n import t
@@ -141,7 +112,7 @@ def test_harmonization_statuses_and_action_are_in_the_vocabulary():
             f"widgets.product_table.status_{status}"
         )
     assert STATUS_COLORS["harmonized"] == "success"
-    assert STATUS_COLORS["pending"] == "warning"
+    assert STATUS_COLORS["pending"] == "grey"
     assert STATUS_COLORS["not_downloaded"] == "warning"
     assert action_icon("harmonize") == "mdi-hammer"
     assert action_color("harmonize") == "primary"
@@ -201,3 +172,181 @@ def test_the_hourglass_is_one_grey_everywhere():
         assert btns["mdi-hammer"].color == "primary"  # idle keeps its tone
     finally:
         rc.close()
+
+
+# --- Stage 1 Task 1: clipping, width tokens, subtitle, status cell -----------
+
+CLIP_DECLS = (
+    "min-width:0;",
+    "overflow:hidden;",
+    "white-space:nowrap;",
+    "text-overflow:ellipsis;",
+)
+
+
+def _render_table(cells, actions=None):
+    import reacton
+
+    from gui.i18n import t
+    from gui.widget.product_table import ProductTable
+
+    t("common.close")  # prime the catalog (first t() in a first render)
+    rows = [{"key": "r", "cells": cells, "actions": actions or [], "error": None}]
+    cols = [{"label": f"c{i}"} for i in range(len(cells))]
+    _box, rc = reacton.render(
+        ProductTable(title="t", columns=cols, rows=rows, empty_text=""),
+        handle_error=False,
+    )
+    return rc
+
+
+def _leaf_holders(rc):
+    """Html widgets whose only child is a string: the text holders.
+
+    ``rc.find`` only sees top-level widgets, so walk the widget tree by hand.
+    """
+    import ipyvuetify as vw
+
+    out = []
+
+    def walk(w):
+        if isinstance(w, vw.Html) and len(w.children) == 1:
+            if isinstance(w.children[0], str):
+                out.append(w)
+        for c in getattr(w, "children", None) or []:
+            if not isinstance(c, str):
+                walk(c)
+
+    for w in rc.find(vw.Html).widgets:
+        walk(w)
+    return out
+
+
+def test_width_tokens_match_the_spec():
+    """Width tokens carry the spec values."""
+    from gui.widget.product_table import (
+        ACTIONS_COL_WIDTH,
+        W_CHIP,
+        W_COUNT,
+        W_NAME,
+        W_STATUS,
+        W_YEAR,
+    )
+
+    assert (W_CHIP, W_YEAR, W_COUNT, W_STATUS, ACTIONS_COL_WIDTH) == (
+        "64px",
+        "48px",
+        "56px",
+        "96px",
+        "120px",
+    )
+    assert W_NAME == "minmax(0,1fr)"
+
+
+def test_every_cell_clips_and_carries_a_title():
+    """Every text holder clips with an ellipsis and carries its full text as title."""
+    from gui.widget.product_table import CLIP
+
+    for d in CLIP_DECLS:
+        assert d in CLIP
+    cells = [
+        {"type": "text", "value": "m1", "subtitle": "ds_a · sample_b"},
+        {"type": "text", "value": "dataset_2015_loss_amazonia_v2"},
+        {"type": "chip", "value": "icar_long_chip"},
+        {"type": "status", "status": "ready"},
+    ]
+    rc = _render_table(cells)
+    try:
+        holders = {w.children[0]: w for w in _leaf_holders(rc)}
+        for text in (
+            "m1",
+            "ds_a · sample_b",
+            "dataset_2015_loss_amazonia_v2",
+            "icar_long_chip",
+            "ready",
+        ):
+            w = holders[text]
+            for d in CLIP_DECLS:
+                assert d in w.style_, (text, w.style_)
+            assert w.attributes.get("title") == text
+    finally:
+        rc.close()
+
+
+def test_subtitle_renders_as_a_muted_second_line():
+    """A subtitle is a muted 0.75rem second line."""
+    from gui.widget.text_style import MUTED
+
+    rc = _render_table([{"type": "text", "value": "m1", "subtitle": "ds_a · sample_b"}])
+    try:
+        holders = {w.children[0]: w for w in _leaf_holders(rc)}
+        assert "m1" in holders
+        sub = holders["ds_a · sample_b"]
+        assert MUTED in sub.style_ and "font-size:0.75rem" in sub.style_
+    finally:
+        rc.close()
+
+
+def test_running_status_shows_progress_percent():
+    """A running status with progress shows the percentage."""
+    rc = _render_table([{"type": "status", "status": "running", "progress": 0.42}])
+    try:
+        assert "42 %" in {w.children[0] for w in _leaf_holders(rc)}
+    finally:
+        rc.close()
+
+
+def test_status_label_override_wins():
+    """An explicit status label replaces the i18n word."""
+    label = "Needs model icar_2021"
+    rc = _render_table([{"type": "status", "status": "blocked", "label": label}])
+    try:
+        holders = {w.children[0]: w for w in _leaf_holders(rc)}
+        assert holders[label].attributes.get("title") == label
+    finally:
+        rc.close()
+
+
+def test_cell_title_by_cell_type():
+    """cell_title yields the full text for text/chip/status cells only."""
+    from gui.widget.product_table import cell_title
+
+    assert cell_title({"type": "text", "value": "abc"}) == {"title": "abc"}
+    assert cell_title({"value": "abc"}) == {"title": "abc"}
+    assert cell_title({"type": "chip", "value": "ref"}) == {"title": "ref"}
+    assert cell_title({"type": "status", "status": "ready", "label": "Go"}) == {
+        "title": "Go"
+    }
+    assert cell_title({"type": "render", "fn": lambda: None}) == {}
+    assert cell_title({"type": "text", "value": None}) == {}
+
+
+def test_new_states_are_in_the_vocabulary():
+    """blocked/queued/outdated join the status vocabulary; pending is neutral."""
+    from gui.widget.product_table import STATUS_COLORS, STATUS_ICONS
+
+    for s in ("blocked", "queued", "outdated"):
+        assert s in STATUS_ICONS and s in STATUS_COLORS
+    assert STATUS_COLORS["pending"] == "grey"
+    assert STATUS_COLORS["outdated"] == "warning"
+    assert STATUS_ICONS["queued"] == "mdi-timer-sand"
+    assert STATUS_ICONS["blocked"] == "mdi-link-variant-off"
+    assert STATUS_ICONS["outdated"] == "mdi-update"
+
+
+def test_status_labels_fit_in_every_locale():
+    """Status words fit the 96px status column in every locale."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "gui" / "messages"
+    dirs = [d for d in root.iterdir() if (d / "widgets.json").exists()]
+    assert len(dirs) >= 4
+    for d in dirs:
+        table = json.loads((d / "widgets.json").read_text())["widgets"]["product_table"]
+        for k, v in table.items():
+            if k.startswith("status_") and k != "status_blocked":
+                assert len(v) <= 12, (d.name, k, v)
+        for k in ("status_blocked", "status_queued", "status_outdated"):
+            assert table[k], (d.name, k)
+        assert "{input}" in table["status_blocked"], d.name
