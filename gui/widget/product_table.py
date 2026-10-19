@@ -221,7 +221,10 @@ def status_label(cell: dict) -> str:
         return f"{round(min(max(progress, 0.0), 1.0) * 100)} %"
     if status == "blocked":
         # No label: never show the raw "{input}" placeholder.
-        return t("widgets.product_table.status_blocked", input="input")
+        return t(
+            "widgets.product_table.status_blocked",
+            input=t("widgets.product_table.input_generic"),
+        )
     if status in STATUS_ICONS:
         return t(f"widgets.product_table.status_{status}")
     return str(status)

@@ -582,11 +582,9 @@ def test_more_menu_renders_its_items_in_order():
     """The rendered menu shows the button then its items in order."""
     import reacton
 
-    from gui.i18n import t
     from gui.widget.product_table import _MoreMenu, _slot_actions
 
     slots = _slot_actions(_acts("delete", "edit", "dismiss", "duplicate"))
-    t("common.close")
     _box, rc = reacton.render(_MoreMenu(slots[4]), handle_error=False)
     try:
         icons = [_btn_icon(b) for b in _all_btns_of(rc) if b.children]
@@ -713,3 +711,40 @@ def test_error_line_is_clamped_with_a_details_link():
         assert pre_nodes and "white-space:pre-wrap" in pre_nodes[0].style_
     finally:
         rc.close()
+
+
+def test_more_menu_delete_item_runs_its_callback():
+    """Clicking the delete item in the more menu calls that action's callback."""
+    import reacton
+
+    from gui.i18n import t
+    from gui.widget.product_table import _MoreMenu, _slot_actions
+
+    calls = []
+    slots = _slot_actions(
+        [{"kind": "delete", "on_click": lambda: calls.append("delete")}]
+    )
+    _box, rc = reacton.render(_MoreMenu(slots[4]), handle_error=False)
+    try:
+        delete = t("widgets.product_table.action_delete")
+        items = [b for b in _all_btns_of(rc) if delete in _texts(b)]
+        assert len(items) == 1
+        items[0].fire_event("click", {})
+        assert calls == ["delete"]
+    finally:
+        rc.close()
+
+
+def test_blocked_status_fallback_uses_the_translated_input_word():
+    """The blocked fallback fills {input} from the i18n word, not an English literal."""
+    from gui.i18n import t
+    from gui.widget.product_table import status_label
+
+    expected = t(
+        "widgets.product_table.status_blocked",
+        input=t("widgets.product_table.input_generic"),
+    )
+    assert status_label({"type": "status", "status": "blocked"}) == expected
+    assert t("widgets.product_table.input_generic") != (
+        "widgets.product_table.input_generic"
+    )

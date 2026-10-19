@@ -180,7 +180,8 @@
       "action_more": "Mais ações",
       "verb_download": "Baixar",
       "verb_harmonize": "Harmonizar",
-      "error_details": "detalhes"
+      "error_details": "detalhes",
+      "input_generic": "entrada"
     },
     "artifact_name": {
       "label": "Nome",
