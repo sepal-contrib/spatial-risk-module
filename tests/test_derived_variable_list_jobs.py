@@ -128,10 +128,10 @@ def test_product_rows_keep_their_actions_and_ready_status():
     assert [c["status"] for c in status_cells] == ["ready"]
 
 
-def test_a_job_row_sits_above_the_products():
-    """What is happening now leads what is already done."""
+def test_a_job_row_sits_after_the_products():
+    """Rows stay in creation order: new work appends below what is done."""
     rows = _captured_rows(_project_with_one_derived(), jobs=[_job()])
-    assert [r["key"] for r in rows] == ["job_j1", "loss_forest_2010_2015"]
+    assert [r["key"] for r in rows] == ["loss_forest_2010_2015", "job_j1"]
 
 
 def test_a_completed_job_is_replaced_by_its_product_row():

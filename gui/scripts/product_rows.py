@@ -20,9 +20,15 @@ from typing import Any, Dict, List, Optional
 from gui.scripts.variable_labels import year_label
 
 
-def _active_jobs_first(jobs: Optional[List[dict]]) -> List[dict]:
-    """Session jobs, newest first (they sit above the product rows)."""
-    return list(reversed(jobs or []))
+def _stable_order(products: List[dict], jobs: List[dict]) -> List[dict]:
+    """Rows in creation order: products, then job rows with no product yet.
+
+    ``products`` arrive in registry insertion order (evaluations by
+    ``created_at`` ascending); ``jobs`` are the already-unsuppressed job rows in
+    submission order (oldest first). A job that completes is replaced by its
+    product, which lands at the end of the products, i.e. where the job was.
+    """
+    return list(products) + list(jobs)
 
 
 # --- Train ------------------------------------------------------------------
@@ -33,17 +39,18 @@ def train_rows(
     jobs: Optional[List[dict]],
     model_labels: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
-    """Job rows (newest first) then one row per registered model."""
+    """Registered models (registry order), then job rows (oldest first)."""
     labels = model_labels or {}
     models = (getattr(project, "models", None) or {}) if project is not None else {}
 
-    rows: List[dict] = []
-    for job in _active_jobs_first(jobs):
+    job_rows: List[dict] = []
+    product_rows: List[dict] = []
+    for job in jobs or []:
         if job.get("status") == "completed":
             key = job.get("model_storage_key")
             if key and key in models:
                 continue  # superseded by its product row below
-        rows.append(
+        job_rows.append(
             {
                 "kind": "job",
                 "key": f"job_{job['id']}",
@@ -58,7 +65,7 @@ def train_rows(
         )
     for key, model in models.items():
         model_type = getattr(model, "model_type", "") or ""
-        rows.append(
+        product_rows.append(
             {
                 "kind": "model",
                 "key": key,
@@ -70,7 +77,7 @@ def train_rows(
                 "error": None,
             }
         )
-    return rows
+    return _stable_order(product_rows, job_rows)
 
 
 # --- Inference ---------------------------------------------------------------
@@ -116,14 +123,15 @@ def prediction_groups(project: Any) -> Dict[str, dict]:
 
 
 def inference_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
-    """Job rows (newest first) then one row per registered prediction group."""
+    """Prediction groups (registry order), then job rows (oldest first)."""
     groups = prediction_groups(project)
 
-    rows: List[dict] = []
-    for job in _active_jobs_first(jobs):
+    job_rows: List[dict] = []
+    product_rows: List[dict] = []
+    for job in jobs or []:
         if job.get("status") == "completed" and job_row_key(job) in groups:
             continue  # superseded by its product row below
-        rows.append(
+        job_rows.append(
             {
                 "kind": "job",
                 "key": f"job_{job['id']}",
@@ -140,7 +148,7 @@ def inference_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
             }
         )
     for row_key, group in groups.items():
-        rows.append(
+        product_rows.append(
             {
                 "kind": "prediction",
                 "key": row_key,
@@ -152,7 +160,7 @@ def inference_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
                 "error": None,
             }
         )
-    return rows
+    return _stable_order(product_rows, job_rows)
 
 
 # --- Sampling -----------------------------------------------------------------
@@ -207,14 +215,15 @@ the draw itself). Both keep the name reserved and hide the dismiss action.
 
 
 def sample_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
-    """Job rows (newest first) then one row per registered sample set."""
+    """Sample sets (registry order), then job rows (oldest first)."""
     samples = (getattr(project, "samples", None) or {}) if project is not None else {}
 
-    rows: List[dict] = []
-    for job in _active_jobs_first(jobs):
+    job_rows: List[dict] = []
+    product_rows: List[dict] = []
+    for job in jobs or []:
         if job.get("status") == "completed" and job.get("name") in samples:
             continue  # superseded by its product row below
-        rows.append(
+        job_rows.append(
             {
                 "kind": "job",
                 "key": f"job_{job['id']}",
@@ -229,7 +238,7 @@ def sample_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
             }
         )
     for key, s in samples.items():
-        rows.append(
+        product_rows.append(
             {
                 "kind": "sample",
                 "key": key,
@@ -242,25 +251,26 @@ def sample_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
                 "error": None,
             }
         )
-    return rows
+    return _stable_order(product_rows, job_rows)
 
 
 # --- Evaluation ---------------------------------------------------------------
 
 
 def evaluation_tab_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
-    """Job rows (newest first) then saved records, newest first."""
+    """Saved records oldest first, then job rows with no record yet."""
     evaluations = (
         (getattr(project, "evaluations", None) or {}) if project is not None else {}
     )
 
-    rows: List[dict] = []
-    for job in _active_jobs_first(jobs):
+    job_rows: List[dict] = []
+    product_rows: List[dict] = []
+    for job in jobs or []:
         if job.get("status") == "completed" and any(
             getattr(rec, "run_id", None) == job["id"] for rec in evaluations.values()
         ):
             continue  # superseded by its saved record below
-        rows.append(
+        job_rows.append(
             {
                 "kind": "job",
                 "key": f"job_{job['id']}",
@@ -275,10 +285,9 @@ def evaluation_tab_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
     records = sorted(
         evaluations.items(),
         key=lambda kv: getattr(kv[1], "created_at", "") or "",
-        reverse=True,
     )
     for key, rec in records:
-        rows.append(
+        product_rows.append(
             {
                 "kind": "evaluation",
                 "key": key,
@@ -289,7 +298,7 @@ def evaluation_tab_rows(project: Any, jobs: Optional[List[dict]]) -> List[dict]:
                 "error": None,
             }
         )
-    return rows
+    return _stable_order(product_rows, job_rows)
 
 
 # --- Derived layers -----------------------------------------------------------
@@ -300,7 +309,7 @@ def derived_rows(
     jobs: Optional[List[dict]],
     keys: Optional[List[str]] = None,
 ) -> List[dict]:
-    """Job rows (newest first) then one row per registered derived variable.
+    """Registered derived variables (registry order), then job rows (oldest first).
 
     ``keys`` restricts the *product* rows to those registry keys (None = all);
     the Post-process tab passes ``postprocess_output_keys`` so the harmonization
@@ -319,11 +328,12 @@ def derived_rows(
         else {}
     )
 
-    rows: List[dict] = []
-    for job in _active_jobs_first(jobs):
+    job_rows: List[dict] = []
+    product_rows: List[dict] = []
+    for job in jobs or []:
         if job.get("status") == "completed" and job.get("output_key") in processed:
             continue  # superseded by its product row below
-        rows.append(
+        job_rows.append(
             {
                 "kind": "job",
                 "key": f"job_{job['id']}",
@@ -337,7 +347,7 @@ def derived_rows(
     for key, var in processed.items():
         if keys is not None and key not in keys:
             continue
-        rows.append(
+        product_rows.append(
             {
                 "kind": "variable",
                 "key": key,
@@ -350,4 +360,4 @@ def derived_rows(
                 "error": None,
             }
         )
-    return rows
+    return _stable_order(product_rows, job_rows)

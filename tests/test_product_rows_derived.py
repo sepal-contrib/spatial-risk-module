@@ -36,22 +36,22 @@ def test_derived_rows_products_only():
     assert rows[0]["error"] is None
 
 
-def test_derived_rows_running_job_listed_before_products():
-    """In-flight work sits above the finished layers."""
+def test_derived_rows_running_job_listed_after_products():
+    """In-flight work sits below the finished layers (creation order)."""
     p = _proj({"loss_forest_2010_2015": _var("loss_forest_2010_2015")})
     rows = derived_rows(p, [_job(name="forest_dist")])
-    assert [r["kind"] for r in rows] == ["job", "variable"]
-    assert rows[0]["key"] == "job_a1"
-    assert rows[0]["job_id"] == "a1"
-    assert rows[0]["name"] == "forest_dist"
-    assert rows[0]["status"] == "running"
+    assert [r["kind"] for r in rows] == ["variable", "job"]
+    assert rows[1]["key"] == "job_a1"
+    assert rows[1]["job_id"] == "a1"
+    assert rows[1]["name"] == "forest_dist"
+    assert rows[1]["status"] == "running"
 
 
-def test_derived_rows_newest_job_first():
-    """The most recent submission leads, as in the other job lists."""
+def test_derived_rows_oldest_job_first():
+    """The earliest submission leads, as in the other job lists."""
     jobs = [_job("a1", name="first"), _job("a2", name="second")]
     rows = derived_rows(_proj(), jobs)
-    assert [r["name"] for r in rows] == ["second", "first"]
+    assert [r["name"] for r in rows] == ["first", "second"]
 
 
 def test_derived_rows_completed_job_suppressed_once_registered():
@@ -101,7 +101,7 @@ def test_derived_rows_keys_filter_does_not_hide_jobs():
     """A job's output is not in the registry yet, so it can't be in ``keys``."""
     p = _proj({"loss_forest_2010_2015": _var("loss_forest_2010_2015")})
     rows = derived_rows(p, [_job(name="forest_dist")], keys=["loss_forest_2010_2015"])
-    assert [r["kind"] for r in rows] == ["job", "variable"]
+    assert [r["kind"] for r in rows] == ["variable", "job"]
 
 
 def test_derived_rows_handles_a_missing_project():
