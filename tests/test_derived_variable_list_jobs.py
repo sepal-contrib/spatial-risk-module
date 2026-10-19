@@ -142,7 +142,7 @@ def test_a_completed_job_is_replaced_by_its_product_row():
     assert [r["key"] for r in rows] == ["loss_forest_2010_2015"]
 
 
-def test_the_list_renders_nothing_when_there_are_no_rows_at_all():
-    """Unchanged from before: an empty derived list stays invisible."""
+def test_the_list_shows_its_title_and_empty_text_when_there_are_no_rows():
+    """An empty derived list is no longer invisible (list-standardization)."""
     rows = _captured_rows(_empty_project())
-    assert rows is None or rows == []
+    assert rows == []

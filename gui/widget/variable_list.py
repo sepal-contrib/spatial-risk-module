@@ -8,7 +8,7 @@ from gui.i18n import t
 from gui.scripts.map_helpers import is_mappable
 from gui.scripts.product_rows import derived_rows
 from gui.scripts.variable_identity import is_base_raster
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_CHIP, W_NAME, W_STATUS, W_YEAR, ProductTable
 
 
 def derived_source_key(p, var_name, fallback, year=None):
@@ -71,15 +71,15 @@ def SourceVariableList(
         data_type_label = getattr(var.data_type, "value", var.data_type)
         is_cloud = type(var).__name__ == "GEEVar"
 
-        status_chip = (
-            {
-                "value": t("widgets.variable_list.chip_cloud"),
-                "icon": "mdi-cloud-outline",
-                "color": "warning",
-            }
+        origin = t(
+            "widgets.variable_list.chip_cloud"
             if is_cloud
-            else {"value": t("widgets.variable_list.chip_local"), "color": "success"}
+            else "widgets.variable_list.chip_local"
         )
+        if key in downloading_keys:
+            row_status = "running"
+        else:
+            row_status = "pending" if is_cloud else "ready"
 
         actions = []
         if on_download is not None and is_cloud:
@@ -135,19 +135,18 @@ def SourceVariableList(
             {
                 "key": key,
                 "cells": [
-                    {"type": "text", "value": var.name, "chips": name_chips},
                     {
-                        "type": "chips",
-                        "items": [
-                            {"value": data_type_label, "color": "primary"},
-                            status_chip,
-                        ],
+                        "type": "text",
+                        "value": var.name,
+                        "subtitle": f"{data_type_label} · {origin}",
+                        "chips": name_chips,
                     },
                     {
                         "type": "text",
                         "value": str(var.year) if var.year else "—",
                         "muted": True,
                     },
+                    {"type": "status", "status": row_status},
                 ],
                 "actions": actions,
             }
@@ -156,12 +155,9 @@ def SourceVariableList(
     ProductTable(
         title=t("widgets.variable_list.source_title"),
         columns=[
-            {
-                "label": t("widgets.variable_list.source_col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            {"label": t("widgets.variable_list.source_col_type"), "width": "150px"},
-            {"label": t("widgets.variable_list.source_col_year"), "width": "44px"},
+            {"label": t("widgets.variable_list.source_col_name"), "width": W_NAME},
+            {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
+            {"label": t("widgets.product_table.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.variable_list.source_empty"),
@@ -200,8 +196,6 @@ def DerivedVariableList(
     if p is None:
         return
     data = derived_rows(p, jobs.value if jobs is not None else None, keys)
-    if not data:
-        return
     on_map = derived_on_map.value if derived_on_map is not None else set()
     unknown_source = t("widgets.variable_list.derived_source_unknown")
 
@@ -247,8 +241,12 @@ def DerivedVariableList(
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["name"], "size": "0.9rem"},
-                    {"type": "chip", "value": source_name},
+                    {"type": "text", "value": r["name"], "subtitle": source_name},
+                    {
+                        "type": "text",
+                        "value": str(r["year"]) if r.get("year") else "—",
+                        "muted": True,
+                    },
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -259,15 +257,12 @@ def DerivedVariableList(
     ProductTable(
         title=title or t("widgets.variable_list.derived_title"),
         columns=[
-            {
-                "label": t("widgets.variable_list.derived_col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            {"label": t("widgets.variable_list.derived_col_source"), "width": "120px"},
-            {"label": t("widgets.variable_list.derived_col_status"), "width": "90px"},
+            {"label": t("widgets.variable_list.derived_col_name"), "width": W_NAME},
+            {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
+            {"label": t("widgets.variable_list.derived_col_status"), "width": W_STATUS},
         ],
         rows=rows,
-        empty_text="",
+        empty_text=t("widgets.variable_list.derived_empty"),
     )
 
 
@@ -404,18 +399,12 @@ def HarmonizationVariableList(
     ProductTable(
         title=t("widgets.variable_list.harmonization_title"),
         columns=[
-            {
-                "label": t("widgets.variable_list.source_col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            # Lean fixed widths: the panel is ~450px wide and the Name column
-            # takes whatever is left, so every fixed px here is a truncated
-            # name (see list-grid alignment: no max-content columns).
-            {"label": t("widgets.variable_list.source_col_type"), "width": "58px"},
-            {"label": t("widgets.variable_list.source_col_year"), "width": "40px"},
+            {"label": t("widgets.variable_list.source_col_name"), "width": W_NAME},
+            {"label": t("widgets.variable_list.source_col_type"), "width": W_CHIP},
+            {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
             {
                 "label": t("widgets.variable_list.harmonization_col_status"),
-                "width": "108px",
+                "width": W_STATUS,
             },
         ],
         rows=rows,

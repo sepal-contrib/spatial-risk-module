@@ -15,9 +15,33 @@ derive from the registries at render time instead of being mirrored into fake
 "completed" job dicts at load time.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from gui.i18n import t
 from gui.scripts.variable_labels import year_label
+
+
+def relative_date(iso: str, now: Optional[datetime] = None) -> str:
+    """Relative age of an ISO timestamp (3 days ago); the date past 30 days.
+
+    Anything unreadable (the "—" placeholder of a job row) is returned as is.
+    """
+    try:
+        then = datetime.fromisoformat(str(iso))
+    except ValueError:
+        return str(iso)
+    now = now or datetime.now(then.tzinfo)
+    seconds = (now - then).total_seconds()
+    if seconds < 60:
+        return t("widgets.product_table.ago_now")
+    if seconds < 3600:
+        return t("widgets.product_table.ago_minutes", n=int(seconds // 60))
+    if seconds < 86400:
+        return t("widgets.product_table.ago_hours", n=int(seconds // 3600))
+    if seconds < 30 * 86400:
+        return t("widgets.product_table.ago_days", n=int(seconds // 86400))
+    return str(iso)[:10]
 
 
 def _stable_order(products: List[dict], jobs: List[dict]) -> List[dict]:
@@ -356,6 +380,7 @@ def derived_rows(
                 "name": year_label(
                     getattr(var, "name", key), getattr(var, "year", None)
                 ),
+                "year": getattr(var, "year", None),
                 "status": "ready",
                 "error": None,
             }

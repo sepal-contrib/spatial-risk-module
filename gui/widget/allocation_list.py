@@ -9,10 +9,13 @@ import logging
 import solara
 
 from gui.i18n import t
-from gui.widget.product_table import ProductTable
-from gui.widget.text_style import MUTED
+from gui.widget.product_table import W_NAME, W_STATUS, ProductTable
 
 logger = logging.getLogger("spatial_risk")
+
+# The one width token that is not in the spec: "1,249.6 ha/yr" needs more than
+# the count column. The total moved to the name subtitle to make room for it.
+W_AREA = "88px"
 
 # Hectare figures are compared down the column, so they get tabular figures:
 # proportional digits make "312.4" and "1249.6" misalign at the decimal point.
@@ -32,14 +35,13 @@ def _run_meta(row):
 
 
 def _name_cell(row):
-    """Run name with its provenance meta line (mock's rich row)."""
-
-    def _fn(row=row):
-        with solara.Column(style="gap:0;"):
-            solara.Text(row["name"])
-            solara.Text(_run_meta(row), style=MUTED + "font-size:0.72rem;")
-
-    return {"type": "render", "fn": _fn}
+    """Run name; the subtitle is its provenance line plus the period total."""
+    total = f"{row['total_ha']:,.1f} {t('toolbox.allocation.unit_ha')}"
+    return {
+        "type": "text",
+        "value": row["name"],
+        "subtitle": f"{_run_meta(row)} · {total}",
+    }
 
 
 def _hectares_cell(value, unit_key):
@@ -148,7 +150,7 @@ def AllocationList(
                 "cells": [
                     _name_cell(r),
                     _hectares_cell(r["annual_ha"], "toolbox.allocation.unit_ha_yr"),
-                    _hectares_cell(r["total_ha"], "toolbox.allocation.unit_ha"),
+                    {"type": "status", "status": "ready"},
                 ],
                 "actions": actions,
                 # Warnings ride the error slot: it is the only full-width line a
@@ -160,9 +162,9 @@ def AllocationList(
     ProductTable(
         title=t("toolbox.allocation.title"),
         columns=[
-            {"label": t("toolbox.allocation.field_name"), "width": "minmax(0,2fr)"},
-            {"label": t("toolbox.allocation.result_annual"), "width": "minmax(0,1fr)"},
-            {"label": t("toolbox.allocation.result_total"), "width": "minmax(0,1fr)"},
+            {"label": t("toolbox.allocation.field_name"), "width": W_NAME},
+            {"label": t("toolbox.allocation.result_annual"), "width": W_AREA},
+            {"label": t("widgets.product_table.col_status"), "width": W_STATUS},
         ],
         rows=table_rows,
         empty_text=t("toolbox.allocation.empty"),

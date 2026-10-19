@@ -75,7 +75,8 @@
       "col_name": "Nombre",
       "col_target": "Objetivo",
       "col_feats": "Vars",
-      "col_year": "Año"
+      "col_year": "Año",
+      "subtitle": "{target} · {n} variables"
     },
     "sample_set_list": {
       "title": "Diseños de muestreo",
@@ -104,7 +105,8 @@
       "derived_source_unknown": "desconocido",
       "derived_unknown_error": "Error desconocido",
       "harmonization_title": "Variables",
-      "harmonization_col_status": "Estado"
+      "harmonization_col_status": "Estado",
+      "derived_empty": "Aún no hay variables derivadas."
     },
     "summary_lists": {
       "raw_vars_title": "Variables fuente",
@@ -181,7 +183,12 @@
       "verb_download": "Descargar",
       "verb_harmonize": "Armonizar",
       "error_details": "detalles",
-      "input_generic": "entrada"
+      "input_generic": "entrada",
+      "ago_now": "ahora mismo",
+      "ago_minutes": "hace {n} minutos",
+      "ago_hours": "hace {n} horas",
+      "ago_days": "hace {n} días",
+      "col_status": "Estado"
     },
     "artifact_name": {
       "label": "Nombre",

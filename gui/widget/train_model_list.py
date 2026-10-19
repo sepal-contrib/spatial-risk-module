@@ -6,7 +6,7 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.product_rows import train_rows
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_CHIP, W_NAME, W_STATUS, ProductTable
 
 logger = logging.getLogger("spatial_risk")
 
@@ -52,20 +52,12 @@ def TrainModelList(project, train_jobs, model_labels, on_dismiss, on_delete, on_
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["name"]},
+                    {
+                        "type": "text",
+                        "value": r["name"],
+                        "subtitle": f"{r['dataset_name']} · {r['sample_name']}",
+                    },
                     {"type": "chip", "value": r["model_label"], "color": "primary"},
-                    {
-                        "type": "text",
-                        "value": r["dataset_name"],
-                        "size": "0.8rem",
-                        "muted": True,
-                    },
-                    {
-                        "type": "text",
-                        "value": r["sample_name"],
-                        "size": "0.8rem",
-                        "muted": True,
-                    },
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -73,23 +65,12 @@ def TrainModelList(project, train_jobs, model_labels, on_dismiss, on_delete, on_
             }
         )
 
-    # Six columns in a ~470px panel: every fixed width is lean (short type
-    # chips, two-icon actions) so the three minmax(0,1fr) columns — name,
-    # dataset, sample — keep real room instead of collapsing to slivers.
     ProductTable(
         title=t("widgets.train_model_list.models_title"),
         columns=[
-            {"label": t("widgets.train_model_list.col_name"), "width": "minmax(0,2fr)"},
-            {"label": t("widgets.train_model_list.col_type"), "width": "56px"},
-            {
-                "label": t("widgets.train_model_list.col_dataset"),
-                "width": "minmax(0,1fr)",
-            },
-            {
-                "label": t("widgets.train_model_list.col_sample"),
-                "width": "minmax(0,1fr)",
-            },
-            {"label": t("widgets.train_model_list.col_status"), "width": "82px"},
+            {"label": t("widgets.train_model_list.col_name"), "width": W_NAME},
+            {"label": t("widgets.train_model_list.col_type"), "width": W_CHIP},
+            {"label": t("widgets.train_model_list.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.train_model_list.empty"),

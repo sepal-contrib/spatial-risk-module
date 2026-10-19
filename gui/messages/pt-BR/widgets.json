@@ -75,7 +75,8 @@
       "col_name": "Nome",
       "col_target": "Alvo",
       "col_feats": "Vars",
-      "col_year": "Ano"
+      "col_year": "Ano",
+      "subtitle": "{target} · {n} variáveis"
     },
     "sample_set_list": {
       "title": "Desenhos amostrais",
@@ -104,7 +105,8 @@
       "derived_source_unknown": "desconhecida",
       "derived_unknown_error": "Erro desconhecido",
       "harmonization_title": "Variáveis",
-      "harmonization_col_status": "Status"
+      "harmonization_col_status": "Status",
+      "derived_empty": "Nenhuma variável derivada ainda."
     },
     "summary_lists": {
       "raw_vars_title": "Variáveis de origem",
@@ -181,7 +183,12 @@
       "verb_download": "Baixar",
       "verb_harmonize": "Harmonizar",
       "error_details": "detalhes",
-      "input_generic": "entrada"
+      "input_generic": "entrada",
+      "ago_now": "agora mesmo",
+      "ago_minutes": "há {n} minutos",
+      "ago_hours": "há {n} horas",
+      "ago_days": "há {n} dias",
+      "col_status": "Status"
     },
     "artifact_name": {
       "label": "Nome",

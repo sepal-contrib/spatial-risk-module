@@ -75,7 +75,8 @@
       "col_name": "Nom",
       "col_target": "Cible",
       "col_feats": "Vars",
-      "col_year": "Année"
+      "col_year": "Année",
+      "subtitle": "{target} · {n} variables"
     },
     "sample_set_list": {
       "title": "Plans d'échantillonnage",
@@ -104,7 +105,8 @@
       "derived_source_unknown": "inconnue",
       "derived_unknown_error": "Erreur inconnue",
       "harmonization_title": "Variables",
-      "harmonization_col_status": "Statut"
+      "harmonization_col_status": "Statut",
+      "derived_empty": "Aucune variable dérivée pour l'instant."
     },
     "summary_lists": {
       "raw_vars_title": "Variables sources",
@@ -181,7 +183,12 @@
       "verb_download": "Télécharger",
       "verb_harmonize": "Harmoniser",
       "error_details": "détails",
-      "input_generic": "entrée"
+      "input_generic": "entrée",
+      "ago_now": "à l'instant",
+      "ago_minutes": "il y a {n} minutes",
+      "ago_hours": "il y a {n} heures",
+      "ago_days": "il y a {n} jours",
+      "col_status": "Statut"
     },
     "artifact_name": {
       "label": "Nom",

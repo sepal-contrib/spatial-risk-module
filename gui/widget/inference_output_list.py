@@ -4,7 +4,7 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.product_rows import inference_rows
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_CHIP, W_NAME, W_STATUS, ProductTable
 
 
 @solara.component
@@ -84,14 +84,12 @@ def InferenceOutputList(
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["name"]},
-                    {"type": "chip", "value": r["model_key"], "color": "primary"},
                     {
                         "type": "text",
-                        "value": r["dataset_name"],
-                        "size": "0.8rem",
-                        "muted": True,
+                        "value": r["name"],
+                        "subtitle": r["dataset_name"],
                     },
+                    {"type": "chip", "value": r["model_key"], "color": "primary"},
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -102,16 +100,9 @@ def InferenceOutputList(
     ProductTable(
         title=t("widgets.inference_output_list.predictions_title"),
         columns=[
-            {
-                "label": t("widgets.inference_output_list.col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            {"label": t("widgets.inference_output_list.col_model"), "width": "90px"},
-            {
-                "label": t("widgets.inference_output_list.col_dataset"),
-                "width": "minmax(0,1fr)",
-            },
-            {"label": t("widgets.inference_output_list.col_status"), "width": "95px"},
+            {"label": t("widgets.inference_output_list.col_name"), "width": W_NAME},
+            {"label": t("widgets.inference_output_list.col_model"), "width": W_CHIP},
+            {"label": t("widgets.inference_output_list.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.inference_output_list.empty"),

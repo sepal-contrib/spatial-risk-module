@@ -65,15 +65,16 @@ def _project():
 
 
 def test_source_list_chip_shows_the_bare_data_type():
-    """Step 2's type chip."""
+    """Step 2's type, in the name subtitle."""
     _box, rc = reacton.render(
         SourceVariableList(project=_project(), on_remove=lambda key: None),
         handle_error=False,
     )
     texts = _texts(rc)
 
-    assert "raster" in texts
-    assert "DataType.raster" not in texts
+    # Step 2 carries the type in the name cell's subtitle ("raster · local").
+    assert any(x.startswith("raster · ") for x in texts)
+    assert not any("DataType.raster" in x for x in texts)
 
 
 def test_harmonization_list_chip_shows_the_bare_data_type():
@@ -113,4 +114,4 @@ def test_a_plain_string_data_type_still_renders():
         handle_error=False,
     )
 
-    assert "raster" in _texts(rc)
+    assert any(x.startswith("raster · ") for x in _texts(rc))

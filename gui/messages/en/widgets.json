@@ -75,7 +75,8 @@
       "col_name": "Name",
       "col_target": "Target",
       "col_feats": "Feats",
-      "col_year": "Year"
+      "col_year": "Year",
+      "subtitle": "{target} · {n} features"
     },
     "sample_set_list": {
       "title": "Sample designs",
@@ -104,7 +105,8 @@
       "derived_source_unknown": "unknown",
       "derived_unknown_error": "Unknown error",
       "harmonization_title": "Variables",
-      "harmonization_col_status": "Status"
+      "harmonization_col_status": "Status",
+      "derived_empty": "No derived variables yet."
     },
     "summary_lists": {
       "raw_vars_title": "Source variables",
@@ -181,7 +183,12 @@
       "verb_download": "Download",
       "verb_harmonize": "Harmonize",
       "error_details": "details",
-      "input_generic": "input"
+      "input_generic": "input",
+      "ago_now": "just now",
+      "ago_minutes": "{n} minutes ago",
+      "ago_hours": "{n} hours ago",
+      "ago_days": "{n} days ago",
+      "col_status": "Status"
     },
     "artifact_name": {
       "label": "Name",
