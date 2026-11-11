@@ -16,8 +16,8 @@ import json
 
 import ipyvuetify as vw
 import pytest
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.i18n import t
 
@@ -155,8 +155,8 @@ def _mount(monkeypatch, tile, project_reactive, **props):
     monkeypatch.setattr(postprocess_tile, "DerivedVariableList", _Stub)
     monkeypatch.setattr(variables_tile, "SourceVariableList", _Stub)
     monkeypatch.setattr(variables_tile, "VariableModal", _Stub)
-    box, rc = reacton.render(
-        tile(project=project_reactive, **props), handle_error=False
+    box, rc = render_under_notifications(
+        lambda: tile(project=project_reactive, **props), handle_error=False
     )
     _OPEN_CONTEXTS.append(rc)
     return box, captured

@@ -14,8 +14,8 @@ These tests drive the real ``on_save`` closure out of a mounted VariablesTile.
 
 import numpy as np
 import rasterio
-import reacton
 import solara
+from _notification_host import render_under_notifications
 from rasterio.transform import from_origin
 
 from gui.tile import variables_tile
@@ -94,8 +94,8 @@ def _capture_on_save(monkeypatch, project):
         solara.Text("modal")
 
     monkeypatch.setattr(variables_tile, "VariableModal", _StubModal)
-    _, rc = reacton.render(
-        variables_tile.VariablesTile(project=project), handle_error=False
+    _, rc = render_under_notifications(
+        lambda: variables_tile.VariablesTile(project=project), handle_error=False
     )
     return captured["on_save"], rc
 
@@ -112,8 +112,8 @@ def _capture_on_add(monkeypatch, project):
         solara.Text("modal")
 
     monkeypatch.setattr(variables_tile, "VariableModal", _StubModal)
-    _, rc = reacton.render(
-        variables_tile.VariablesTile(project=project), handle_error=False
+    _, rc = render_under_notifications(
+        lambda: variables_tile.VariablesTile(project=project), handle_error=False
     )
     return captured["on_add"], rc
 

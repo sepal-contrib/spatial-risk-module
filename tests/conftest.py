@@ -22,6 +22,7 @@ module — and its component imports — have already been evaluated.
 import sys
 
 import pytest
+from pysepal.solara.notifications.bus import cleanup_bus, get_current_bus
 
 from gui.i18n import t
 
@@ -57,3 +58,23 @@ def _drain_inflight_keys():
             continue
         keys = getattr(module, attr)
         keys.release(*keys.value)
+
+
+@pytest.fixture(autouse=True)
+def _drain_notification_bus():
+    """Backstop for a leaked ``NotificationProvider`` mount.
+
+    Tests run outside any real Solara kernel, so every render context in the
+    process shares one PROCESS-scoped bus (see pysepal's ScopeRegistry). A
+    render that mounts NotificationProvider() and is never closed leaves that
+    bus registered: a later, provider-less render then finds a bus already
+    there and silently succeeds instead of raising
+    ``NotificationProviderError`` — the very contract
+    test_notifications_provider_contract.py exists to pin. Each host this
+    suite mounts is responsible for closing its own render context, but a
+    missed one should not leak past its own test, so this drains whatever is
+    left every time.
+    """
+    yield
+    while get_current_bus() is not None:
+        cleanup_bus()

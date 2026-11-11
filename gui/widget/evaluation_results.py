@@ -138,7 +138,7 @@ def _ChartsTab(record, eval_key, active_tab=None):
     (ipecharts sizes on attach only). Instead ``visible`` tells the adapter
     when this tab is shown, and IT schedules a post-transition resize nudge.
 
-    The theme comes from pysepal's session-scoped ``use_theme_dark()`` —
+    The theme comes from pysepal's kernel-scoped ``use_theme_dark()`` —
     ``ThemeState.dark`` is the RESOLVED value MapApp's ThemeToggle drives
     (explicit toggles and live auto-mode resolution alike) under
     ``@with_sepal_sessions``, and the hook detaches its observer on cleanup.
@@ -238,7 +238,7 @@ def _PredObsCard(
     ``model``/``period`` come from the record's index row, so a row that lacks
     them (``row is None``) skips straight to the PNG rungs rather than crashing.
 
-    The theme comes from pysepal's session-scoped ``use_theme_dark()`` —
+    The theme comes from pysepal's kernel-scoped ``use_theme_dark()`` —
     ``ThemeState.dark`` is the RESOLVED value MapApp's ThemeToggle drives
     (explicit toggles and live auto-mode resolution alike) under
     ``@with_sepal_sessions``, and the hook detaches its observer on cleanup.

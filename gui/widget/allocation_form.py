@@ -24,6 +24,7 @@ from gui.scripts.allocation_runner import (
     will_compute,
 )
 from gui.scripts.artifact_names import suggest_name
+from gui.scripts.picker_paths import resolve_picked_path
 from gui.tile.evaluation_helpers import map_items
 from gui.widget.artifact_name_field import use_artifact_name
 from gui.widget.borders_picker import BordersPicker
@@ -148,6 +149,12 @@ def AllocationFormDialog(
     pred_key, set_pred_key = solara.use_state(None)
     defrate_mode, set_defrate_mode = solara.use_state(_DEFRATE_AUTO)
     defrate_override, set_defrate_override = solara.use_state("")
+
+    def on_defrate_override_value(picked):
+        # See picker_paths: a sepal_client's picks come back home-relative.
+        resolved = resolve_picked_path(picked, sepal_client)
+        set_defrate_override(str(resolved) if resolved else "")
+
     forest, set_forest = solara.use_state("")
     defrate_info_open, set_defrate_info_open = solara.use_state(False)
     borders, set_borders = solara.use_state(None)
@@ -156,9 +163,9 @@ def AllocationFormDialog(
     years, set_years = solara.use_state("4")
     density_extent, set_density_extent = solara.use_state(_DENSITY_NONE)
 
-    # Bumped on every seed so the borders picker remounts: AdminLevelSelector
-    # only snapshots its `initial` restore seed at mount, so an admin code
-    # pushed into an already-mounted picker would be silently ignored.
+    # Bumped on every seed so the borders picker remounts. The admin cascade
+    # reads its restore chain only when it mounts, so an admin code pushed
+    # into an already-mounted picker would be silently ignored.
     borders_seed, set_borders_seed = solara.use_state(0)
 
     def seed_from_prefill():
@@ -355,7 +362,7 @@ def AllocationFormDialog(
                 FileInputComponent(
                     label=t("toolbox.allocation.field_defrate_override"),
                     value=defrate_override,
-                    on_value=set_defrate_override,
+                    on_value=on_defrate_override_value,
                     sepal_client=sepal_client,
                     root="",
                     extensions=_TABLE_EXTENSIONS,

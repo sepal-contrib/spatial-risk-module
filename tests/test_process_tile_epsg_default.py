@@ -14,8 +14,8 @@ from pathlib import Path
 
 import ipyvuetify as vw
 import pytest
-import reacton
 import solara
+from _notification_host import render_under_notifications
 from pysepal.solara.notifications.bus import NotificationBus
 from pysepal.solara.notifications.notifier import Notifier
 from pysepal.solara.notifications.state import ToastType
@@ -155,8 +155,10 @@ def _open(rc):
 def _render(project):
     """Render the tile and open the reference dialog."""
     t("common.close")  # prime the catalog (first t() inside a first render)
-    _box, rc = reacton.render(
-        process_tile.ProcessTile(project=project, processing=solara.reactive(False)),
+    _box, rc = render_under_notifications(
+        lambda: process_tile.ProcessTile(
+            project=project, processing=solara.reactive(False)
+        ),
         handle_error=False,
     )
     _settle(rc)

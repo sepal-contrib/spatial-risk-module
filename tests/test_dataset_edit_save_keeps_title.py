@@ -10,8 +10,8 @@ so the dialog keeps its edit title through the close.
 import types
 
 import ipyvuetify as vw
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.tile import dataset_tile
 from spatialrisk.project import Project
@@ -100,8 +100,8 @@ def test_edit_save_never_shows_new_dataset_title(monkeypatch):
     monkeypatch.setattr(dataset_tile, "DatasetList", _StubList)
 
     project = solara.reactive(_project())
-    box, rc = reacton.render(
-        dataset_tile.DatasetTile(project=project), handle_error=False
+    box, rc = render_under_notifications(
+        lambda: dataset_tile.DatasetTile(project=project), handle_error=False
     )
     captured["on_edit"]("dataset_1")
 

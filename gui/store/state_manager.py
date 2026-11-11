@@ -21,9 +21,16 @@ class AppState:
         self.project_dirty = solara.reactive(False)
         self.last_saved = solara.reactive(None)  # datetime | None
 
-        # AOI (pysepal AoiResult | None). ASSET selections carry their picker
-        # inputs on ``AoiResult.asset``; see gui/scripts/aoi_io.py.
+        # AOI (pysepal AoiResult | None). The picker inputs that produced it
+        # ride on ``AoiResult.spec``; see gui/scripts/aoi_io.py.
         self.aoi_result = solara.reactive(None)
+
+        # The AOI picker's selection (pysepal AoiSpec | None), the two-way
+        # channel of ``AoiView(spec=)``: the picker publishes each selection
+        # here, and a project load writes the restored spec here to put the
+        # picker back on it. Writing None does NOT clear the picker (a v4
+        # no-op); AoiTile resets it on a project switch instead.
+        self.aoi_spec = solara.reactive(None)
 
         # Nesting depth for the project-swap guard — see restoring_project().
         # A solara.reactive, not a plain attribute: reactive VALUES are stored
@@ -152,6 +159,7 @@ class AppState:
         """
         with self.restoring_project():
             self.aoi_result.set(None)
+            self.aoi_spec.set(None)
             self.project.set(project)  # subscription marks dirty=True
             self.last_saved.set(None)
             # Bump the same signal a load does so the shell's on-switch effects
@@ -177,6 +185,7 @@ class AppState:
         """
         with self.restoring_project():
             self.aoi_result.set(None)
+            self.aoi_spec.set(None)
             self.project.set(None)  # subscription sets dirty=False
             self.last_saved.set(None)
             self.project_loaded_signal.set(self.project_loaded_signal.value + 1)

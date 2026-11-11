@@ -83,7 +83,7 @@ def theme_accent(dark=False):
     what the charts' old hardcoded blues did.
 
     ``dark`` is the caller's already-resolved theme, not something read here:
-    the app's source of truth is pysepal's session-scoped ``use_theme_dark()``,
+    the app's source of truth is pysepal's kernel-scoped ``use_theme_dark()``,
     and every caller is a component that has hooked it (see the note on
     ``_ChartsTab`` for why ``solara.lab.theme.dark`` is the wrong one to read).
 

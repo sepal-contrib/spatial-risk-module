@@ -9,12 +9,13 @@ import threading
 
 import ipyvuetify as vw
 import pytest
-import reacton
 import solara
 
 from gui.i18n import t
 
 t("common.cancel")  # warm the translator before the first render
+
+from _notification_host import render_under_notifications  # noqa: E402
 
 from gui.scripts import process_actions  # noqa: E402
 from gui.tile import variables_tile  # noqa: E402
@@ -104,8 +105,9 @@ def _mount(monkeypatch, project_reactive):
 
     monkeypatch.setattr(variables_tile, "SourceVariableList", _StubList)
     monkeypatch.setattr(variables_tile, "VariableModal", _StubModal)
-    box, rc = reacton.render(
-        variables_tile.VariablesTile(project=project_reactive), handle_error=False
+    box, rc = render_under_notifications(
+        lambda: variables_tile.VariablesTile(project=project_reactive),
+        handle_error=False,
     )
     _OPEN_CONTEXTS.append(rc)
     return box, captured

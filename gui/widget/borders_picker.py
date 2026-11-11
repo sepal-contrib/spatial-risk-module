@@ -21,6 +21,8 @@ from pysepal.solara.components.inputs import (
 
 from gui.i18n import t
 from gui.scripts.allocation_runner import BordersSelection
+from gui.scripts.aoi_io import admin_code_chain
+from gui.scripts.picker_paths import resolve_picked_path
 from gui.widget.text_style import MUTED, TIGHT_FIELD, FieldHint
 
 _VECTOR_EXTENSIONS = [".gpkg", ".shp", ".geojson", ".json"]
@@ -64,6 +66,59 @@ def _hint_text(selection) -> str:
 
 
 @solara.component
+def _AdminCascade(method, admin_code, on_value):
+    """Render pysepal's admin cascade, restored from the stored admin code.
+
+    pysepal restores the cascade only from ``codes``, the whole chain with
+    level 0 first. ``value`` is output only, because one code cannot name its
+    parents. A selection stores just the leaf, so the chain is read from
+    pygaul's local parquet, with no Earth Engine.
+
+    The chain is read once, when the cascade mounts. The allocation form
+    remounts the picker on every prefill, so each stored code still gets its
+    own lookup. Changing ``codes`` while the cascade is mounted would overwrite
+    what the user picked. For example, picking a new country clears the code,
+    and the chain of a cleared code is empty.
+
+    Args:
+        method: "ADMIN0", "ADMIN1" or "ADMIN2".
+        admin_code: the stored leaf GAUL code, or None.
+        on_value: callback(BordersSelection) — the picker's own setter.
+    """
+    level = _ADMIN_METHODS.index(method)
+    codes = solara.use_memo(
+        lambda: (admin_code_chain(admin_code, level) if admin_code else None) or (),
+        dependencies=[],
+    )
+
+    def on_codes(picked):
+        # A user pick, published from here. The cascade stays silent when its
+        # code does not change, and after the None dropped below it would say
+        # nothing about a pick that clears the code.
+        leaf = picked[level] if len(picked) > level else None
+        on_value(BordersSelection(method=method, admin_code=leaf))
+
+    def on_code(code):
+        # Only a mount or a method change reaches this without on_codes. A
+        # None then either means a chain that could not be read, which would
+        # wipe the prefilled selection, or repeats what set_method stored.
+        if code is not None:
+            on_value(BordersSelection(method=method, admin_code=code))
+
+    # gee=False: pysepal reads the code list from pygaul's local parquet and
+    # fetches geometry from the FAO GAUL WFS, so admin borders need no Earth
+    # Engine at all.
+    AdminLevelSelector(
+        method=method,
+        gee=False,
+        value=admin_code,
+        on_value=on_code,
+        codes=codes,
+        on_codes=on_codes,
+    )
+
+
+@solara.component
 def BordersPicker(value, on_value, sepal_client=None):
     """Collect the project borders as a BordersSelection.
 
@@ -78,6 +133,15 @@ def BordersPicker(value, on_value, sepal_client=None):
         # Each method owns its own payload, so switching drops the previous
         # one rather than carrying a stale admin code into an ASSET selection.
         on_value(BordersSelection(method=new or "FILE"))
+
+    def set_file_path(picked):
+        # See picker_paths: a sepal_client's picks come back home-relative.
+        resolved = resolve_picked_path(picked, sepal_client)
+        on_value(
+            BordersSelection(method="FILE", file_path=str(resolved))
+            if resolved
+            else None
+        )
 
     with solara.Div(classes=[TIGHT_FIELD]):
         rv.Select(
@@ -96,31 +160,17 @@ def BordersPicker(value, on_value, sepal_client=None):
             FileInputComponent(
                 label=t("toolbox.allocation.field_borders_file"),
                 value=(value.file_path if value else "") or "",
-                on_value=lambda p: on_value(
-                    BordersSelection(method="FILE", file_path=str(p)) if p else None
-                ),
+                on_value=set_file_path,
                 sepal_client=sepal_client,
                 root="",
                 extensions=_VECTOR_EXTENSIONS,
                 clearable=True,
             )
         elif method in _ADMIN_METHODS:
-            # gee=False: pysepal reads the code list from pygaul's local
-            # parquet and fetches geometry from the FAO GAUL WFS, so admin
-            # borders need no Earth Engine at all.
-            AdminLevelSelector(
+            _AdminCascade(
                 method=method,
-                gee=False,
-                value=(value.admin_code if value else None),
-                # Restore seed for a prefilled selection. pysepal treats
-                # `value` as output-only and snapshots `initial` once at mount,
-                # so a code seeded into an already-mounted selector is ignored —
-                # the allocation form remounts this picker (keyed on the
-                # prefill) to make the seed land.
-                initial=(value.admin_code if value else None),
-                on_value=lambda code: on_value(
-                    BordersSelection(method=method, admin_code=code)
-                ),
+                admin_code=(value.admin_code if value else None),
+                on_value=on_value,
             )
         else:
             # TABLE only: an IMAGE asset is not a border. A TABLE may still be

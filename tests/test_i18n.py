@@ -39,10 +39,9 @@ def test_plural_selects_variant():
 
 def test_app_available_locales():
     """The four shipped locales are exposed to the selector."""
-    # pysepal's LocaleSelect only lists IETF codes present in its locale table:
-    # there is no bare "es" (only es-ES/es-AR/...) and no bare "pt" (only
-    # pt-PT/pt-BR), so Spanish ships as "es-ES" and Portuguese as "pt-BR".
-    # French does have a bare "fr" entry, so it ships as "fr".
+    # pysepal's selector offers every shipped code, matching a browser's
+    # language to the closest one ("es-CL" -> "es-ES", "pt" -> "pt-BR"); the
+    # folder names are the codes it offers and the translator targets.
     assert set(i18n.app_available_locales()) == {"en", "es-ES", "fr", "pt-BR"}
 
 
@@ -295,17 +294,13 @@ def test_harmonization_rename_values():
     )
 
 
-def test_translator_ignores_machine_config(monkeypatch, tmp_path):
-    """A machine-config locale must not leak in when no pysepal session exists.
+def test_translator_defaults_to_english_without_a_locale():
+    """With no locale set, the translator is English.
 
-    The root fix for the 21-test failure: a machine config holding a
-    non-English locale must not leak into translated strings under pytest.
+    pysepal 4 reads no machine config (``~/.sepal-ui-config`` is gone), so
+    nothing but pysepal's own locale can make the strings under pytest
+    non-English.
     """
-    config = tmp_path / ".sepal-ui-config"
-    config.write_text("[sepal-ui]\nlocale = es-ES\n")
-    monkeypatch.setattr("pysepal.conf.config_file", config)
-    monkeypatch.setattr("pysepal.translator.translator.config_file", config)
-
     i18n.reset_translator()
     try:
         translator = i18n.get_translator()
