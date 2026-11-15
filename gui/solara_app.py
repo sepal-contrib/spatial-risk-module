@@ -6,7 +6,6 @@ Run locally:
 
 import asyncio
 import logging
-import os
 from datetime import datetime
 
 import reacton.ipyvuetify as rv
@@ -19,7 +18,6 @@ from pysepal.solara import (
     get_current_gee_interface,
     get_current_sepal_client,
     get_current_theme_state,
-    prime_dev_auth,
     setup_sessions,
     setup_solara_server,
     setup_theme_colors,
@@ -99,27 +97,11 @@ logger.setLevel(logging.DEBUG)
 logger.debug("Spatial Risk app initialized")
 logger.debug("Solara version: %s", solara.__version__)
 
-# Guard for dev auth activation: reused by both seed-helper checks to avoid
-# repetition and to ensure consistent logic.
-_DEV_AUTH_ARMED = os.getenv("PYSEPAL_DEV_AUTH", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-
 # Forward INFO+ milestones from tracked background jobs into the pysepal
 # notification task pill (see gui/scripts/notify_bridge.py).
 install_task_log_handler()
 
 setup_solara_server(extra_asset_locations=[])
-
-# Prime the blocking developer login once at startup so the HTTP POST stays
-# off the render path. This function RAISES RuntimeError when PYSEPAL_DEV_AUTH
-# is not armed (it is not a no-op), hence the guard; when armed it raises
-# ValueError if the LOCAL_SEPAL_* credentials are unset.
-if _DEV_AUTH_ARMED:
-    prime_dev_auth()
 
 
 @solara.lab.on_kernel_start
@@ -902,125 +884,6 @@ def Page():
         allocation_jobs.set([])
 
     solara.use_effect(reset_jobs_on_load, [project_loaded_signal])
-
-    def _seed_test_aoi():
-        if not _DEV_AUTH_ARMED:
-            return
-        if app_state.aoi_result.value is not None:
-            return
-        import geopandas as gpd
-        from pysepal.solara.components.aoi import AoiResult
-        from shapely.geometry import box
-
-        gdf = gpd.GeoDataFrame(
-            {"name": ["San Marino"]},
-            geometry=[box(12.403, 43.893, 12.517, 43.993)],
-            crs="EPSG:4326",
-        )
-        logger.debug("PYSEPAL_DEV_AUTH: seeding AOI with San Marino")
-        app_state.aoi_result.set(AoiResult(method="DRAW", name="San Marino", gdf=gdf))
-
-    # Test AOI seeding disabled for now — start from an empty project.
-    # (To enable, uncomment the line below and set PYSEPAL_DEV_AUTH=1.)
-    # solara.use_effect(_seed_test_aoi, [])
-
-    def _seed_test_variables():
-        if not _DEV_AUTH_ARMED:
-            return
-        p = app_state.project.value
-        aoi_result = app_state.aoi_result.value
-        if p is None or p.raw_variables or aoi_result is None:
-            return
-        from gui.scripts.predefined_variables import (
-            PREDEFINED_CATALOGUE,
-            get_aoi_ee_feature,
-        )
-        from spatialrisk.variables.gee_var import GEEVar
-        from spatialrisk.variables.models import DataType, RasterType
-
-        GEEVar.model_rebuild()
-        aoi_ee = get_aoi_ee_feature(aoi_result.gdf)
-
-        # Non-temporal variables
-        for name in ["altitude", "slope", "protected_area", "roads", "rivers", "subj"]:
-            cat = PREDEFINED_CATALOGUE[name]
-            image = cat["get_image"](aoi_ee)
-            p.raw_variables[name] = GEEVar(
-                name=name,
-                data_type=DataType.raster,
-                raster_type=RasterType(cat["raster_type"]),
-                gee_images=[image],
-                aoi=aoi_ee,
-                project=p,
-            )
-
-        # Temporal variables
-        for name, years in [
-            ("forest_gfc", [2015, 2020, 2024]),
-            ("towns", [2015, 2020]),
-        ]:
-            cat = PREDEFINED_CATALOGUE[name]
-            for year in years:
-                key = f"{name}_{year}"
-                image = cat["get_image"](aoi_ee, year)
-                p.raw_variables[key] = GEEVar(
-                    name=name,
-                    data_type=DataType.raster,
-                    raster_type=RasterType(cat["raster_type"]),
-                    gee_images=[image],
-                    aoi=aoi_ee,
-                    project=p,
-                    year=year,
-                )
-
-        p.base_raster = p.raw_variables["altitude"]
-
-        # Seed dummy processed variables so the Dataset tab is usable
-        from pathlib import Path
-
-        from spatialrisk.variables.local_raster_var import LocalRasterVar
-
-        LocalRasterVar.model_rebuild()
-
-        for name in ["altitude", "slope", "protected_area", "roads", "rivers", "subj"]:
-            cat = PREDEFINED_CATALOGUE[name]
-            p.processed_variables[name] = LocalRasterVar(
-                name=name,
-                path=Path(f"/tmp/processed/{name}.tif"),
-                raster_type=RasterType(cat["raster_type"]),
-                data_type=DataType.raster,
-                project=p,
-            )
-        for name, years in [
-            ("forest_gfc", [2015, 2020, 2024]),
-            ("towns", [2015, 2020]),
-        ]:
-            cat = PREDEFINED_CATALOGUE[name]
-            for yr in years:
-                key = f"{name}_{yr}"
-                p.processed_variables[key] = LocalRasterVar(
-                    name=name,
-                    path=Path(f"/tmp/processed/{key}.tif"),
-                    raster_type=RasterType(cat["raster_type"]),
-                    data_type=DataType.raster,
-                    year=yr,
-                    project=p,
-                )
-
-        logger.debug(
-            "PYSEPAL_DEV_AUTH: seeded %d raw + %d processed variables",
-            len(p.raw_variables),
-            len(p.processed_variables),
-        )
-        app_state.project.set(p.model_copy())
-
-    # Test variable seeding disabled for now — Step 2 starts with no variables.
-    # (To enable, uncomment the line below and set PYSEPAL_DEV_AUTH=1.)
-    # solara.use_effect(_seed_test_variables, [app_state.project.value])
-
-    # Test model/prediction seeding removed: it injected a fake GLM model and a
-    # prediction pointing at a nonexistent /tmp path into whatever real project
-    # was open, which the next save then persisted.
 
     # Handle to the MapApp widget, captured after mount (see _capture_map_app
     # below), so we can imperatively close its step-dialog from inside a tile.
