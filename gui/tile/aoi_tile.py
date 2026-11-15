@@ -25,6 +25,7 @@ def AoiTile(map_, gee_interface, aoi_result, aoi_spec, restore_signal, loading):
     """
     clear_ref = solara.use_ref(None)
     last_signal = solara.use_ref(restore_signal)
+    spec = aoi_spec.value
 
     def reset_picker_on_switch():
         # pysepal gap: AoiView cannot be reset from outside (spec=None is a
@@ -84,10 +85,13 @@ def AoiTile(map_, gee_interface, aoi_result, aoi_spec, restore_signal, loading):
             value=aoi_result,
             spec=aoi_spec,
             clear_ref=clear_ref,
-            # A restore only refills the picker. Re-running it would publish a
-            # fresh AoiResult, which the shell then saves: a SHAPE/POINTS file
-            # edited since would silently replace the project's saved AOI.
-            autoselect=False,
+            # A restore re-runs the selection, which is what draws an Earth
+            # Engine AOI (ADMIN/ASSET) on the map: the app can only draw one
+            # with local geometry. Not for SHAPE/POINTS: the re-run reads the
+            # file again and the shell saves the result, so a file edited since
+            # would silently replace the project's saved AOI. Those are drawn
+            # from the saved geometry instead.
+            autoselect=spec is None or spec.method not in ("SHAPE", "POINTS"),
             loading=loading,
             methods="ALL",
             map_=map_,

@@ -14,6 +14,7 @@ these tests pin the tile's own decision, not pysepal's picker.
 import json
 
 import geopandas as gpd
+import pytest
 import reacton
 import solara
 from pysepal.solara.components.aoi import AoiResult, AoiSpec
@@ -115,10 +116,23 @@ def test_the_picker_gets_the_spec_channel_and_a_clear_handle(monkeypatch):
     try:
         assert h.props["spec"] is h.aoi_spec
         assert h.props["value"] is h.aoi_result
-        # A restore must not re-run the selection: its result would be saved
-        # over the project's AOI (a SHAPE/POINTS file may have changed).
-        assert h.props["autoselect"] is False
+        assert h.props["autoselect"] is True
         assert callable(h.props["clear_ref"].current)
+    finally:
+        h.close()
+
+
+@pytest.mark.parametrize("method, rerun", [("ADMIN0", True), ("SHAPE", False)])
+def test_a_restore_reruns_the_selection_except_for_a_file(monkeypatch, method, rerun):
+    """An Earth Engine AOI is only drawn by the re-run; a file must not be re-read.
+
+    Re-reading a SHAPE/POINTS file publishes a fresh AoiResult the shell saves,
+    so a file edited since would replace the project's saved AOI.
+    """
+    spec = AoiSpec(method=method, admin_codes=("197",), pathname="/x/aoi.shp")
+    h = _Harness(monkeypatch, spec=spec, result=_result(spec))
+    try:
+        assert h.props["autoselect"] is rerun
     finally:
         h.close()
 
