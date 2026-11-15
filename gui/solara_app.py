@@ -224,33 +224,9 @@ def ProjectPanel(on_close=None):
                 app_state.load_project_state(loaded, when)
                 # Only after the signal bump: its render resets the picker when
                 # needed (AoiTile) and syncs the draw control's visibility; this
-                # write then restores the picker, which seeds the draw control
-                # synchronously and re-runs the selection (autoselect).
+                # write then refills the picker, which seeds the draw control
+                # synchronously.
                 app_state.aoi_spec.set(restored.spec if restored is not None else None)
-            # Heal a legacy manifest (ADMIN0/ADMIN1/ASSET, saved before
-            # aoi_spec existed) right away: the autoselect re-run, which
-            # happens asynchronously after this function returns, publishes
-            # an AoiResult that is often *equal* to `restored` (a
-            # frozen-dataclass comparison), so solara's equals_extra skip
-            # keeps aoi_result from changing and the attach-on-select effect
-            # (gui/solara_app.py, persist_aoi_on_select) never re-fires on its
-            # own. Scoped to manifests with no aoi_spec at all: attach_aoi
-            # rewrites anything that differs from what THIS app version would
-            # write, so calling it unconditionally would downgrade a manifest
-            # saved by a newer version (a spec schema_version/fields this one
-            # doesn't know about) back to a legacy-synthesized spec. attach_aoi
-            # is idempotent, so a manifest that is already current is left
-            # untouched (no mtime bump on a normal load). A failed heal must
-            # not turn a successful load into a load error.
-            if not (loaded.aoi or {}).get("aoi_spec"):
-                try:
-                    app_state.attach_current_aoi(data_dir=DATA_DIR)
-                except Exception:
-                    logger.warning(
-                        "Failed to heal AOI manifest for project %r on load",
-                        name,
-                        exc_info=True,
-                    )
             notifications.success(t("project.status_loaded", name=name))
             set_load_open(False)
             if on_close is not None:
@@ -651,11 +627,11 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
     # shape) from the shared map when the user moves to another step. Mirror
     # the tab state onto the map here. Also keyed on project_loaded_signal
     # (the switch's picker reset in AoiTile puts the control back while DRAW
-    # stays selected; child effects run first, so this run re-hides it) and
-    # on the AOI loading flag: do_load writes the restored spec only after
-    # the bump, and AoiView's restore then seeds the control back onto the
-    # map and raises loading in the same pass (autoselect), so that flip is
-    # what re-hides a restore-time re-add on a non-AOI tab.
+    # stays selected; child effects run first, so this run re-hides it), on
+    # the spec (do_load writes the restored one only after the bump, and
+    # AoiView's restore then seeds the control back onto the map; this run
+    # re-hides it on a non-AOI tab) and on the AOI loading flag (a Select
+    # re-seeds the control from its task).
     dc_hidden = solara.use_ref(False)
     # Last project_loaded_signal this effect saw: the helper may only drop a
     # remembered hide on a project switch — any other re-run while away
@@ -679,6 +655,7 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
         [
             active_tab,
             app_state.project_loaded_signal.value,
+            app_state.aoi_spec.value,
             app_state.loading.value,
         ],
     )

@@ -115,7 +115,9 @@ def test_the_picker_gets_the_spec_channel_and_a_clear_handle(monkeypatch):
     try:
         assert h.props["spec"] is h.aoi_spec
         assert h.props["value"] is h.aoi_result
-        assert h.props["autoselect"] is True
+        # A restore must not re-run the selection: its result would be saved
+        # over the project's AOI (a SHAPE/POINTS file may have changed).
+        assert h.props["autoselect"] is False
         assert callable(h.props["clear_ref"].current)
     finally:
         h.close()

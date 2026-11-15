@@ -220,11 +220,6 @@ def _aoi_metadata(
     spec = getattr(aoi, "spec", None)
     if spec is not None:
         meta["aoi_spec"] = spec.to_dict()
-        if spec.method == "ASSET":
-            # Legacy key, kept for one release so an older app still reads the
-            # manifest. The full dict, never spec.asset_id: the rebuild does
-            # ``(asset or {}).get(...)``, which a bare string silently breaks.
-            meta["asset"] = spec.asset_data()
     return meta
 
 
@@ -436,9 +431,10 @@ def attach_aoi(project: Any, aoi: Any, data_dir: Path) -> bool:
 def _legacy_spec(metadata: Dict[str, Any], gdf: Any) -> Optional[Any]:
     """Synthesize an ``AoiSpec`` for a manifest written before specs existed.
 
-    Every project saved by the pysepal 3.x app is such a manifest, and that
-    app restored every method into the picker — so dropping the spec would
-    load them all with a blank picker. Rebuilt from what the old manifest has:
+    Users have such projects: every manifest saved by the pysepal 3.x app has
+    no ``aoi_spec``, and that app restored every method into the picker — so
+    without this they would all load with a blank picker. The manifest gains a
+    real spec on its next Save. Rebuilt from what the old manifest has:
 
     * DRAW: the drawing, from the sidecar geometry (``to_json``, not
       ``__geo_interface__``: its tuple coordinates would never compare equal

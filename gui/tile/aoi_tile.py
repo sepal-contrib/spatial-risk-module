@@ -17,7 +17,7 @@ def AoiTile(map_, gee_interface, aoi_result, aoi_spec, restore_signal, loading):
         aoi_result: Reactive holding the current AoiResult (or None).
         aoi_spec: Reactive holding the picker's AoiSpec (or None): AoiView's
             two-way spec channel. A project load writes the restored spec
-            here, and AoiView re-runs the picker on it (no remount).
+            here, and AoiView refills the picker with it (no remount).
         restore_signal: project_loaded_signal value. Each change is a project
             switch (load, New or Close), on which the picker is reset when
             AoiView would not restore it by itself.
@@ -27,6 +27,11 @@ def AoiTile(map_, gee_interface, aoi_result, aoi_spec, restore_signal, loading):
     last_signal = solara.use_ref(restore_signal)
 
     def reset_picker_on_switch():
+        # pysepal gap: AoiView cannot be reset from outside (spec=None is a
+        # no-op, an equal spec is not re-applied) and a keyed remount loses the
+        # restore to the old instance's unmount cleanup. Remove this effect and
+        # key the column on restore_signal once AoiView's cleanup is
+        # ownership-guarded upstream.
         # A switch only, never the mount: a mounting picker restores from
         # aoi_spec itself, and a reset here would wipe that restore.
         if restore_signal == last_signal.current:
@@ -53,9 +58,9 @@ def AoiTile(map_, gee_interface, aoi_result, aoi_spec, restore_signal, loading):
         # v4 treats spec=None from outside as a no-op, so without this a switch
         # to a project with no spec (New, Close, no AOI, a legacy SHAPE/POINTS
         # manifest) kept the previous selection, and Select would re-run it.
-        # An equal spec is not re-applied either, and the switch's overlay
-        # wipe would leave that AOI off the map; after the reset, do_load's
-        # spec write is a change again.
+        # An equal spec is not re-applied either, so a draft the user left in
+        # the picker would survive the switch; after the reset, do_load's spec
+        # write is a change again.
         clear()
         dc = getattr(map_, "dc", None)
         if dc is not None:
@@ -79,11 +84,10 @@ def AoiTile(map_, gee_interface, aoi_result, aoi_spec, restore_signal, loading):
             value=aoi_result,
             spec=aoi_spec,
             clear_ref=clear_ref,
-            # Each restore re-runs the selection (EE lookup for ADMIN/ASSET, the
-            # file for SHAPE/POINTS) and publishes a fresh AoiResult later; the
-            # load keeps load_aoi's result meanwhile, so a failed re-run leaves
-            # the restored AOI in place (v4 does not null value on an error).
-            autoselect=True,
+            # A restore only refills the picker. Re-running it would publish a
+            # fresh AoiResult, which the shell then saves: a SHAPE/POINTS file
+            # edited since would silently replace the project's saved AOI.
+            autoselect=False,
             loading=loading,
             methods="ALL",
             map_=map_,

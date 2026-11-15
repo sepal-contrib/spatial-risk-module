@@ -304,19 +304,13 @@ def test_project_without_aoi_loads_none(tmp_path, monkeypatch):
 # --- ASSET AOI persist + rebuild --------------------------------------------
 
 
-def test_write_includes_asset_for_asset_method(tmp_path):
-    """An ASSET AOI still writes the legacy ``asset`` dict next to its spec.
-
-    The picker inputs now live on ``AoiResult.spec``; the legacy key is kept
-    for one release so an older app version still reads the manifest. It must
-    be the full dict, not ``spec.asset_id``: the rebuild does
-    ``(asset or {}).get(...)``, which a bare string would break silently.
-    """
+def test_write_stores_the_asset_on_the_spec_only(tmp_path):
+    """An ASSET AOI writes its picker inputs as ``aoi_spec``, with no legacy key."""
     meta = write_aoi(
         tmp_path, _aoi(method="ASSET", name="aoi", gdf=None, spec=_asset_spec())
     )
 
-    assert meta["asset"] == LEGACY_ASSET
+    assert "asset" not in meta
     assert meta["aoi_spec"]["asset_id"] == "users/me/aoi"
 
 
