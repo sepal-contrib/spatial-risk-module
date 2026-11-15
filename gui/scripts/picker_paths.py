@@ -1,13 +1,13 @@
 """Anchor SEPAL file-picker results to $HOME.
 
-pysepal 4.0's FileInput lists files through the user-files API, whose
-entries are relative to /home/sepal-user, and leaves ``base_path`` empty, so
-a consumer gets ``downloads/x.tif`` — which Path() resolves against the
-read-only app CWD on SEPAL.
+pysepal gap: 4.1.0's FileInput lists files through the user-files API, whose
+entries are relative to /home/sepal-user, so a consumer gets
+``downloads/x.tif`` — which Path() resolves against the read-only app CWD on
+SEPAL.
 
-Remove this module once upstream seeds base_path (PR-2; the upstream fix
-seeds ``sepal_client.BASE_REMOTE_PATH``, i.e. ``/home/sepal-user`` ==
-``Path.home()`` on the sandbox) and the pin is bumped.
+Fixed upstream by openforis/pysepal#1078 and #1079 (absolute paths). Remove
+this module and use ``Path(value)`` at its four call sites when the pin
+includes them (4.2.0).
 """
 
 from pathlib import Path

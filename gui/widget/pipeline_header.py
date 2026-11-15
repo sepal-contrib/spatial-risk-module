@@ -125,10 +125,7 @@ def PipelineHeader(active_step: int, on_navigate, project, aoi_result):
     # Filled segments + the current-step ring use the app's theme "primary"
     # accent (green in light mode, gold in dark) — the same colour as the Next
     # button and every color="primary" control, so the strip matches the app.
-    # The dark/light choice follows pysepal's kernel-scoped `use_theme_dark()`
-    # (the ThemeState MapApp's ThemeToggle drives), not solara's own
-    # `use_dark_effective()`, which never observes that toggle (see commit
-    # 2b32b93, which dropped the mirror that used to keep them in sync).
+    # `dark` follows pysepal's theme toggle (use_theme_dark).
     themes = solara.lab.theme.themes
     primary = themes.dark.primary if dark else themes.light.primary
     ring_css = f"box-shadow: 0 0 0 2px {_rgba(primary, 0.55)};"

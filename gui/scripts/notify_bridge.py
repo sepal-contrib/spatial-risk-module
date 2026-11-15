@@ -93,7 +93,7 @@ def layer_progress_reporter(
       fraction, throttled to whole-percent changes so a many-tile layer doesn't
       flood the reactive bus. The detail string comes from
       ``format_detail(key, done, total)`` (default: ``"{key} — tile {d}/{t}"``).
-      ``detail=`` is the pysepal PR-1 forward path — see below.
+      ``detail=`` is the openforis/pysepal#1074 forward path — see below.
     - queued (``on_progress.on_wait(key, idx, n)``, wired to
       ``materialize_raw_layers``'s ``on_wait``): indeterminate ring with
       ``format_wait(key)`` as the detail, until the first tile tick replaces
@@ -103,13 +103,13 @@ def layer_progress_reporter(
     importing the GUI's translator. Progress is never derived from milestone
     step counts — the log handler's auto-increment would overshoot.
 
-    Stock pysepal 4.0 is the baseline: its ``set_progress`` has no ``detail``
+    Stock pysepal 4.1 is the baseline: its ``set_progress`` has no ``detail``
     kwarg, so the reporter detects that once and publishes plain progress
     values instead — the stock pill ignores them and keeps today's
     indeterminate-spinner behavior, and the download never crashes. The
-    ``detail=`` branch is the forward path for pysepal PR-1 (the alternating
-    download-progress pill); it activates automatically once that lands
-    upstream, with no code change here.
+    ``detail=`` branch is the forward path for openforis/pysepal#1074 (the
+    alternating download-progress pill); it activates automatically once that
+    lands upstream, with no code change here.
     """
     import inspect
 
