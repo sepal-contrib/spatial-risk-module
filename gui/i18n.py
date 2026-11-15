@@ -61,7 +61,10 @@ def use_app_locale() -> str:
     locale = current_locale()
 
     def _swap():
-        set_app_locale(locale)
+        # Not on a mount in the same locale: a new translator object would
+        # re-render every component that calls t().
+        if get_translator()._target != (locale or "en"):
+            set_app_locale(locale)
 
     solara.use_effect(_swap, [locale])
     return locale
