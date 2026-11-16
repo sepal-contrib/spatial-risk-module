@@ -47,20 +47,17 @@ dependencies:
       # Earth Engine (SEPAL's custom build — replaces the conda-installed stock
       # one; v1.1.5rc0 conflicts with pysepal's earthengine-api>1.6.0)
       - "earthengine-api @ git+https://github.com/openforis/earthengine-api.git@v1.6.14#subdirectory=python"
-      # ee-client <3.1.1 binds one httpx pool to the first event loop; the
-      # sync/async GEEInterface bridge needs the per-loop resources of 3.1.1+.
-      # 3.2.1 is the pysepal 4 floor (assets cache survives a cancelled fetch).
-      - "ee-client>=3.2.1,<4"
-      # pysepal 4 floor; conda-forge tops out at 1.58.2.
-      - "solara>=1.60.3,<2"
+      # pysepal 4.2 floor (<3.1.1 also bound one httpx pool to the first event loop).
+      - "ee-client>=3.4.0,<4"
+      # pysepal 4.2 floor; conda-forge tops out at 1.58.2.
+      - "solara>=1.64.1,<2"
       # ML models — not on conda-forge
       - forestatrisk>=1.3.2
       - riskmapjnr>=1.3.2
       # conda-forge only has 0.11.x; the app needs the 1.x API
       - localtileserver>=1.0
-      # pysepal 4.1: topology-driven sessions, AoiSpec restore, pysepal.i18n.
       # Upstream release; replaces the SerafiniJose/pysepal@spatial-risk fork pin.
-      - "pysepal==4.1.0"
+      - "pysepal==4.2.0"
       # Stock release. Tiles go over jupyter-server-proxy, not its comm bridge
       # (gui/scripts/tile_proxy.py). Pinned so envs that still carry the old
       # 0.4.0.dev fork get replaced.

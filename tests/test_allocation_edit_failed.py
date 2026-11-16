@@ -6,6 +6,8 @@ AllocationForm it was launched from, the failed row offers edit and dismiss,
 and the allocation form can seed itself from that entry.
 """
 
+from pathlib import Path
+
 import ipyvuetify as vw
 import reacton
 import solara
@@ -22,6 +24,10 @@ from gui.scripts.allocation_runner import (  # noqa: E402
     BordersSelection,
 )
 from gui.widget.allocation_list import AllocationList  # noqa: E402
+
+# pysepal 4.2's FileInput drops a value outside the user's home folder.
+HOME_BORDERS = str(Path.home() / "data" / "borders.gpkg")
+HOME_RATES = str(Path.home() / "data" / "rates.csv")
 
 
 def _find(widget, cls, out=None):
@@ -47,7 +53,7 @@ def _entry(**kw):
         name="allocation_1",
         prediction_key="icar_run",
         user_defrate_path=None,
-        borders=BordersSelection(method="FILE", file_path="/data/borders.gpkg"),
+        borders=BordersSelection(method="FILE", file_path=HOME_BORDERS),
         mask_file=None,
         defor_juris_ha=20000.0,
         years_forecast=4.0,
@@ -208,7 +214,7 @@ def test_form_seeds_every_scalar_field_from_the_prefill():
     # input (not a bare TextField) is what carries the seeded path.
     assert (
         _file_input(box, t("toolbox.allocation.field_borders_file")).v_model
-        == "/data/borders.gpkg"
+        == HOME_BORDERS
     )
     assert _select(box, t("toolbox.allocation.field_density")).v_model == "aoi"
 
@@ -228,11 +234,11 @@ def test_form_seeds_a_large_hectare_value_without_truncation():
 
 def test_form_seeds_a_custom_rate_table_as_custom_mode():
     """A run submitted with its own table reopens in custom mode, path shown."""
-    box = _render_form(_entry(user_defrate_path="/data/rates.csv"))
+    box = _render_form(_entry(user_defrate_path=HOME_RATES))
     assert _select(box, t("toolbox.allocation.field_defrate")).v_model == "custom"
     assert (
         _file_input(box, t("toolbox.allocation.field_defrate_override")).v_model
-        == "/data/rates.csv"
+        == HOME_RATES
     )
 
 
@@ -412,7 +418,7 @@ def _drive_admin_picker(monkeypatch, stored, act=None, chains=_ADMIN_CHAINS):
 
 def _cascade_level(root, level):
     label = msg(f"aoi_sel.adm.{level}")
-    return next(s for s in _find(root, vw.Select) if s.label == label)
+    return next(s for s in _find(root, vw.Autocomplete) if s.label == label)
 
 
 def test_a_restored_admin_selection_fills_every_level(monkeypatch):
