@@ -2317,9 +2317,8 @@ def test_figures_tab_moves_the_chart_title_when_the_language_changes(tmp_path):
     leaves the previous language's title on screen with no error anywhere —
     the same coupling ``labels=`` has.
     """
-    from pysepal.translator import Translator
+    from pysepal.i18n import set_locale
 
-    from gui import i18n
     from gui.widget.evaluation_results import _FiguresTab
 
     _write_points(
@@ -2328,18 +2327,17 @@ def test_figures_tab_moves_the_chart_title_when_the_language_changes(tmp_path):
     record = _figures_record(
         indices=[_fig_index_row(ha=90.0)], csv_path=tmp_path / "indices_all.csv"
     )
-    before = i18n._translator.value
     try:
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="en")
+        set_locale("en")
         rc, cls = _render_figures_tab(record=record)
         english = rc.find(cls).widgets[0].option["title"]["text"]
 
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="es-ES")
+        set_locale("es-ES")
         rc.render(_FiguresTab(record=record, eval_key="run-a", active_tab=2))
         spanish = rc.find(cls).widgets[0].option["title"]["text"]
         rc.close()
     finally:
-        i18n._translator.value = before
+        set_locale("en")
 
     assert english == "Grid cells of 90.0 ha"
     assert spanish != english
@@ -2569,7 +2567,7 @@ def test_figures_tab_moves_the_axis_titles_when_the_language_changes(tmp_path):
     use_memo returns the previous language's chart: stale axis titles, no error
     anywhere.
     """
-    from pysepal.translator import Translator
+    from pysepal.i18n import set_locale
 
     from gui import i18n
     from gui.widget.evaluation_results import _FiguresTab
@@ -2580,27 +2578,22 @@ def test_figures_tab_moves_the_axis_titles_when_the_language_changes(tmp_path):
     record = _figures_record(
         indices=[_fig_index_row()], csv_path=tmp_path / "indices_all.csv"
     )
-    before = i18n._translator.value
     try:
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="en")
+        set_locale("en")
         rc, cls = _render_figures_tab(record=record)
         english = rc.find(cls).widgets[0].option["xAxis"]["name"]
 
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="es-ES")
+        set_locale("es-ES")
         rc.render(_FiguresTab(record=record, eval_key="run-a", active_tab=2))
         spanish = rc.find(cls).widgets[0].option["xAxis"]["name"]
+        expected = i18n.t("widgets.evaluation_results.chart_x_axis")
         rc.close()
     finally:
-        i18n._translator.value = before
+        set_locale("en")
 
     assert english == "Observed deforestation (ha)"
     assert spanish != english
-    assert (
-        spanish
-        == Translator(i18n.MESSAGES_DIR, target="es-ES")["widgets"][
-            "evaluation_results"
-        ]["chart_x_axis"]
-    )
+    assert spanish == expected
 
 
 def test_figures_tab_scatter_survives_tab_changes_without_a_rebuild(tmp_path):

@@ -181,7 +181,7 @@ def SamplesSummary(project):
             r["n_total"],
             r["class_counts"],
             r["strategy"],
-            more_fmt=t("widgets.summary_lists.more_strata"),
+            more_fmt=t("widgets.summary_lists.more_strata", n="{n}"),
         )
         rows.append(
             {

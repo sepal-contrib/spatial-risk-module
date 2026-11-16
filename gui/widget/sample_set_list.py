@@ -55,7 +55,7 @@ def SampleSetList(
                 r["n_total"],
                 r["class_counts"],
                 r["strategy"],
-                more_fmt=t("widgets.sample_set_list.more_strata"),
+                more_fmt=t("widgets.sample_set_list.more_strata", n="{n}"),
             )
             if on_open is not None:
                 actions.append(
@@ -84,7 +84,7 @@ def SampleSetList(
                     r["n_total"],
                     r.get("class_counts") or {},
                     r["strategy"],
-                    more_fmt=t("widgets.sample_set_list.more_strata"),
+                    more_fmt=t("widgets.sample_set_list.more_strata", n="{n}"),
                 )
             else:
                 points = "…" if r["status"] in ACTIVE_SAMPLING_STATUSES else "—"

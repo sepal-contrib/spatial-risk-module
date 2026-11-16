@@ -25,7 +25,7 @@ from pysepal.solara import (
     with_sepal_sessions,
 )
 
-from gui.i18n import app_available_locales, reset_translator, t, use_app_locale
+from gui.i18n import app_available_locales, t
 from gui.scripts.aoi_io import load_aoi, persist_aoi
 from gui.scripts.map_helpers import (
     add_satellite_basemap,
@@ -106,9 +106,7 @@ setup_solara_server(extra_asset_locations=[])
 
 @solara.lab.on_kernel_start
 def on_kernel_start():
-    """Reset per-kernel state and open the SEPAL sessions."""
-    reset_translator()  # drop the cached translator; Page rebuilds it in the
-    # kernel's pysepal locale (the browser selector resolves it, no config file)
+    """Open the SEPAL sessions."""
     return setup_sessions()
 
 
@@ -780,8 +778,6 @@ def Page():
     # v4 owns the theme toggle itself (scope-keyed ThemeState); the app just
     # shares its scope's state with the map and MapApp.
     theme_state = get_current_theme_state()
-    # Follow the header language selector: pysepal's kernel locale drives t().
-    use_app_locale()
 
     def create_map():
         map_ = sm.SepalMap(

@@ -95,7 +95,7 @@ def test_every_locale_has_full_key_parity_with_en():
 def test_no_locale_has_empty_values():
     """No catalog value is empty.
 
-    ``Translator.delete_empty`` drops empty strings and falls back to English,
+    An empty string is a translation like any other and would render blank,
     so ``"key": ""`` is an invisible gap rather than a visible placeholder.
     """
     for lang in _translated_locales():
@@ -292,36 +292,6 @@ def test_harmonization_rename_values():
         i18n.t("tiles.process.run_processing_subtitle")
         == "tiles.process.run_processing_subtitle"
     )
-
-
-def test_translator_defaults_to_english_without_a_locale():
-    """With no locale set, the translator is English.
-
-    pysepal 4 reads no machine config (``~/.sepal-ui-config`` is gone), so
-    nothing but pysepal's own locale can make the strings under pytest
-    non-English.
-    """
-    i18n.reset_translator()
-    try:
-        translator = i18n.get_translator()
-        assert translator._target == "en"
-    finally:
-        i18n.reset_translator()
-
-
-def test_set_app_locale_swaps_translator_live(monkeypatch):
-    """set_app_locale() swaps the active translator without a restart."""
-    i18n.reset_translator()
-    try:
-        english = i18n.t("app.title")
-        i18n.set_app_locale("es-ES")
-        spanish = i18n.t("app.title")
-        assert i18n.get_translator()._target == "es-ES"
-        assert english != spanish  # app.title is translated in es-ES
-        i18n.set_app_locale("en")
-        assert i18n.t("app.title") == english
-    finally:
-        i18n.reset_translator()
 
 
 def test_every_predefined_param_label_and_hint_resolves():
