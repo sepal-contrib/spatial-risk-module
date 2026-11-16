@@ -34,7 +34,7 @@ dependencies:
   - ipyvuetify<3
   - ipyleaflet
   - voila
-  - ipecharts=1.4
+  - ipecharts>=1.4.2,<1.5 # resizes a chart with its container
   - pmtiles=3.7.0
   # Utilities
   - python-box

@@ -55,7 +55,7 @@ dependencies:
   - eerepr
   - folium
   - geocoder
-  - ipecharts>=1.4,<2
+  - ipecharts>=1.4.2,<2
   - ipyevents
   - ipyfilechooser
   - ipyleaflet

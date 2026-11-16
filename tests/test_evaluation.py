@@ -1821,7 +1821,6 @@ def _render_charts_tab(**kwargs):
 
     kwargs.setdefault("record", _chart_record())
     kwargs.setdefault("eval_key", "run-a")
-    kwargs.setdefault("active_tab", 1)
     _, rc = reacton.render(_ChartsTab(**kwargs), handle_error=False)
     return rc, ipecharts.EChartsRawWidget
 
@@ -1990,11 +1989,7 @@ def test_charts_tab_swaps_the_chart_when_the_metric_selection_changes():
 
     rc, cls = _render_charts_tab()
     assert rc.find(cls).widgets[0].option["title"]["text"] == "MedAE (ha) ↓"
-    rc.render(
-        _ChartsTab(
-            record=_chart_record(metrics=("R2",)), eval_key="run-a", active_tab=1
-        )
-    )
+    rc.render(_ChartsTab(record=_chart_record(metrics=("R2",)), eval_key="run-a"))
     assert rc.find(cls).widgets[0].option["title"]["text"] == "R² ↑"
 
 
@@ -2005,55 +2000,10 @@ def test_charts_tab_rebuilds_the_chart_when_the_charted_values_change():
     rc, cls = _render_charts_tab()
     first = rc.find(cls).widgets[0]
     bumped = [{**r, "MedAE": r["MedAE"] + 5} for r in _chart_rows()]
-    rc.render(
-        _ChartsTab(record=_chart_record(rows=bumped), eval_key="run-a", active_tab=1)
-    )
+    rc.render(_ChartsTab(record=_chart_record(rows=bumped), eval_key="run-a"))
     second = rc.find(cls).widgets[0]
     assert second is not first
     assert second.option["series"][0]["data"] == [6.0, 5.7]
-
-
-def test_charts_tab_keeps_its_charts_across_a_tab_switch():
-    """The tab index must NOT be in the chart identity.
-
-    Rebuilding on every tab switch is what squished the charts: the leaving
-    tab's fresh widgets re-attach inside a ``display:none`` v-window-item,
-    ipecharts measures width 0 (it sizes on attach only) and draws its 100px
-    fallback — permanently, since there is no ResizeObserver. The widget must
-    survive the switch; re-measuring on re-entry is the adapter's
-    ``visible``-nudge job, not a teardown's.
-    """
-    from gui.widget.evaluation_results import _ChartsTab
-
-    rc, cls = _render_charts_tab(active_tab=1)
-    first = rc.find(cls).widgets[0]
-    rc.render(_ChartsTab(record=_chart_record(), eval_key="run-a", active_tab=2))
-    assert rc.find(cls).widgets[0] is first
-    rc.render(_ChartsTab(record=_chart_record(), eval_key="run-a", active_tab=1))
-    assert rc.find(cls).widgets[0] is first
-    rc.close()
-
-
-def test_charts_tab_tells_the_adapter_whether_its_tab_is_shown(monkeypatch):
-    """``visible`` must track the active tab — it drives the resize nudge."""
-    import gui.widget.evaluation_results as er
-    from gui.widget.evaluation_results import _ChartsTab
-
-    seen = []
-    real = er.EChartsChart
-
-    def spy(*args, **kwargs):
-        seen.append(kwargs.get("visible"))
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(er, "EChartsChart", spy)
-    rc, _ = _render_charts_tab(active_tab=1)
-    assert seen and set(seen) == {True}
-
-    seen.clear()
-    rc.render(_ChartsTab(record=_chart_record(), eval_key="run-a", active_tab=2))
-    assert seen and set(seen) == {False}
-    rc.close()
 
 
 def test_charts_tab_says_so_when_there_is_nothing_to_chart():
@@ -2629,32 +2579,6 @@ def test_figures_tab_scatter_survives_tab_changes_without_a_rebuild(tmp_path):
     assert rc.find(cls).widgets == []  # the card drops the chart
     rc.render(_FiguresTab(record=record, eval_key="run-a", active_tab=2))
     assert len(rc.find(cls).widgets) == 1  # and remounts it on re-entry
-    rc.close()
-
-
-def test_figures_tab_marks_its_scatter_visible_only_when_shown(tmp_path, monkeypatch):
-    """The card hands the adapter ``visible=True`` only when its tab is active.
-
-    That flag is what schedules the post-transition resize nudge.
-    """
-    import gui.widget.evaluation_results as er
-
-    seen = []
-    real = er.EChartsChart
-
-    def spy(*args, **kwargs):
-        seen.append(kwargs.get("visible"))
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(er, "EChartsChart", spy)
-    _write_points(
-        tmp_path / "pred_obs_GLM_validation_300.csv", obs=[1.0, 2.0], pred=[1.0, 2.0]
-    )
-    record = _figures_record(
-        indices=[_fig_index_row()], csv_path=tmp_path / "indices_all.csv"
-    )
-    rc, cls = _render_figures_tab(record=record, active_tab=2)
-    assert seen and set(seen) == {True}
     rc.close()
 
 

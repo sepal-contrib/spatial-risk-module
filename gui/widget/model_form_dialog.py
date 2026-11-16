@@ -583,7 +583,7 @@ def ModelDetailsDialog(project, model_key, on_close: Callable[[], None]):
                             # tab stays width 0 forever (see gui/widget/echarts.py,
                             # and _ChartsTab in evaluation_results for the same
                             # wiring). Statistics is the second rv.Tab above.
-                            ModelStatsPanel(model=model, visible=active_tab == 1)
+                            ModelStatsPanel(model=model)
             with rv.CardActions(style_="justify-content: flex-end;"):
                 solara.Button(
                     t("common.close"),

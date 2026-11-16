@@ -17,7 +17,7 @@ dependencies = [
     "gdal[numpy]==3.12.*",
     "geedim==2.0.*",
     "geopandas",
-    "ipecharts==1.4.*",
+    "ipecharts>=1.4.2,<1.5", # 1.4.2 resizes a chart with its container (ResizeObserver)
     "ipykernel",
     "ipyleaflet",
     "ipyvuetify<3", # ipyvuetify 3 introduces breaking changes; keep the pre-3 API
