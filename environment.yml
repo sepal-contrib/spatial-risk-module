@@ -27,7 +27,7 @@ dependencies:
   - pyproj>=3.7
   - rioxarray>=0.18.2
   - odc-geo>=0.4.10
-  - xarray-spatial>=0.4.0          # import name: xrspatial
+  - xarray-spatial>=0.4.0 # import name: xrspatial
 
   # earth engine helpers (earthengine-api itself comes from the pip fork below)
   - geedim>=2.0.0
@@ -36,7 +36,7 @@ dependencies:
 
   # modeling / data
   - dask-ml>=2025.1.0
-  - scikit-learn>=1.6.1,<1.7   # cuml 25.08 needs BaseEstimator._get_default_requests (removed in sklearn 1.7+)
+  - scikit-learn>=1.6.1,<1.7 # cuml 25.08 needs BaseEstimator._get_default_requests (removed in sklearn 1.7+)
   - patsy
   - matplotlib
   - formulaic>=1.2.1
@@ -71,6 +71,6 @@ dependencies:
 
   # pip deps that resolve normally (fork + geefcc's pip-only deps)
   - pip:
-    - "git+https://github.com/openforis/earthengine-api.git@v1.1.5rc0#subdirectory=python"
-    - xee
-    - multiprocess
+      - "git+https://github.com/openforis/earthengine-api.git@v1.1.5rc0#subdirectory=python"
+      - xee
+      - multiprocess
