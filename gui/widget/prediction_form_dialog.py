@@ -30,7 +30,6 @@ from gui.scripts.inference_runner import (
     suggested_mask_layer,
 )
 from gui.scripts.model_registry import MODEL_REGISTRY
-from gui.scripts.picker_paths import resolve_picked_path
 from gui.scripts.prediction_import import resolve_import_key, sanitize_import_name
 from gui.scripts.product_rows import prediction_row_key
 from gui.scripts.variable_labels import layer_items, layer_label
@@ -165,11 +164,6 @@ def PredictionFormDialog(
 
     # --- import mode state
     file_path, set_file_path = solara.use_state("")
-
-    def on_file_value(picked):
-        # See picker_paths: a sepal_client's picks come back home-relative.
-        resolved = resolve_picked_path(picked, sepal_client)
-        set_file_path(str(resolved) if resolved else "")
 
     # The scale the file is on, not a display choice: every import is rescaled
     # onto the app's 1..65535 contract. "" is the unset state validate()
@@ -445,7 +439,7 @@ def PredictionFormDialog(
             FileInputComponent(
                 label=t("widgets.prediction_import_modal.label_file"),
                 value=file_path,
-                on_value=on_file_value,
+                on_value=lambda picked: set_file_path(picked or ""),
                 sepal_client=sepal_client,
                 root="",
                 extensions=_IMPORT_RASTER_EXTENSIONS,

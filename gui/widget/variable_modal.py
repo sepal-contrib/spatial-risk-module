@@ -12,7 +12,6 @@ from pysepal.solara.components.inputs import (
 
 from gui.i18n import t
 from gui.scripts import variable_palettes as palettes
-from gui.scripts.picker_paths import resolve_picked_path
 from gui.scripts.predefined_variables import (
     PREDEFINED_CATALOGUE,
     build_predefined_name,
@@ -563,12 +562,6 @@ def _render_custom_fields(
     set_invert=None,
 ):
     """Fields shown when source == 'custom'."""
-
-    def on_file_value(picked):
-        # See picker_paths: a sepal_client's picks come back home-relative.
-        resolved = resolve_picked_path(picked, sepal_client)
-        set_file_path(str(resolved) if resolved else "")
-
     ArtifactNameField(
         value=name,
         on_input=set_name,
@@ -600,7 +593,7 @@ def _render_custom_fields(
         FileInputComponent(
             label=t("vars.modal.custom_file_label"),
             value=file_path,
-            on_value=on_file_value,
+            on_value=lambda picked: set_file_path(picked or ""),
             sepal_client=sepal_client,
             root="",
             extensions=(
