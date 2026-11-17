@@ -15,7 +15,7 @@ from pysepal.solara.notifications import use_notifications
 
 from gui.i18n import t
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
+from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.product_rows import ACTIVE_SAMPLING_STATUSES
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
@@ -130,7 +130,6 @@ def _toggle_sample_on_map(key, project_reactive, map_, turn_on, notifier=None):
         if notifier is not None:
             notifier.error(
                 t("tiles.sampling.error_toggle_map", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
     finally:
         samples_pending.release(key)

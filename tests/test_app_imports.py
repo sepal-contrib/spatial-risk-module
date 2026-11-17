@@ -123,19 +123,20 @@ def test_page_wires_project_summary_step():
 
 
 def test_workflow_tabs_wires_aoi_restore_signal():
-    """The AOI restore signal reaches the tabs."""
+    """The AOI restore signal and the spec channel reach the AOI tile."""
     import inspect
 
     import gui.solara_app as solara_app
 
     src = inspect.getsource(solara_app.WorkflowTabs)
     assert "restore_signal=app_state.project_loaded_signal.value" in src
+    assert "aoi_spec=app_state.aoi_spec" in src
 
 
 def test_aoi_tile_imports_pysepal_view():
     """The AOI tile builds on pysepal's AOI view."""
-    # The vendored restore fork was upstreamed into pysepal (AoiView
-    # restore-on-mount + AoiResult.asset); the tile must use the library.
+    # pysepal 4 restores the picker through AoiView(spec=) (the selection
+    # rides on AoiResult.spec); the tile must use the library.
     import inspect
 
     import gui.tile.aoi_tile as aoi_tile
@@ -163,8 +164,9 @@ def test_page_mounts_notification_provider_before_the_map_app():
     LogConso...
 
     It must mount before the MapApp element so the bus exists when the workflow
-    tiles first render — a tile whose use_notifications() resolves a NoopNotifier
-    would silently drop its task tracking.
+    tiles first render — pysepal 4's use_notifications() raises
+    NotificationProviderError instead of quietly handing back a NoopNotifier
+    when nothing is mounted yet.
     """
     import inspect
 
@@ -174,24 +176,6 @@ def test_page_mounts_notification_provider_before_the_map_app():
     assert "NotificationProvider()" in src
     assert src.index("NotificationProvider()") < src.index("MapApp.element(")
     assert "LogConsole" not in src
-
-
-def test_page_wires_locale_state_to_locale_select():
-    """Live language switching is pure wiring.
-
-    nothing else asserts on it, so dropping...
-
-    Guard both halves of the handshake.
-    """
-    import inspect
-
-    import gui.solara_app as app
-
-    src = inspect.getsource(app.Page)
-    assert "locale_select.bind_locale_state(locale_state)" in src
-    assert 'set_app_locale(change["new"])' in src
-    assert 'locale_state.observe(handler, "locale")' in src
-    assert "solara.use_effect(_bind_locale, [id(locale_state)])" in src
 
 
 def test_toolbox_is_a_third_left_rail_entry():

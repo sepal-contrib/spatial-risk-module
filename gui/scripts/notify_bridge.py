@@ -25,14 +25,6 @@ from contextlib import contextmanager
 
 _LOGGER_NAME = "spatial_risk"
 
-ERROR_TOAST_TIMEOUT = 10.0
-"""Seconds an error toast stays on screen. Successes keep pysepal's 3 s default.
-
-Failures deserve a longer read than confirmations, but nothing is sticky: a
-tracked job's failure also lands in the notification log, which outlives the
-toast.
-"""
-
 # thread ident -> TaskTracker of the tracked job running on that thread.
 _trackers = {}
 _install_lock = threading.Lock()
@@ -93,6 +85,7 @@ def layer_progress_reporter(
       fraction, throttled to whole-percent changes so a many-tile layer doesn't
       flood the reactive bus. The detail string comes from
       ``format_detail(key, done, total)`` (default: ``"{key} — tile {d}/{t}"``).
+      ``detail=`` is the openforis/pysepal#1074 forward path — see below.
     - queued (``on_progress.on_wait(key, idx, n)``, wired to
       ``materialize_raw_layers``'s ``on_wait``): indeterminate ring with
       ``format_wait(key)`` as the detail, until the first tile tick replaces
@@ -102,10 +95,13 @@ def layer_progress_reporter(
     importing the GUI's translator. Progress is never derived from milestone
     step counts — the log handler's auto-increment would overshoot.
 
-    Works against stock (unforked) pysepal too: its ``set_progress`` has no
-    ``detail`` kwarg, so the reporter detects that once and publishes plain
-    progress values instead — the stock pill ignores them and keeps today's
-    indeterminate-spinner behavior, and the download never crashes.
+    Stock pysepal 4.1 is the baseline: its ``set_progress`` has no ``detail``
+    kwarg, so the reporter detects that once and publishes plain progress
+    values instead — the stock pill ignores them and keeps today's
+    indeterminate-spinner behavior, and the download never crashes. The
+    ``detail=`` branch is the forward path for openforis/pysepal#1074 (the
+    alternating download-progress pill); it activates automatically once that
+    lands upstream, with no code change here.
     """
     import inspect
 
@@ -157,7 +153,10 @@ def tracked_job(notifier, title: str, total_steps=None, error_format=None):
     forwarding is keyed on that thread's ident. Nesting restores the previous
     tracker on exit. Yields the ``TaskTracker`` for explicit ``step()`` /
     ``set_progress()`` calls where log lines aren't enough. ``notifier=None``
-    falls back to a no-op tracker so workers stay callable from plain tests.
+    falls back to a no-op tracker so workers stay callable from plain tests;
+    pysepal 4's ``NoopNotifier`` logs a WARNING for every dropped
+    success/error/warning and task failure, so a job run with no provider
+    mounted still leaves a trail in the server log.
 
     ``error_format`` (``Callable[[Exception], str]``) turns a failure into the
     user-facing message; without it the raw ``str(exc)`` is used. On failure the
@@ -186,7 +185,7 @@ def tracked_job(notifier, title: str, total_steps=None, error_format=None):
                 logging.getLogger(_LOGGER_NAME).exception("error_format failed")
                 message = str(exc)
             task.fail(message)
-            notifier.error(message, timeout=ERROR_TOAST_TIMEOUT)
+            notifier.error(message)
             raise
         finally:
             if previous is not None:

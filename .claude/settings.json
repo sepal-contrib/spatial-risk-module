@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "pysepal": {
+      "source": {
+        "source": "github",
+        "repo": "openforis/pysepal"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "pysepal@pysepal": true
+  }
+}

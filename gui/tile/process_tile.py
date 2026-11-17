@@ -11,7 +11,7 @@ from gui.i18n import t
 from gui.scripts import process_actions
 from gui.scripts.file_prompts import DeletePrompt, delete_prompt
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
+from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.solara_threads import (
     publish_if_current,
     spawn_in_context,
@@ -336,7 +336,6 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             logger.exception("deleting the files of %s failed", key)
             notifications.error(
                 t("tiles.variables.error_delete_files", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             removed = True
         if removed:
@@ -428,9 +427,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         try:
             code = await asyncio.to_thread(process_actions.auto_utm_epsg, path)
         except Exception as exc:
-            notifications.error(
-                t("tiles.process.error_auto_utm", exc=exc), timeout=ERROR_TOAST_TIMEOUT
-            )
+            notifications.error(t("tiles.process.error_auto_utm", exc=exc))
             return
         if latest_form.current == asked:
             set_epsg(code)
@@ -443,15 +440,12 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             return
         if p is None or not base_key:
             # Used to return in silence, which read as a dead icon.
-            notifications.warning(
-                t("tiles.process.error_pick_reference"), timeout=ERROR_TOAST_TIMEOUT
-            )
+            notifications.warning(t("tiles.process.error_pick_reference"))
             return
         path = getattr(p.raw_variables.get(base_key), "path", None)
         if path is None:
             notifications.error(
                 t("tiles.process.error_download_first"),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             return
         suggest_utm(latest_form.current, path)
@@ -491,7 +485,6 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # typed would never be applied. Say so instead.
             notifications.warning(
                 t("tiles.process.reference_already_running"),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             return
         # Safe on this thread: validate_reference() has already parsed it.
@@ -513,7 +506,6 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 logger.exception("setting the reference raster failed")
                 notifications.error(
                     t("tiles.process.error_set_base", exc=exc),
-                    timeout=ERROR_TOAST_TIMEOUT,
                 )
             finally:
                 reference_inflight.release("reference")
@@ -525,9 +517,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # never starts would hold it for the rest of the session.
             reference_inflight.release("reference")
             logger.exception("could not start the reference worker")
-            notifications.error(
-                t("tiles.process.error_set_base", exc=exc), timeout=ERROR_TOAST_TIMEOUT
-            )
+            notifications.error(t("tiles.process.error_set_base", exc=exc))
 
     # Pure and in-memory (see harmonization.harmonization_status): no file
     # opens, so unlike the old disk scan this belongs in the render body. Every

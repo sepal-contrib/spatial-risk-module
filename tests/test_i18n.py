@@ -39,10 +39,9 @@ def test_plural_selects_variant():
 
 def test_app_available_locales():
     """The four shipped locales are exposed to the selector."""
-    # pysepal's LocaleSelect only lists IETF codes present in its locale table:
-    # there is no bare "es" (only es-ES/es-AR/...) and no bare "pt" (only
-    # pt-PT/pt-BR), so Spanish ships as "es-ES" and Portuguese as "pt-BR".
-    # French does have a bare "fr" entry, so it ships as "fr".
+    # pysepal's selector offers every shipped code, matching a browser's
+    # language to the closest one ("es-CL" -> "es-ES", "pt" -> "pt-BR"); the
+    # folder names are the codes it offers and the translator targets.
     assert set(i18n.app_available_locales()) == {"en", "es-ES", "fr", "pt-BR"}
 
 
@@ -96,7 +95,7 @@ def test_every_locale_has_full_key_parity_with_en():
 def test_no_locale_has_empty_values():
     """No catalog value is empty.
 
-    ``Translator.delete_empty`` drops empty strings and falls back to English,
+    An empty string is a translation like any other and would render blank,
     so ``"key": ""`` is an invisible gap rather than a visible placeholder.
     """
     for lang in _translated_locales():
@@ -293,40 +292,6 @@ def test_harmonization_rename_values():
         i18n.t("tiles.process.run_processing_subtitle")
         == "tiles.process.run_processing_subtitle"
     )
-
-
-def test_translator_ignores_machine_config(monkeypatch, tmp_path):
-    """A machine-config locale must not leak in when no pysepal session exists.
-
-    The root fix for the 21-test failure: a machine config holding a
-    non-English locale must not leak into translated strings under pytest.
-    """
-    config = tmp_path / ".sepal-ui-config"
-    config.write_text("[sepal-ui]\nlocale = es-ES\n")
-    monkeypatch.setattr("pysepal.conf.config_file", config)
-    monkeypatch.setattr("pysepal.translator.translator.config_file", config)
-
-    i18n.reset_translator()
-    try:
-        translator = i18n.get_translator()
-        assert translator._target == "en"
-    finally:
-        i18n.reset_translator()
-
-
-def test_set_app_locale_swaps_translator_live(monkeypatch):
-    """set_app_locale() swaps the active translator without a restart."""
-    i18n.reset_translator()
-    try:
-        english = i18n.t("app.title")
-        i18n.set_app_locale("es-ES")
-        spanish = i18n.t("app.title")
-        assert i18n.get_translator()._target == "es-ES"
-        assert english != spanish  # app.title is translated in es-ES
-        i18n.set_app_locale("en")
-        assert i18n.t("app.title") == english
-    finally:
-        i18n.reset_translator()
 
 
 def test_every_predefined_param_label_and_hint_resolves():

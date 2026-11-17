@@ -8,8 +8,8 @@ with the source's target and features already picked and a free "_copy" name.
 import types
 
 import ipyvuetify as vw
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.tile import dataset_tile
 from spatialrisk.project import Project
@@ -89,8 +89,8 @@ def _render(monkeypatch):
     monkeypatch.setattr(dataset_tile, "Dataset", _StubDataset)
     monkeypatch.setattr(Project, "save", lambda self, filename=None: None)
     project = solara.reactive(_project())
-    box, rc = reacton.render(
-        dataset_tile.DatasetTile(project=project), handle_error=False
+    box, rc = render_under_notifications(
+        lambda: dataset_tile.DatasetTile(project=project), handle_error=False
     )
     return project, box, rc
 

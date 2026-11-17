@@ -94,19 +94,11 @@ def _StatCards(model, stats):
 
 
 @solara.component
-def ModelStatsPanel(model, visible=True):
+def ModelStatsPanel(model):
     """Stat cards + family panel with pending/empty states, over a footnote.
 
     Args:
         model: the registered model to describe.
-        visible: whether this panel's tab is the one on screen, forwarded to
-            the family charts. ipecharts measures its container once, at DOM
-            attach, and a view attached while its tab is hidden or still
-            transitioning measures width 0 and never recovers (see
-            gui/widget/echarts.py) — this flag is what makes the adapter
-            schedule its post-transition resize. The caller owns the tab
-            index, because the caller owns the tab order; the default suits a
-            bare mount (e.g. a test), which counts as shown.
     """
     # Hooks run unconditionally — the task itself decides whether to work.
     # use_task lives in solara.lab; .pending/.finished/.value per the
@@ -133,7 +125,7 @@ def ModelStatsPanel(model, visible=True):
     with solara.Column(gap="12px"):
         _StatCards(model=model, stats=stats)
         if stats is not None:
-            _FamilyPanel(model=model, stats=stats, visible=visible)
+            _FamilyPanel(model=model, stats=stats)
         elif recovered.pending:
             with solara.Row(gap="8px"):
                 solara.Style(HOURGLASS_CSS)
@@ -164,7 +156,7 @@ def _recover(model):
 
 
 @solara.component
-def _FamilyPanel(model, stats, visible=True):
+def _FamilyPanel(model, stats):
     """Family-specific body, dispatched on ``model.model_type``.
 
     An unknown family renders nothing rather than raising: the cards above are
@@ -175,11 +167,11 @@ def _FamilyPanel(model, stats, visible=True):
     if mt == "glm":
         _GlmPanel(stats=stats)
     elif mt == "rf":
-        _RfPanel(stats=stats, visible=visible)
+        _RfPanel(stats=stats)
     elif mt == "icar":
         _IcarPanel(stats=stats)
     elif mt in ("mw", "jnr"):
-        _RmjPanel(stats=stats, visible=visible)
+        _RmjPanel(stats=stats)
 
 
 def _bar_scale(rows):
@@ -533,7 +525,7 @@ def _IcarPanel(stats):
 
 
 @solara.component
-def _RfPanel(stats, visible=True):
+def _RfPanel(stats):
     """Impurity importances as bars, plus the OOB number.
 
     The 'exploratory' chip is load-bearing rather than decorative: impurity
@@ -576,7 +568,6 @@ def _RfPanel(stats, visible=True):
                 dark=dark,
                 renderer=RENDERER_SVG,
                 height=f"{max(28 * len(entries), 120)}px",
-                visible=visible,
             )
         if stats.oob_accuracy is not None:
             solara.Text(
@@ -586,7 +577,7 @@ def _RfPanel(stats, visible=True):
 
 
 @solara.component
-def _RmjPanel(stats, visible=True):
+def _RmjPanel(stats):
     """MW/JNR distance curve, with the fitted threshold drawn on it.
 
     The curve comes from the tab_dist.csv the fit wrote. That file lives
@@ -616,7 +607,6 @@ def _RmjPanel(stats, visible=True):
                 dark=dark,
                 renderer=RENDERER_SVG,
                 height="260px",
-                visible=visible,
             )
         else:
             solara.Text(t("tiles.train.stats.tab_dist_missing"), style=MUTED)

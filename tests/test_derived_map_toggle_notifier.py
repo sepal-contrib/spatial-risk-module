@@ -16,11 +16,10 @@ def test_hook_takes_a_notifier():
 
 
 def test_hook_toasts_the_toggle_failure():
-    """Verify the hook uses notifier.error() with ERROR_TOAST_TIMEOUT."""
+    """Verify the hook toasts through notifier.error()."""
     src = inspect.getsource(use_derived_map_toggle)
     assert "process_error" not in src
     assert "notifier.error(" in src
-    assert "ERROR_TOAST_TIMEOUT" in src
     assert "tiles.variables.error_toggle_map" in src
 
 

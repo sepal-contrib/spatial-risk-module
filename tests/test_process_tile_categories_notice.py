@@ -7,8 +7,8 @@ layers and asks for them to be harmonized again -- which also counts them as
 pending, so Harmonize all picks them up.
 """
 
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.i18n import t
 
@@ -62,8 +62,8 @@ def _notice(box):
 
 
 def _render(p):
-    return reacton.render(
-        process_tile.ProcessTile(
+    return render_under_notifications(
+        lambda: process_tile.ProcessTile(
             project=solara.reactive(p), processing=solara.reactive(False)
         ),
         handle_error=False,

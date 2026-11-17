@@ -12,21 +12,20 @@ import reacton.ipyvuetify as rv
 import solara
 from pysepal import mapping as sm
 from pysepal.logger import setup_logging
-from pysepal.sepalwidgets.vue_app import LocaleSelect, MapApp, ThemeToggle
+from pysepal.sepalwidgets.vue_app import MapApp
 from pysepal.solara import (
     NotificationProvider,
     get_current_gee_interface,
     get_current_sepal_client,
+    get_current_theme_state,
     setup_sessions,
     setup_solara_server,
     setup_theme_colors,
     use_notifications,
     with_sepal_sessions,
 )
-from pysepal.solara.locale import resolve_locale_state
-from solara.lab.components.theming import theme
 
-from gui.i18n import get_translator, reset_translator, set_app_locale, t
+from gui.i18n import app_available_locales, t
 from gui.scripts.aoi_io import load_aoi, persist_aoi
 from gui.scripts.map_helpers import (
     add_satellite_basemap,
@@ -34,7 +33,7 @@ from gui.scripts.map_helpers import (
     show_aoi_on_map,
     sync_draw_control_visibility,
 )
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, install_task_log_handler
+from gui.scripts.notify_bridge import install_task_log_handler
 from gui.scripts.project_io import (
     delete_project,
     list_project_infos,
@@ -107,9 +106,7 @@ setup_solara_server(extra_asset_locations=[])
 
 @solara.lab.on_kernel_start
 def on_kernel_start():
-    """Reset per-kernel state and open the SEPAL sessions."""
-    reset_translator()  # drop the cached translator; Page rebuilds it from the
-    # session LocaleState (the browser resolves the locale, not the config file)
+    """Open the SEPAL sessions."""
     return setup_sessions()
 
 
@@ -214,15 +211,20 @@ def ProjectPanel(on_close=None):
             when = next((i.modified for i in infos.value if i.name == name), None)
             # Restore the saved AOI (sidecar geometry + metadata) so the map can
             # frame it and the downstream tabs unlock. Set before installing the
-            # project so the load-zoom effect sees it on the same render.
-            # restoring_project(): Solara can render BETWEEN these two sets, and
+            # project so the load-zoom effect sees it on the same render, and
+            # so AoiTile reads the incoming spec off it on the switch.
+            # restoring_project(): Solara can render BETWEEN these sets, and
             # the attach-on-select effect must not persist the incoming AOI
             # into the outgoing project (see AppState.attach_current_aoi).
             with app_state.restoring_project():
-                app_state.aoi_result.set(
-                    load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
-                )
+                restored = load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
+                app_state.aoi_result.set(restored)
                 app_state.load_project_state(loaded, when)
+                # Only after the signal bump: its render resets the picker when
+                # needed (AoiTile) and syncs the draw control's visibility; this
+                # write then refills the picker, which seeds the draw control
+                # synchronously.
+                app_state.aoi_spec.set(restored.spec if restored is not None else None)
             notifications.success(t("project.status_loaded", name=name))
             set_load_open(False)
             if on_close is not None:
@@ -352,9 +354,7 @@ def ProjectPanel(on_close=None):
         if delete_task.pending:
             return  # a delete is in flight; nothing else may be staged
         if p is None:
-            notifications.error(
-                t("project.error_no_project_to_save"), timeout=ERROR_TOAST_TIMEOUT
-            )
+            notifications.error(t("project.error_no_project_to_save"))
             return
         if overwrite_needed(p.project_name, last_saved, existing_names()):
             set_overwrite_open(True)
@@ -386,7 +386,7 @@ def ProjectPanel(on_close=None):
                 note = t("project.status_saved_note_no_base")
             notifications.success(t("project.status_saved", path=path, note=note))
         except Exception as exc:
-            notifications.error(str(exc), timeout=ERROR_TOAST_TIMEOUT)
+            notifications.error(str(exc))
 
     # ---- Status block ---------------------------------------------------
     with solara.Column(style="gap: 8px; padding: 8px;"):
@@ -622,11 +622,12 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
     # AoiView never gets to remove its draw control (toolbar + editable drawn
     # shape) from the shared map when the user moves to another step. Mirror
     # the tab state onto the map here. Also keyed on project_loaded_signal
-    # (a load remounts AoiView, whose restore may seed the control back onto
-    # the map while another tab is active) and on the AOI loading flag: the
-    # restore auto-select re-seeds the control from its async task — after
-    # the load-time effect run — and flips loading False right afterwards,
-    # so that flip is what re-hides a task-time re-add on a non-AOI tab.
+    # (the switch's picker reset in AoiTile puts the control back while DRAW
+    # stays selected; child effects run first, so this run re-hides it), on
+    # the spec (do_load writes the restored one only after the bump, and
+    # AoiView's restore then seeds the control back onto the map; this run
+    # re-hides it on a non-AOI tab) and on the AOI loading flag (a Select
+    # re-seeds the control from its task).
     dc_hidden = solara.use_ref(False)
     # Last project_loaded_signal this effect saw: the helper may only drop a
     # remembered hide on a project switch — any other re-run while away
@@ -650,6 +651,7 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
         [
             active_tab,
             app_state.project_loaded_signal.value,
+            app_state.aoi_spec.value,
             app_state.loading.value,
         ],
     )
@@ -667,6 +669,7 @@ def WorkflowTabs(map_, gee_interface, sepal_client=None):
                 map_=map_,
                 gee_interface=gee_interface,
                 aoi_result=app_state.aoi_result,
+                aoi_spec=app_state.aoi_spec,
                 restore_signal=app_state.project_loaded_signal.value,
                 loading=app_state.loading,
             )
@@ -770,34 +773,9 @@ def Page():
 
     gee_interface = get_current_gee_interface()
     sepal_client = get_current_sepal_client()
-    theme_toggle = solara.use_memo(lambda: ThemeToggle(), [])
-    locale_state = resolve_locale_state()
-    locale_select = solara.use_memo(
-        lambda: LocaleSelect(translator=get_translator()), []
-    )
-
-    def _bind_locale():
-        # Wired here — NOT in on_kernel_start — because @with_sepal_sessions
-        # creates the session's LocaleState only when Page first renders;
-        # kernel-start would bind the process fallback (Codex review P1).
-        locale_select.bind_locale_state(locale_state)
-
-        def handler(change):
-            set_app_locale(change["new"])
-
-        locale_state.observe(handler, "locale")
-        return lambda: locale_state.unobserve(handler, "locale")
-
-    solara.use_effect(_bind_locale, [id(locale_state)])
-
-    def _observe_theme():
-        def handler(e):
-            return setattr(theme, "dark", e["new"])
-
-        theme_toggle.observe(handler, "dark")
-        return lambda: theme_toggle.unobserve(handler, "dark")
-
-    solara.use_effect(_observe_theme, [])
+    # v4 owns the theme toggle itself (scope-keyed ThemeState); the app just
+    # shares its scope's state with the map and MapApp.
+    theme_state = get_current_theme_state()
 
     def create_map():
         map_ = sm.SepalMap(
@@ -806,7 +784,7 @@ def Page():
             center=[0, 0],
             gee=True,
             gee_interface=gee_interface,
-            theme_toggle=theme_toggle,
+            theme_state=theme_state,
             fullscreen=True,
         )
         # Second basemap (hidden) so the layers control offers a satellite
@@ -877,129 +855,6 @@ def Page():
         allocation_jobs.set([])
 
     solara.use_effect(reset_jobs_on_load, [project_loaded_signal])
-
-    def _seed_test_aoi():
-        import os
-
-        if os.getenv("SOLARA_TEST", "false").lower() != "true":
-            return
-        if app_state.aoi_result.value is not None:
-            return
-        import geopandas as gpd
-        from pysepal.solara.components.aoi import AoiResult
-        from shapely.geometry import box
-
-        gdf = gpd.GeoDataFrame(
-            {"name": ["San Marino"]},
-            geometry=[box(12.403, 43.893, 12.517, 43.993)],
-            crs="EPSG:4326",
-        )
-        logger.debug("SOLARA_TEST: seeding AOI with San Marino")
-        app_state.aoi_result.set(AoiResult(method="DRAW", name="San Marino", gdf=gdf))
-
-    # Test AOI seeding disabled for now — start from an empty project.
-    # (SOLARA_TEST stays on; re-enable by uncommenting the line below.)
-    # solara.use_effect(_seed_test_aoi, [])
-
-    def _seed_test_variables():
-        import os
-
-        if os.getenv("SOLARA_TEST", "false").lower() != "true":
-            return
-        p = app_state.project.value
-        aoi_result = app_state.aoi_result.value
-        if p is None or p.raw_variables or aoi_result is None:
-            return
-        from gui.scripts.predefined_variables import (
-            PREDEFINED_CATALOGUE,
-            get_aoi_ee_feature,
-        )
-        from spatialrisk.variables.gee_var import GEEVar
-        from spatialrisk.variables.models import DataType, RasterType
-
-        GEEVar.model_rebuild()
-        aoi_ee = get_aoi_ee_feature(aoi_result.gdf)
-
-        # Non-temporal variables
-        for name in ["altitude", "slope", "protected_area", "roads", "rivers", "subj"]:
-            cat = PREDEFINED_CATALOGUE[name]
-            image = cat["get_image"](aoi_ee)
-            p.raw_variables[name] = GEEVar(
-                name=name,
-                data_type=DataType.raster,
-                raster_type=RasterType(cat["raster_type"]),
-                gee_images=[image],
-                aoi=aoi_ee,
-                project=p,
-            )
-
-        # Temporal variables
-        for name, years in [
-            ("forest_gfc", [2015, 2020, 2024]),
-            ("towns", [2015, 2020]),
-        ]:
-            cat = PREDEFINED_CATALOGUE[name]
-            for year in years:
-                key = f"{name}_{year}"
-                image = cat["get_image"](aoi_ee, year)
-                p.raw_variables[key] = GEEVar(
-                    name=name,
-                    data_type=DataType.raster,
-                    raster_type=RasterType(cat["raster_type"]),
-                    gee_images=[image],
-                    aoi=aoi_ee,
-                    project=p,
-                    year=year,
-                )
-
-        p.base_raster = p.raw_variables["altitude"]
-
-        # Seed dummy processed variables so the Dataset tab is usable
-        from pathlib import Path
-
-        from spatialrisk.variables.local_raster_var import LocalRasterVar
-
-        LocalRasterVar.model_rebuild()
-
-        for name in ["altitude", "slope", "protected_area", "roads", "rivers", "subj"]:
-            cat = PREDEFINED_CATALOGUE[name]
-            p.processed_variables[name] = LocalRasterVar(
-                name=name,
-                path=Path(f"/tmp/processed/{name}.tif"),
-                raster_type=RasterType(cat["raster_type"]),
-                data_type=DataType.raster,
-                project=p,
-            )
-        for name, years in [
-            ("forest_gfc", [2015, 2020, 2024]),
-            ("towns", [2015, 2020]),
-        ]:
-            cat = PREDEFINED_CATALOGUE[name]
-            for yr in years:
-                key = f"{name}_{yr}"
-                p.processed_variables[key] = LocalRasterVar(
-                    name=name,
-                    path=Path(f"/tmp/processed/{key}.tif"),
-                    raster_type=RasterType(cat["raster_type"]),
-                    data_type=DataType.raster,
-                    year=yr,
-                    project=p,
-                )
-
-        logger.debug(
-            "SOLARA_TEST: seeded %d raw + %d processed variables",
-            len(p.raw_variables),
-            len(p.processed_variables),
-        )
-        app_state.project.set(p.model_copy())
-
-    # Test variable seeding disabled for now — Step 2 starts with no variables.
-    # (SOLARA_TEST stays on; re-enable by uncommenting the line below.)
-    # solara.use_effect(_seed_test_variables, [app_state.project.value])
-
-    # Test model/prediction seeding removed: it injected a fake GLM model and a
-    # prediction pointing at a nonexistent /tmp path into whatever real project
-    # was open, which the next save then persisted.
 
     # Handle to the MapApp widget, captured after mount (see _capture_map_app
     # below), so we can imperatively close its step-dialog from inside a tile.
@@ -1093,8 +948,9 @@ def Page():
 
     # Kernel-scoped notification bus + UI (toasts top-right, task pill
     # bottom-right). Mounted BEFORE the MapApp element so the bus exists by the
-    # time the workflow tiles first render — their use_notifications() then
-    # resolves a real Notifier instead of a first-render NoopNotifier.
+    # time the workflow tiles first render — pysepal 4's use_notifications()
+    # raises NotificationProviderError, not a first-render NoopNotifier, when
+    # nothing is mounted yet.
     NotificationProvider()
 
     # Floating layer legend (bottom-center over the map). Mounted before MapApp,
@@ -1107,8 +963,8 @@ def Page():
         main_map=[sepal_map],
         steps_data=steps_data,
         initial_step=1,  # auto-open the Project dialog (step id 1) at startup
-        theme_toggle=[theme_toggle],
-        language_selector=[locale_select],
+        theme_state=theme_state,
+        locales=app_available_locales(),
         right_panel_config=right_panel_config,
         right_panel_content=right_panel_content,
         right_panel_open=True,

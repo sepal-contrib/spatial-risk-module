@@ -25,6 +25,7 @@ import ipywidgets
 import pytest
 import reacton
 import solara
+from _notification_host import render_under_notifications
 
 from gui.i18n import t
 
@@ -300,7 +301,7 @@ def test_project_panel_dialogs_each_default_to_their_confirm(tmp_path, monkeypat
     import gui.solara_app as app
 
     monkeypatch.setattr(app, "DATA_DIR", tmp_path)
-    box, rc = reacton.render(app.ProjectPanel(), handle_error=False)
+    box, rc = render_under_notifications(lambda: app.ProjectPanel(), handle_error=False)
     try:
         defaults = _defaults(box)
         # The panel's own New / Manage / Save buttons sit outside any dialog.

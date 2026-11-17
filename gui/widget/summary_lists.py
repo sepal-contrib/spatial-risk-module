@@ -18,13 +18,13 @@ import solara
 from gui.i18n import t
 from gui.scripts.product_rows import format_sample_points
 from gui.scripts.summary_helpers import (
-    raw_variable_rows,
-    processed_variable_rows,
     dataset_rows,
-    sample_rows,
+    evaluation_rows,
     model_rows,
     prediction_rows,
-    evaluation_rows,
+    processed_variable_rows,
+    raw_variable_rows,
+    sample_rows,
 )
 from gui.widget.product_table import ProductTable
 
@@ -42,6 +42,7 @@ def _summary_table(title, banner, columns, rows, empty_text):
 
 @solara.component
 def RawVariablesSummary(project):
+    """Summary table of the project's raw (source) variables."""
     p = project.value
     if p is None:
         return
@@ -54,7 +55,13 @@ def RawVariablesSummary(project):
                     "type": "text",
                     "value": str(r["name"]),
                     "chips": (
-                        [{"value": t("widgets.summary_lists.chip_base"), "color": "info", "outlined": False}]
+                        [
+                            {
+                                "value": t("widgets.summary_lists.chip_base"),
+                                "color": "info",
+                                "outlined": False,
+                            }
+                        ]
                         if r["is_base"]
                         else []
                     ),
@@ -68,7 +75,12 @@ def RawVariablesSummary(project):
     ]
     _summary_table(
         t("widgets.summary_lists.raw_vars_title"),
-        t("widgets.summary_lists.vars_banner", total=stats["total"], vector=stats["vector"], raster=stats["raster"]),
+        t(
+            "widgets.summary_lists.vars_banner",
+            total=stats["total"],
+            vector=stats["vector"],
+            raster=stats["raster"],
+        ),
         [
             {"label": t("widgets.summary_lists.col_name"), "width": "minmax(0,2fr)"},
             {"label": t("widgets.summary_lists.col_type"), "width": "90px"},
@@ -82,6 +94,7 @@ def RawVariablesSummary(project):
 
 @solara.component
 def ProcessedVariablesSummary(project):
+    """Summary table of the harmonized and derived layers."""
     p = project.value
     if p is None:
         return
@@ -100,7 +113,12 @@ def ProcessedVariablesSummary(project):
     ]
     _summary_table(
         t("widgets.summary_lists.processed_vars_title"),
-        t("widgets.summary_lists.vars_banner", total=stats["total"], vector=stats["vector"], raster=stats["raster"]),
+        t(
+            "widgets.summary_lists.vars_banner",
+            total=stats["total"],
+            vector=stats["vector"],
+            raster=stats["raster"],
+        ),
         [
             {"label": t("widgets.summary_lists.col_name"), "width": "minmax(0,2fr)"},
             {"label": t("widgets.summary_lists.col_source"), "width": "120px"},
@@ -114,6 +132,7 @@ def ProcessedVariablesSummary(project):
 
 @solara.component
 def DatasetsSummary(project):
+    """Summary table of the project's datasets."""
     p = project.value
     if p is None:
         return
@@ -146,34 +165,57 @@ def DatasetsSummary(project):
 
 @solara.component
 def SamplesSummary(project):
+    """Summary table of the project's sample sets."""
     p = project.value
     if p is None:
         return
     stats, data = sample_rows(p)
     rows = []
     for r in data:
-        alloc = f" / {r['allocation']}" if r["allocation"] and r["allocation"] != "—" else ""
+        alloc = (
+            f" / {r['allocation']}"
+            if r["allocation"] and r["allocation"] != "—"
+            else ""
+        )
         points_str = format_sample_points(
-            r["n_total"], r["class_counts"], r["strategy"],
-            more_fmt=t("widgets.summary_lists.more_strata"),
+            r["n_total"],
+            r["class_counts"],
+            r["strategy"],
+            more_fmt=t("widgets.summary_lists.more_strata", n="{n}"),
         )
         rows.append(
             {
                 "key": str(r["name"]),
                 "cells": [
                     {"type": "text", "value": str(r["name"])},
-                    {"type": "text", "value": f"{r['strategy']}{alloc}", "size": "0.8rem"},
-                    {"type": "text", "value": points_str, "size": "0.8rem", "muted": True},
+                    {
+                        "type": "text",
+                        "value": f"{r['strategy']}{alloc}",
+                        "size": "0.8rem",
+                    },
+                    {
+                        "type": "text",
+                        "value": points_str,
+                        "size": "0.8rem",
+                        "muted": True,
+                    },
                     {"type": "text", "value": str(r["seed"]), "muted": True},
                 ],
             }
         )
     _summary_table(
         t("widgets.summary_lists.samples_title"),
-        t("widgets.summary_lists.samples_banner", total=stats["total"], points=stats["points"]),
+        t(
+            "widgets.summary_lists.samples_banner",
+            total=stats["total"],
+            points=stats["points"],
+        ),
         [
             {"label": t("widgets.summary_lists.col_name"), "width": "minmax(0,2fr)"},
-            {"label": t("widgets.summary_lists.col_strategy"), "width": "minmax(0,1fr)"},
+            {
+                "label": t("widgets.summary_lists.col_strategy"),
+                "width": "minmax(0,1fr)",
+            },
             {"label": t("widgets.summary_lists.col_points_classes"), "width": "150px"},
             {"label": t("widgets.summary_lists.col_seed"), "width": "60px"},
         ],
@@ -184,6 +226,7 @@ def SamplesSummary(project):
 
 @solara.component
 def ModelsSummary(project):
+    """Summary table of the project's trained models."""
     p = project.value
     if p is None:
         return
@@ -196,7 +239,13 @@ def ModelsSummary(project):
                     "type": "text",
                     "value": str(r["name"]),
                     "chips": (
-                        [{"value": t("widgets.summary_lists.chip_trained"), "color": "success", "outlined": False}]
+                        [
+                            {
+                                "value": t("widgets.summary_lists.chip_trained"),
+                                "color": "success",
+                                "outlined": False,
+                            }
+                        ]
                         if r["trained"]
                         else []
                     ),
@@ -205,21 +254,33 @@ def ModelsSummary(project):
                 {"type": "text", "value": str(r["year"]), "muted": True},
                 {"type": "text", "value": str(r["n_samples"]), "muted": True},
                 {"type": "text", "value": str(r["deviance"]), "muted": True},
-                {"type": "text", "value": str(r["params"]), "muted": True, "size": "0.78rem"},
+                {
+                    "type": "text",
+                    "value": str(r["params"]),
+                    "muted": True,
+                    "size": "0.78rem",
+                },
             ],
         }
         for r in data
     ]
     _summary_table(
         t("widgets.summary_lists.models_title"),
-        t("widgets.summary_lists.models_banner", total=stats["total"], trained=stats["trained"]),
+        t(
+            "widgets.summary_lists.models_banner",
+            total=stats["total"],
+            trained=stats["trained"],
+        ),
         [
             {"label": t("widgets.summary_lists.col_name"), "width": "minmax(0,2fr)"},
             {"label": t("widgets.summary_lists.col_type"), "width": "70px"},
             {"label": t("widgets.summary_lists.col_year"), "width": "60px"},
             {"label": t("widgets.summary_lists.col_samples"), "width": "80px"},
             {"label": t("widgets.summary_lists.col_deviance"), "width": "90px"},
-            {"label": t("widgets.summary_lists.col_params"), "width": "minmax(0,1.2fr)"},
+            {
+                "label": t("widgets.summary_lists.col_params"),
+                "width": "minmax(0,1.2fr)",
+            },
         ],
         rows,
         t("widgets.summary_lists.models_empty"),
@@ -228,6 +289,7 @@ def ModelsSummary(project):
 
 @solara.component
 def PredictionsSummary(project):
+    """Summary table of the project's predictions."""
     p = project.value
     if p is None:
         return
@@ -247,7 +309,11 @@ def PredictionsSummary(project):
     ]
     _summary_table(
         t("widgets.summary_lists.predictions_title"),
-        t("widgets.summary_lists.predictions_banner", total=stats["total"], active=stats["active"]),
+        t(
+            "widgets.summary_lists.predictions_banner",
+            total=stats["total"],
+            active=stats["active"],
+        ),
         [
             {"label": t("widgets.summary_lists.col_model"), "width": "minmax(0,2fr)"},
             {"label": t("widgets.summary_lists.col_dataset"), "width": "minmax(0,1fr)"},
@@ -262,6 +328,7 @@ def PredictionsSummary(project):
 
 @solara.component
 def EvaluationsSummary(project):
+    """Summary table of the project's evaluation runs."""
     p = project.value
     if p is None:
         return
@@ -272,9 +339,24 @@ def EvaluationsSummary(project):
             "cells": [
                 {"type": "text", "value": str(r["name"])},
                 {"type": "chip", "value": str(r["n_predictions"])},
-                {"type": "text", "value": str(r["csizes"]), "size": "0.8rem", "muted": True},
-                {"type": "text", "value": str(r["metrics"]), "size": "0.8rem", "muted": True},
-                {"type": "text", "value": str(r["created_at"]), "size": "0.78rem", "muted": True},
+                {
+                    "type": "text",
+                    "value": str(r["csizes"]),
+                    "size": "0.8rem",
+                    "muted": True,
+                },
+                {
+                    "type": "text",
+                    "value": str(r["metrics"]),
+                    "size": "0.8rem",
+                    "muted": True,
+                },
+                {
+                    "type": "text",
+                    "value": str(r["created_at"]),
+                    "size": "0.78rem",
+                    "muted": True,
+                },
             ],
         }
         for r in data
@@ -285,7 +367,10 @@ def EvaluationsSummary(project):
         [
             {"label": t("widgets.summary_lists.col_name"), "width": "minmax(0,2fr)"},
             {"label": t("widgets.summary_lists.col_pred_count"), "width": "60px"},
-            {"label": t("widgets.summary_lists.col_cell_sizes"), "width": "minmax(0,1fr)"},
+            {
+                "label": t("widgets.summary_lists.col_cell_sizes"),
+                "width": "minmax(0,1fr)",
+            },
             {"label": t("widgets.summary_lists.col_metrics"), "width": "minmax(0,1fr)"},
             {"label": t("widgets.summary_lists.col_created"), "width": "minmax(0,1fr)"},
         ],

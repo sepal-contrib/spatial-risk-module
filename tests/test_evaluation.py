@@ -1790,13 +1790,14 @@ def _chart_record(metrics=("MedAE", "R2"), rows=None):
 
 @contextlib.contextmanager
 def _dark_theme():
-    """Put the SESSION theme state in dark mode, and restore after.
+    """Put the KERNEL theme state in dark mode, and restore after.
 
     The charts follow pysepal's resolved ``ThemeState.dark`` (via
     ``use_theme_dark``), not solara's internal theme traitlet: the app runs
-    under ``@with_sepal_sessions`` and MapApp's ThemeToggle drives the session
-    state. Headless, ``get_current_theme_state()`` hands back the module-level
-    fallback state — the same object the hook observes.
+    under ``@with_sepal_sessions`` and MapApp's ThemeToggle drives the kernel
+    state. Headless (no Solara server), ``get_current_theme_state()`` hands
+    back the one ``ThemeState`` pysepal keeps per process — the same object
+    the hook observes.
     """
     from pysepal.solara import get_current_theme_state
 
@@ -1820,7 +1821,6 @@ def _render_charts_tab(**kwargs):
 
     kwargs.setdefault("record", _chart_record())
     kwargs.setdefault("eval_key", "run-a")
-    kwargs.setdefault("active_tab", 1)
     _, rc = reacton.render(_ChartsTab(**kwargs), handle_error=False)
     return rc, ipecharts.EChartsRawWidget
 
@@ -1888,7 +1888,7 @@ def test_charts_tab_repaints_when_the_theme_is_toggled_in_place():
     a render body sets up no subscription, so a toggle re-renders nothing, and
     reacton's prop-equality bailout blocks the component even when its parent
     does re-render. ``use_theme_dark()`` observes ``ThemeState.dark`` instead —
-    pysepal's session-scoped state that MapApp's ThemeToggle actually drives —
+    pysepal's kernel-scoped state that MapApp's ThemeToggle actually drives —
     so the flip itself schedules the re-render.
     """
     from gui.scripts.echarts_options import theme_colors
@@ -1989,11 +1989,7 @@ def test_charts_tab_swaps_the_chart_when_the_metric_selection_changes():
 
     rc, cls = _render_charts_tab()
     assert rc.find(cls).widgets[0].option["title"]["text"] == "MedAE (ha) ↓"
-    rc.render(
-        _ChartsTab(
-            record=_chart_record(metrics=("R2",)), eval_key="run-a", active_tab=1
-        )
-    )
+    rc.render(_ChartsTab(record=_chart_record(metrics=("R2",)), eval_key="run-a"))
     assert rc.find(cls).widgets[0].option["title"]["text"] == "R² ↑"
 
 
@@ -2004,55 +2000,10 @@ def test_charts_tab_rebuilds_the_chart_when_the_charted_values_change():
     rc, cls = _render_charts_tab()
     first = rc.find(cls).widgets[0]
     bumped = [{**r, "MedAE": r["MedAE"] + 5} for r in _chart_rows()]
-    rc.render(
-        _ChartsTab(record=_chart_record(rows=bumped), eval_key="run-a", active_tab=1)
-    )
+    rc.render(_ChartsTab(record=_chart_record(rows=bumped), eval_key="run-a"))
     second = rc.find(cls).widgets[0]
     assert second is not first
     assert second.option["series"][0]["data"] == [6.0, 5.7]
-
-
-def test_charts_tab_keeps_its_charts_across_a_tab_switch():
-    """The tab index must NOT be in the chart identity.
-
-    Rebuilding on every tab switch is what squished the charts: the leaving
-    tab's fresh widgets re-attach inside a ``display:none`` v-window-item,
-    ipecharts measures width 0 (it sizes on attach only) and draws its 100px
-    fallback — permanently, since there is no ResizeObserver. The widget must
-    survive the switch; re-measuring on re-entry is the adapter's
-    ``visible``-nudge job, not a teardown's.
-    """
-    from gui.widget.evaluation_results import _ChartsTab
-
-    rc, cls = _render_charts_tab(active_tab=1)
-    first = rc.find(cls).widgets[0]
-    rc.render(_ChartsTab(record=_chart_record(), eval_key="run-a", active_tab=2))
-    assert rc.find(cls).widgets[0] is first
-    rc.render(_ChartsTab(record=_chart_record(), eval_key="run-a", active_tab=1))
-    assert rc.find(cls).widgets[0] is first
-    rc.close()
-
-
-def test_charts_tab_tells_the_adapter_whether_its_tab_is_shown(monkeypatch):
-    """``visible`` must track the active tab — it drives the resize nudge."""
-    import gui.widget.evaluation_results as er
-    from gui.widget.evaluation_results import _ChartsTab
-
-    seen = []
-    real = er.EChartsChart
-
-    def spy(*args, **kwargs):
-        seen.append(kwargs.get("visible"))
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(er, "EChartsChart", spy)
-    rc, _ = _render_charts_tab(active_tab=1)
-    assert seen and set(seen) == {True}
-
-    seen.clear()
-    rc.render(_ChartsTab(record=_chart_record(), eval_key="run-a", active_tab=2))
-    assert seen and set(seen) == {False}
-    rc.close()
 
 
 def test_charts_tab_says_so_when_there_is_nothing_to_chart():
@@ -2316,9 +2267,8 @@ def test_figures_tab_moves_the_chart_title_when_the_language_changes(tmp_path):
     leaves the previous language's title on screen with no error anywhere —
     the same coupling ``labels=`` has.
     """
-    from pysepal.translator import Translator
+    from pysepal.i18n import set_locale
 
-    from gui import i18n
     from gui.widget.evaluation_results import _FiguresTab
 
     _write_points(
@@ -2327,18 +2277,17 @@ def test_figures_tab_moves_the_chart_title_when_the_language_changes(tmp_path):
     record = _figures_record(
         indices=[_fig_index_row(ha=90.0)], csv_path=tmp_path / "indices_all.csv"
     )
-    before = i18n._translator.value
     try:
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="en")
+        set_locale("en")
         rc, cls = _render_figures_tab(record=record)
         english = rc.find(cls).widgets[0].option["title"]["text"]
 
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="es-ES")
+        set_locale("es-ES")
         rc.render(_FiguresTab(record=record, eval_key="run-a", active_tab=2))
         spanish = rc.find(cls).widgets[0].option["title"]["text"]
         rc.close()
     finally:
-        i18n._translator.value = before
+        set_locale("en")
 
     assert english == "Grid cells of 90.0 ha"
     assert spanish != english
@@ -2568,7 +2517,7 @@ def test_figures_tab_moves_the_axis_titles_when_the_language_changes(tmp_path):
     use_memo returns the previous language's chart: stale axis titles, no error
     anywhere.
     """
-    from pysepal.translator import Translator
+    from pysepal.i18n import set_locale
 
     from gui import i18n
     from gui.widget.evaluation_results import _FiguresTab
@@ -2579,27 +2528,22 @@ def test_figures_tab_moves_the_axis_titles_when_the_language_changes(tmp_path):
     record = _figures_record(
         indices=[_fig_index_row()], csv_path=tmp_path / "indices_all.csv"
     )
-    before = i18n._translator.value
     try:
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="en")
+        set_locale("en")
         rc, cls = _render_figures_tab(record=record)
         english = rc.find(cls).widgets[0].option["xAxis"]["name"]
 
-        i18n._translator.value = Translator(i18n.MESSAGES_DIR, target="es-ES")
+        set_locale("es-ES")
         rc.render(_FiguresTab(record=record, eval_key="run-a", active_tab=2))
         spanish = rc.find(cls).widgets[0].option["xAxis"]["name"]
+        expected = i18n.t("widgets.evaluation_results.chart_x_axis")
         rc.close()
     finally:
-        i18n._translator.value = before
+        set_locale("en")
 
     assert english == "Observed deforestation (ha)"
     assert spanish != english
-    assert (
-        spanish
-        == Translator(i18n.MESSAGES_DIR, target="es-ES")["widgets"][
-            "evaluation_results"
-        ]["chart_x_axis"]
-    )
+    assert spanish == expected
 
 
 def test_figures_tab_scatter_survives_tab_changes_without_a_rebuild(tmp_path):
@@ -2635,32 +2579,6 @@ def test_figures_tab_scatter_survives_tab_changes_without_a_rebuild(tmp_path):
     assert rc.find(cls).widgets == []  # the card drops the chart
     rc.render(_FiguresTab(record=record, eval_key="run-a", active_tab=2))
     assert len(rc.find(cls).widgets) == 1  # and remounts it on re-entry
-    rc.close()
-
-
-def test_figures_tab_marks_its_scatter_visible_only_when_shown(tmp_path, monkeypatch):
-    """The card hands the adapter ``visible=True`` only when its tab is active.
-
-    That flag is what schedules the post-transition resize nudge.
-    """
-    import gui.widget.evaluation_results as er
-
-    seen = []
-    real = er.EChartsChart
-
-    def spy(*args, **kwargs):
-        seen.append(kwargs.get("visible"))
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(er, "EChartsChart", spy)
-    _write_points(
-        tmp_path / "pred_obs_GLM_validation_300.csv", obs=[1.0, 2.0], pred=[1.0, 2.0]
-    )
-    record = _figures_record(
-        indices=[_fig_index_row()], csv_path=tmp_path / "indices_all.csv"
-    )
-    rc, cls = _render_figures_tab(record=record, active_tab=2)
-    assert seen and set(seen) == {True}
     rc.close()
 
 

@@ -10,15 +10,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-PINNED_SPEC = "ipecharts>=1.4,<2"
+PINNED_SPEC = "ipecharts>=1.4.2,<2"
 
 
 def test_ipecharts_is_importable():
     """The live env can import ipecharts and its widget entry point."""
     import ipecharts
     from ipecharts import EChartsWidget  # noqa: F401
+    from packaging.version import Version
 
-    assert ipecharts.__version__
+    # 1.4.2 resizes a chart with its container; the app no longer nudges it.
+    assert Version(ipecharts.__version__) >= Version("1.4.2")
 
 
 def test_ipecharts_pinned_in_environment_yml():
@@ -32,4 +34,4 @@ def test_ipecharts_pinned_in_sepal_environment_yml():
     # sepal_environment.yml installs ipecharts from conda-forge (conda pin
     # syntax), unlike environment.yml's pip spec.
     text = (ROOT / "sepal_environment.yml").read_text()
-    assert "- ipecharts=1.4" in text
+    assert "- ipecharts>=1.4.2,<1.5" in text

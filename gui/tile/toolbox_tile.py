@@ -20,7 +20,7 @@ from gui.scripts.allocation_runner import (
 )
 from gui.scripts.density_map import add_density_on_map, density_layer_key
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
+from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.solara_threads import spawn_in_context, update_job
 from gui.store.project_writers import writing
 from gui.widget.allocation_form import AllocationDetailsDialog, AllocationFormDialog
@@ -117,7 +117,6 @@ def _toggle_density_on_map(row, map_, legend_port, notifier):
         logger.exception("density map toggle failed for %s", row.get("key"))
         notifier.error(
             t("toolbox.allocation.error_toggle_density", name=row["name"], exc=exc),
-            timeout=ERROR_TOAST_TIMEOUT,
         )
     finally:
         density_inflight.release(key)
@@ -273,7 +272,6 @@ def ToolboxTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.exception("could not start the density-toggle worker")
             notifications.error(
                 t("toolbox.allocation.error_toggle_density", name=row["name"], exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     rows = allocation_rows(p, allocation_jobs.value) if p is not None else []

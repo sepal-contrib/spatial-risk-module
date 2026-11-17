@@ -10,7 +10,7 @@ from gui.i18n import t
 from gui.scripts import process_actions
 from gui.scripts.file_prompts import DeletePrompt, delete_prompt
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, tracked_job
+from gui.scripts.notify_bridge import tracked_job
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context, update_job
 from gui.store.project_writers import writing
 from gui.tile.derived_map import (
@@ -144,7 +144,6 @@ def PostProcessTile(project, map_=None, legend_port=None):
             logger.exception("deleting the files of %s failed", key)
             notifications.error(
                 t("tiles.variables.error_delete_files", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             removed = True
         if removed:
@@ -170,7 +169,6 @@ def PostProcessTile(project, map_=None, legend_port=None):
         if not derived_inflight.claim(output.key):
             notifications.error(
                 t("tiles.postprocess.already_running", name=output.name),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             return
 
@@ -206,7 +204,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
                 if entry["op"] in CHANGE_OPS
                 else "tiles.postprocess.error_post_processing"
             )
-            notifications.error(t(failed_key, exc=exc), timeout=ERROR_TOAST_TIMEOUT)
+            notifications.error(t(failed_key, exc=exc))
             return
         logger.info("Derived layer '%s' started (job=%s)", output.name, job_id)
 

@@ -19,8 +19,8 @@ whole call), unlike the forestatrisk MCMC case that needed a subprocess.
 import threading
 
 import pytest
-import reacton
 import solara
+from _notification_host import render_under_notifications
 
 # Long enough that a synchronous handler visibly blocks, short enough that the
 # regression case fails fast instead of hanging the suite.
@@ -85,8 +85,8 @@ def _render_capturing_on_submit(monkeypatch, project, notifier=None):
     if notifier is not None:
         monkeypatch.setattr(postprocess_tile, "use_notifications", lambda: notifier)
 
-    box, rc = reacton.render(
-        postprocess_tile.PostProcessTile(project=project, map_=None),
+    box, rc = render_under_notifications(
+        lambda: postprocess_tile.PostProcessTile(project=project, map_=None),
         handle_error=False,
     )
     return captured["on_submit"], rc
@@ -132,7 +132,6 @@ def test_edge_dist_does_not_block_the_event_handler(monkeypatch):
 def test_edge_dist_reports_failures_as_an_error_toast(monkeypatch):
     """Moving to a thread must not lose the error path the sync version had."""
     from gui.scripts import process_actions
-    from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 
     def _boom(project, key, step):
         raise RuntimeError("gdal exploded")
@@ -154,5 +153,5 @@ def test_edge_dist_reports_failures_as_an_error_toast(monkeypatch):
     assert notifier.errors, "the failure never reached the UI"
     message, timeout = notifier.errors[0]
     assert "gdal exploded" in message
-    assert timeout == ERROR_TOAST_TIMEOUT
+    assert timeout is None  # pysepal's error default
     rc.close()

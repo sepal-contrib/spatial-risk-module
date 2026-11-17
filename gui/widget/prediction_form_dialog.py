@@ -164,6 +164,7 @@ def PredictionFormDialog(
 
     # --- import mode state
     file_path, set_file_path = solara.use_state("")
+
     # The scale the file is on, not a display choice: every import is rescaled
     # onto the app's 1..65535 contract. "" is the unset state validate()
     # refuses — guessing it would silently rescale the wrong way.
@@ -438,7 +439,7 @@ def PredictionFormDialog(
             FileInputComponent(
                 label=t("widgets.prediction_import_modal.label_file"),
                 value=file_path,
-                on_value=set_file_path,
+                on_value=lambda picked: set_file_path(picked or ""),
                 sepal_client=sepal_client,
                 root="",
                 extensions=_IMPORT_RASTER_EXTENSIONS,
