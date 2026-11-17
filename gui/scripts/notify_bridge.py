@@ -25,14 +25,6 @@ from contextlib import contextmanager
 
 _LOGGER_NAME = "spatial_risk"
 
-ERROR_TOAST_TIMEOUT = 10.0
-"""Seconds an error toast stays on screen. Successes keep pysepal's 3 s default.
-
-Failures deserve a longer read than confirmations, but nothing is sticky: a
-tracked job's failure also lands in the notification log, which outlives the
-toast.
-"""
-
 # thread ident -> TaskTracker of the tracked job running on that thread.
 _trackers = {}
 _install_lock = threading.Lock()
@@ -193,7 +185,7 @@ def tracked_job(notifier, title: str, total_steps=None, error_format=None):
                 logging.getLogger(_LOGGER_NAME).exception("error_format failed")
                 message = str(exc)
             task.fail(message)
-            notifier.error(message, timeout=ERROR_TOAST_TIMEOUT)
+            notifier.error(message)
             raise
         finally:
             if previous is not None:

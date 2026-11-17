@@ -14,7 +14,6 @@ from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import raw_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.notify_bridge import (
-    ERROR_TOAST_TIMEOUT,
     layer_progress_reporter,
     tracked_job,
 )
@@ -129,7 +128,6 @@ def _toggle_var_on_map(key, p, map_, legend_port, notifier):
         logger.exception("map toggle failed for %s", key)
         notifier.error(
             t("tiles.variables.error_toggle_map", key=key, exc=exc),
-            timeout=ERROR_TOAST_TIMEOUT,
         )
     finally:
         vars_inflight.release(key)
@@ -583,7 +581,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.exception("could not start the map-toggle worker")
             notifications.error(
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     pending_add, set_pending_add = solara.use_state(None)
@@ -594,7 +591,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.warning("on_add: project is None")
             notifications.error(
                 t("tiles.variables.error_no_project"),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             return
         try:
@@ -609,7 +605,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                     p.base_raster = None
                     notifications.warning(
                         t("tiles.variables.error_base_raster_reset", name=old.name),
-                        timeout=ERROR_TOAST_TIMEOUT,
                     )
                 _drop_from_map(key, map_, legend_port)
             p.raw_variables[key] = var
@@ -630,7 +625,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.exception("on_add failed")
             notifications.error(
                 t("tiles.variables.error_add_variable", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     def on_add(entry: dict):
@@ -640,7 +634,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.warning("on_add: project is None")
             notifications.error(
                 t("tiles.variables.error_no_project"),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
             return
         # Duplicate key (e.g. re-adding a predefined variable that was already
@@ -664,7 +657,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                 p.base_raster = None
                 notifications.warning(
                     t("tiles.variables.error_base_raster_reset", name=old_var.name),
-                    timeout=ERROR_TOAST_TIMEOUT,
                 )
             # The key may change on edit — drop the stale layer so it doesn't linger.
             _drop_from_map(old_key, map_, legend_port)
@@ -691,7 +683,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.exception("on_save failed")
             notifications.error(
                 t("tiles.variables.error_save_variable", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     pending_remove, set_pending_remove = solara.use_state(None)
@@ -728,14 +719,12 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                 logger.exception("deleting the files of %s failed", key)
                 notifications.error(
                     t("tiles.variables.error_delete_files", exc=exc),
-                    timeout=ERROR_TOAST_TIMEOUT,
                 )
         removed = p.raw_variables.pop(key, None)
         if is_base_raster(p, removed):
             p.base_raster = None
             notifications.warning(
                 t("tiles.variables.error_base_raster_removed", name=removed.name),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
         _drop_from_map(key, map_, legend_port)
         # Saved now, like dataset, model, sample and prediction removals: a
@@ -778,7 +767,6 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             logger.exception("could not start the download worker")
             notifications.error(
                 t("tiles.variables.error_download", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     def on_download(key=None):

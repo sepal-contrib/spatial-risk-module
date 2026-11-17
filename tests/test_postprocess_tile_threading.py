@@ -132,7 +132,6 @@ def test_edge_dist_does_not_block_the_event_handler(monkeypatch):
 def test_edge_dist_reports_failures_as_an_error_toast(monkeypatch):
     """Moving to a thread must not lose the error path the sync version had."""
     from gui.scripts import process_actions
-    from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 
     def _boom(project, key, step):
         raise RuntimeError("gdal exploded")
@@ -154,5 +153,5 @@ def test_edge_dist_reports_failures_as_an_error_toast(monkeypatch):
     assert notifier.errors, "the failure never reached the UI"
     message, timeout = notifier.errors[0]
     assert "gdal exploded" in message
-    assert timeout == ERROR_TOAST_TIMEOUT
+    assert timeout is None  # pysepal's error default
     rc.close()

@@ -24,11 +24,6 @@ def test_variables_tile_toasts_every_failure_path():
     # itself now lives in the module-level per-click worker (one thread per
     # click) rather than a component-scoped use_task, so look for it there.
     assert "error_format=" in inspect.getsource(_run_download)
-    # Every direct toast (error or warning) passes the shared dwell constant.
-    direct_toasts = src.count("notifications.error(") + src.count(
-        "notifications.warning("
-    )
-    assert direct_toasts == src.count("ERROR_TOAST_TIMEOUT")
     for key in (
         "tiles.variables.error_download",
         "tiles.variables.error_toggle_map",

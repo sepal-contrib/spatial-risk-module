@@ -319,7 +319,7 @@ def test_error_format_localizes_the_failure_toast_and_task():
     assert task.error_message == "Harmonization failed: boom"
     errors = [t for t in bus.toasts.value if t.type == ToastType.ERROR]
     assert [t.message for t in errors] == ["Harmonization failed: boom"]
-    assert errors[0].effective_timeout() == notify_bridge.ERROR_TOAST_TIMEOUT
+    assert errors[0].timeout is None  # pysepal's error default (sticky)
 
 
 def test_broken_error_format_does_not_mask_the_original_exception():
@@ -365,7 +365,7 @@ def test_failure_publishes_exactly_one_error_toast():
         with notify_bridge.tracked_job(notifier, "One toast only"):
             raise RuntimeError("kaboom")
 
-    assert published == [("kaboom", notify_bridge.ERROR_TOAST_TIMEOUT)]
+    assert published == [("kaboom", None)]
 
 
 def test_cancellation_is_not_reported_as_a_failure():

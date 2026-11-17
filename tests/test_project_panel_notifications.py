@@ -23,8 +23,6 @@ def test_project_panel_toasts_status_and_errors():
         "project.error_no_project_to_save",
     ):
         assert key in src, f"{key} lost its call site"
-    # Successes take pysepal's 3 s default; only errors pass the dwell constant.
-    assert src.count("notifications.error(") == src.count("ERROR_TOAST_TIMEOUT")
 
 
 def test_workflow_panel_has_no_status_clearing_effect():

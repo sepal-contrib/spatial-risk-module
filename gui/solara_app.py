@@ -33,7 +33,7 @@ from gui.scripts.map_helpers import (
     show_aoi_on_map,
     sync_draw_control_visibility,
 )
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT, install_task_log_handler
+from gui.scripts.notify_bridge import install_task_log_handler
 from gui.scripts.project_io import (
     delete_project,
     list_project_infos,
@@ -354,9 +354,7 @@ def ProjectPanel(on_close=None):
         if delete_task.pending:
             return  # a delete is in flight; nothing else may be staged
         if p is None:
-            notifications.error(
-                t("project.error_no_project_to_save"), timeout=ERROR_TOAST_TIMEOUT
-            )
+            notifications.error(t("project.error_no_project_to_save"))
             return
         if overwrite_needed(p.project_name, last_saved, existing_names()):
             set_overwrite_open(True)
@@ -388,7 +386,7 @@ def ProjectPanel(on_close=None):
                 note = t("project.status_saved_note_no_base")
             notifications.success(t("project.status_saved", path=path, note=note))
         except Exception as exc:
-            notifications.error(str(exc), timeout=ERROR_TOAST_TIMEOUT)
+            notifications.error(str(exc))
 
     # ---- Status block ---------------------------------------------------
     with solara.Column(style="gap: 8px; padding: 8px;"):

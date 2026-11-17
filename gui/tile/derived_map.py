@@ -24,7 +24,6 @@ from gui.i18n import t
 from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import processed_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 from gui.scripts.solara_threads import spawn_in_context
 from gui.scripts.variable_map import add_raster_var_on_map
 
@@ -153,7 +152,6 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
             logger.exception("map toggle failed for processed var %s", key)
             notifier.error(
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
         finally:
             derived_toggle_inflight.release(key)
@@ -172,7 +170,6 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
             logger.exception("could not start the map-toggle worker")
             notifier.error(
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     return on_toggle_map if map_ is not None else None

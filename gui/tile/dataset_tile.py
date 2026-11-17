@@ -8,7 +8,6 @@ from pysepal.solara.notifications import use_notifications
 from gui.i18n import t
 from gui.scripts.artifact_names import suggest_copy_name
 from gui.scripts.dataset_validation import instance_choice_value
-from gui.scripts.notify_bridge import ERROR_TOAST_TIMEOUT
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.dataset_form_dialog import DatasetFormDialog
 from gui.widget.dataset_list import DatasetList
@@ -79,9 +78,7 @@ def DatasetTile(project):
     def on_submit(entry, edit_key):
         """Build, validate and register the dataset described by `entry`."""
         if p is None:
-            notifications.error(
-                t("tiles.dataset.error_no_project"), timeout=ERROR_TOAST_TIMEOUT
-            )
+            notifications.error(t("tiles.dataset.error_no_project"))
             return
         try:
             # Each temporal variable carries its own year (picked with it).
@@ -107,7 +104,6 @@ def DatasetTile(project):
             # see (a layer missing on disk) is a toast, not a step-panel alert.
             notifications.error(
                 t("tiles.dataset.error_registration_failed", exc=exc),
-                timeout=ERROR_TOAST_TIMEOUT,
             )
 
     has_processed = p is not None and bool(p.processed_variables)
