@@ -49,7 +49,7 @@ Creating a project is simple:
 
 .. code-block:: python
 
-   from component.script.project import Project
+   from spatialrisk.project import Project
    
    project = Project(
        project_name="my_forest_analysis",
@@ -99,8 +99,8 @@ For example, to analyze Martinique (a Caribbean island):
 .. code-block:: python
 
    import ee
-   from component.script.gee.ee_fao_gaul import get_fao_gaul_features
-   from component.script.variables import GEEVar
+   from spatialrisk.gee.ee_fao_gaul import get_fao_gaul_features
+   from spatialrisk.variables import GEEVar
    
    # Initialize Google Earth Engine
    ee.Initialize()
@@ -145,7 +145,7 @@ You can also use your own boundaries! If you have a shapefile or KML of your stu
 
 .. code-block:: python
 
-   from component.script.variables import LocalVectorVar
+   from spatialrisk.variables import LocalVectorVar
    
    # Use your own shapefile
    aoi_var = LocalVectorVar(

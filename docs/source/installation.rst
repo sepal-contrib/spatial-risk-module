@@ -23,8 +23,8 @@ Clone the Repository code to your SEPAL workspace:
 
 .. code-block:: bash
 
-   git clone https://github.com/SerafiniJose/deforisk-jupyter-nb-v2.git
-   cd deforisk-jupyter-nb-v2
+   git clone https://github.com/sepal-contrib/spatial-risk-module.git
+   cd spatial-risk-module
 
 This creates a folder with all the framework code and notebooks.
 
@@ -87,7 +87,7 @@ Once installation is complete, you can:
 **Option 1: Use Jupyter Notebooks**
 
 1. Open JupyterLab in SEPAL
-2. Navigate to the ``deforisk-jupyter-nb-v2/notebooks/`` folder
+2. Navigate to the ``spatial-risk-module/notebooks/`` folder
 3. Select the "deforisk-deg" kernel when opening a notebook
 4. Start with ``_1.variables_factory.ipynb`` to learn the basics
 
@@ -121,6 +121,6 @@ Need Help?
 If you encounter any issues during installation:
 
 1. Make sure you're running commands in the SEPAL terminal
-2. Check that you're in the correct directory (``deforisk-jupyter-nb-v2``)
+2. Check that you're in the correct directory (``spatial-risk-module``)
 3. Verify the environment is activated (you should see ``(.venv)`` in your prompt)
 4. Try running the commands one at a time to identify where the issue occurs
