@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from spatialrisk.project import Project, DATA_DIR
+from spatialrisk.project import DATA_DIR, Project
 
 logger = logging.getLogger("spatial_risk")
 
@@ -26,7 +26,8 @@ def save_project(project: Project) -> Path:
 def list_projects(data_dir: Path) -> list[str]:
     """Return names of all saved projects found under data_dir."""
     return sorted(
-        p.name for p in data_dir.iterdir()
+        p.name
+        for p in data_dir.iterdir()
         if p.is_dir() and (p / f"{p.name}_project.json").exists()
     )
 
