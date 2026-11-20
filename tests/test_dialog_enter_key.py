@@ -552,7 +552,11 @@ function keydown(target, key, extra) {
   if (!e.propagationStopped) {
     // The focused control's own handler: VSelect opens its menu on Enter.
     if (e.key === "Enter" && target.closest(".v-select")) log.push("menu-opened");
-    for (const fn of listeners.bubble.slice()) fn(e);
+    // jupyter-vuetify (voila, JupyterLab) stops every keydown at its dialog
+    // host: from inside a dialog, nothing bubbles up to document.
+    if (!target.closest(".v-dialog__content")) {
+      for (const fn of listeners.bubble.slice()) fn(e);
+    }
   }
   // The browser's default action: Enter activates a focused button.
   if (e.key === "Enter" && !e.defaultPrevented && target.tagName === "BUTTON") {

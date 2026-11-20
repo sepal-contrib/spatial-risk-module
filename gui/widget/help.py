@@ -21,6 +21,11 @@ def InfoButton(title: str, markdown: str, icon: str = "mdi-information-outline")
     (same as ``ConfirmDialog``). Render it once per tile near the component's
     top level — nested button→dialog toggles (e.g. inside list rows) have
     proved unreliable.
+
+    ``eager=True`` stays on the dialogs that set it, under the native MapApp
+    shell too: a lazy VDialog does not take focus the first time it opens, so
+    Esc does nothing until the user clicks inside it (checked in a browser on
+    this popup, issue #57).
     """
     open_, set_open = solara.use_state(False)
 

@@ -163,7 +163,7 @@ def test_page_mounts_notification_provider_before_the_map_app():
 
     LogConso...
 
-    It must mount before the MapApp element so the bus exists when the workflow
+    It must mount before the MapApp shell so the bus exists when the workflow
     tiles first render — pysepal 4's use_notifications() raises
     NotificationProviderError instead of quietly handing back a NoopNotifier
     when nothing is mounted yet.
@@ -174,8 +174,25 @@ def test_page_mounts_notification_provider_before_the_map_app():
 
     src = inspect.getsource(app.Page)
     assert "NotificationProvider()" in src
-    assert src.index("NotificationProvider()") < src.index("MapApp.element(")
+    assert src.index("NotificationProvider()") < src.index("MapApp(")
     assert "LogConsole" not in src
+
+
+def test_project_dialog_close_is_wired_both_ways():
+    """Create and Load close the Project dialog through the mirrored step.
+
+    The native MapApp only acts on a CHANGE of ``current_step``. Without
+    ``on_current_step`` the mirror stays None after the first close, so the
+    next Create or Load would leave the dialog open.
+    """
+    import inspect
+
+    import gui.solara_app as app
+
+    src = inspect.getsource(app.Page)
+    assert "current_step=current_step" in src
+    assert "on_current_step=set_current_step" in src
+    assert "set_current_step(None)" in src
 
 
 def test_toolbox_is_a_third_left_rail_entry():

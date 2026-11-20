@@ -2,7 +2,7 @@
 
 ``gui/messages/<locale>/*.json`` is bound once with pysepal's ``catalog()``.
 Its ``msg()`` reads the kernel-scoped locale (``pysepal.i18n.current_locale``)
-on every call, which the language selector that ``MapApp.element(locales=...)``
+on every call, which the language selector that ``MapApp(locales=...)``
 mounts writes. Reading it during a render subscribes the component, so a
 language switch re-renders every component that calls t() in place. No string
 may be resolved at import time — always call t()/plural() inside a component
