@@ -12,7 +12,6 @@ import reacton.ipyvuetify as rv
 import solara
 from pysepal import mapping as sm
 from pysepal.logger import setup_logging
-from pysepal.sepalwidgets.vue_app import MapApp
 from pysepal.solara import (
     NotificationProvider,
     get_current_gee_interface,
@@ -24,6 +23,7 @@ from pysepal.solara import (
     use_notifications,
     with_sepal_sessions,
 )
+from pysepal.solara.components.map_app import MapApp
 
 from gui.i18n import app_available_locales, t
 from gui.scripts.aoi_io import load_aoi, persist_aoi
@@ -856,16 +856,14 @@ def Page():
 
     solara.use_effect(reset_jobs_on_load, [project_loaded_signal])
 
-    # Handle to the MapApp widget, captured after mount (see _capture_map_app
-    # below), so we can imperatively close its step-dialog from inside a tile.
-    map_app_ref = solara.use_ref(None)
+    # The shell owns its step state and only acts on a CHANGE of the prop, so
+    # mirror it here (on_current_step) to be able to change it. Starts on step
+    # id 1: the Project dialog auto-opens at startup.
+    current_step, set_current_step = solara.use_state(1)
 
     def close_project_dialog():
-        """Close the Project step-dialog (mirrors MapApp's deactivate path)."""
-        widget = map_app_ref.current
-        if widget is not None:
-            widget.step_open = False
-            widget.current_step = None
+        """Close the Project step-dialog (None = back to the map)."""
+        set_current_step(None)
 
     # Left drawer: Project controls + read-only Project Summary (both open as dialogs)
     steps_data = [
@@ -947,7 +945,7 @@ def Page():
         solara.display(loopback_bridge)
 
     # Kernel-scoped notification bus + UI (toasts top-right, task pill
-    # bottom-right). Mounted BEFORE the MapApp element so the bus exists by the
+    # bottom-right). Mounted BEFORE the MapApp shell so the bus exists by the
     # time the workflow tiles first render — pysepal 4's use_notifications()
     # raises NotificationProviderError, not a first-render NoopNotifier, when
     # nothing is mounted yet.
@@ -957,12 +955,13 @@ def Page():
     # like NotificationProvider, so it is present from the first render.
     MapLegend(app_state)
 
-    map_app_el = MapApp.element(
+    MapApp(
         app_title=app_title,
         app_icon="mdi-tree",
         main_map=[sepal_map],
         steps_data=steps_data,
-        initial_step=1,  # auto-open the Project dialog (step id 1) at startup
+        current_step=current_step,
+        on_current_step=set_current_step,
         theme_state=theme_state,
         locales=app_available_locales(),
         right_panel_config=right_panel_config,
@@ -976,16 +975,6 @@ def Page():
         # MapApp fallback of <repo>/blob/main/doc/en.rst does not exist here)
         docs_url="https://github.com/sepal-contrib/spatial-risk-module/blob/main/docs/source/index.rst",
     )
-
-    # Grab the realized MapApp widget so close_project_dialog() can drive its
-    # step-dialog traits. Recaptured each render (cheap, element is stable).
-    def _capture_map_app():
-        try:
-            map_app_ref.current = solara.get_widget(map_app_el)
-        except Exception:  # pragma: no cover - defensive (pre-mount)
-            pass
-
-    solara.use_effect(_capture_map_app, [map_app_el])
 
 
 routes = [
