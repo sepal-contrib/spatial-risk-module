@@ -66,7 +66,8 @@
       "chart_residual": "Resíduo",
       "chart_csize_title": "Células de grade de {csize_ha} ha",
       "chart_unavailable_warning": "Gráfico interativo indisponível — exibindo a imagem salva.",
-      "download_png": "Baixar gráfico"
+      "download_png": "Baixar gráfico",
+      "points_thinned": "Exibindo {shown} de {n} pontos"
     },
     "dataset_list": {
       "title": "Conjuntos de dados",

@@ -165,6 +165,7 @@ _POINT_ALPHA = {True: 0.65, False: 0.55}
 # lock for a cartesian grid — squareness is a container property (see
 # PRED_OBS_SQUARE_HEIGHT), and the option's job is only to not skew it.
 _GRID_INSET = 16
+_TICK_LABEL_WIDTH = 48
 # Vertical room under the plot box for the x-axis `name`. `containLabel` grows
 # the grid to fit the TICK LABELS only — an axis `name` is never counted — so
 # the title is drawn `X_NAME_GAP` below the axis line, i.e. below the band
@@ -798,7 +799,18 @@ def pred_obs_scatter_option(
         "axisLine": {"lineStyle": {"color": grid}},
         "axisTick": {"show": False},
         "splitLine": {"lineStyle": {"color": grid}},
-        "axisLabel": {"color": ink},
+        # The pinned max is an unrounded data value ("8,504.692268966146") that
+        # collides with the last round tick; the round ticks say enough.
+        # Hidden, but `containLabel` still measures it — hence the width cap,
+        # which also bounds where the plot area can start (see `graphic`).
+        # shortcut: tick labels past ~7 characters (1,000,000 ha) are cut;
+        # widen _TICK_LABEL_WIDTH if cells ever get that large.
+        "axisLabel": {
+            "color": ink,
+            "showMaxLabel": False,
+            "width": _TICK_LABEL_WIDTH,
+            "overflow": "truncate",
+        },
         "nameTextStyle": {"color": ink},
         "nameLocation": "middle",
     }
@@ -833,7 +845,9 @@ def pred_obs_scatter_option(
             {
                 # The PNG's top-left MedAE/R2/n block, in the same corner.
                 "type": "text",
-                "left": 56,
+                # Clear of the y tick labels at any range: inset + capped
+                # label width + ECharts' 8 px label margin + breathing room.
+                "left": _GRID_INSET + _TICK_LABEL_WIDTH + 8 + 10,
                 "top": 48,
                 "silent": True,
                 "style": {

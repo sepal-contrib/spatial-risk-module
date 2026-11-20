@@ -66,7 +66,8 @@
       "chart_residual": "Residuo",
       "chart_csize_title": "Celdas de cuadrícula de {csize_ha} ha",
       "chart_unavailable_warning": "Gráfico interactivo no disponible — mostrando la imagen guardada.",
-      "download_png": "Descargar gráfico"
+      "download_png": "Descargar gráfico",
+      "points_thinned": "Mostrando {shown} de {n} puntos"
     },
     "dataset_list": {
       "title": "Conjuntos de datos",

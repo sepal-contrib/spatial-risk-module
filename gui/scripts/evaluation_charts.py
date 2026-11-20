@@ -38,6 +38,38 @@ def map_label(row):
     return f"{model} — {period}" if period else str(model)
 
 
+def map_title_parts(row, project):
+    """``(family, run, "dataset · target")`` for a card header, or None.
+
+    None when the row's prediction is no longer in the project (deleted, or a
+    legacy row with no ``prediction`` key): the caller falls back to
+    ``map_label``.
+
+    Rows store the prediction's ``storage_key()``, not its registry key, and
+    two runs of one model can share it — so the row's ``model`` (the artifact
+    label) has to match too.
+    """
+    from spatialrisk.evaluation import artifact_label_for, label_for
+
+    key = row.get("prediction")
+    pred = next(
+        (
+            p
+            for p in (getattr(project, "predictions", None) or {}).values()
+            if key
+            and p.storage_key() == key
+            and artifact_label_for(p) == row.get("model")
+        ),
+        None,
+    )
+    if pred is None:
+        return None
+    ds = project.get_dataset(pred.dataset_name)
+    target = getattr(getattr(ds, "target", None), "name", None)
+    meta = " · ".join(x for x in (pred.dataset_name, target) if x)
+    return label_for(pred), pred.name or pred.model_key, meta
+
+
 def record_csizes(rows):
     """Sorted unique coarse-grid cell sizes present in the rows."""
     return sorted(
