@@ -44,6 +44,10 @@ class LocalRasterVar(Variable):
     # add_as_processed: the New model dialog counts them to warn about slow
     # iCAR training and fit() declares them as each C() term's domain.
     categorical_levels: Optional[List[Union[int, float]]] = None
+    # Set when the user picked one band of a multi-band file: ``path`` is then
+    # a single-band VRT over ``source_path``, which the edit dialog shows.
+    band: Optional[int] = None
+    source_path: Optional[Path] = None
 
     @field_validator("path")
     @classmethod

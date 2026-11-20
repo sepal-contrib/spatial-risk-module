@@ -28,6 +28,7 @@ from gui.widget.help import InfoButton
 from gui.widget.product_table import BUSY_CLASSES, BUSY_ICON, HOURGLASS_CSS
 from gui.widget.variable_list import SourceVariableList
 from gui.widget.variable_modal import VariableModal
+from spatialrisk.geo_utils import single_band_vrt
 
 # Unused directly, but required in scope: pydantic v2's model_rebuild() below
 # resolves the Optional["Project"] forward reference using this module's
@@ -382,7 +383,8 @@ def _variable_to_entry(key: str, var, project) -> dict:
     if getattr(var, "vis_params", None):
         entry["vis_params"] = dict(var.vis_params)
     if vtype == "LocalRasterVar":
-        entry["path"] = str(var.path)
+        entry["path"] = str(var.source_path or var.path)
+        entry["band"] = var.band
         entry["raster_type"] = (
             var.raster_type.value
             if hasattr(var.raster_type, "value")
@@ -390,6 +392,7 @@ def _variable_to_entry(key: str, var, project) -> dict:
         )
     elif vtype == "GEEVar":
         entry["asset_id"] = str(var.path) if var.path else ""
+        entry["band"] = var.band
         entry["scale"] = (
             str(var.default_scale) if getattr(var, "default_scale", None) else ""
         )
@@ -434,8 +437,19 @@ def _build_variable(entry: dict, project):
     )
     vtype = entry["type"]
     if vtype == "LocalRasterVar":
+        band = entry.get("band")
+        path = entry["path"]
+        if band:
+            # Every reader takes band 1, so expose the chosen band as its own file.
+            path = single_band_vrt(
+                path,
+                band,
+                project.folders.data_raw_folder / f"{entry_key(entry)}_b{band}.vrt",
+            )
         return LocalRasterVar(
-            path=entry["path"],
+            path=path,
+            band=band,
+            source_path=entry["path"] if band else None,
             raster_type=entry.get("raster_type"),
             data_type=entry["data_type"],
             **common,
@@ -443,6 +457,7 @@ def _build_variable(entry: dict, project):
     if vtype == "GEEVar":
         return GEEVar(
             path=entry["path"],
+            band=entry.get("band"),
             default_scale=entry.get("default_scale"),
             raster_type=entry.get("raster_type"),
             data_type=entry["data_type"],

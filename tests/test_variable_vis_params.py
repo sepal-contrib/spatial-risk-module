@@ -118,3 +118,25 @@ def test_download_goes_through_resolve_images(tmp_path, captured_download, monke
     var = _gee_var(tmp_path, gee_images=None, path="projects/p/assets/x")
     var._download()
     assert captured_download[0][0] is image
+
+
+def test_resolve_images_selects_the_picked_band(monkeypatch):
+    """A band picked from a multi-band asset is the only one exported."""
+    selected = []
+
+    class _MultiBand(_FakeImage):
+        def select(self, bands):
+            selected.append(bands)
+            return _FakeImage()
+
+    monkeypatch.setattr(gee_var_module.ee, "Image", lambda _id: _MultiBand())
+    var = GEEVar(
+        name="custom_layer",
+        data_type=DataType.raster,
+        path="projects/p/assets/x",
+        band="B4",
+    )
+
+    var.resolve_images()
+
+    assert selected == [["B4"]]

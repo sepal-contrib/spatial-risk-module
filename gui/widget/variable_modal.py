@@ -24,6 +24,12 @@ from gui.scripts.predefined_variables import (
     param_specs,
 )
 from gui.widget.artifact_name_field import ArtifactNameField
+from gui.widget.band_select import (
+    band_choices,
+    band_status,
+    bands_block_save,
+    use_band_list,
+)
 from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
 from gui.widget.enter_key import ENTER_DEFAULT
 from gui.widget.text_style import MUTED
@@ -132,6 +138,8 @@ def VariableModal(
     file_path, set_file_path = solara.use_state("")
     asset_id, set_asset_id = solara.use_state("")
     scale, set_scale = solara.use_state("")
+    # Picked band of a multi-band raster: a name for GEE, a 1-based index for a file.
+    band, set_band = solara.use_state(None)
     # Categorical first: most user layers are 0/1 masks.
     raster_type, set_raster_type = solara.use_state(RasterType.categorical.value)
     rasterization_method, set_rasterization_method = solara.use_state(
@@ -165,6 +173,26 @@ def VariableModal(
     error, set_error = solara.use_state(None)
 
     is_edit = editing_key is not None
+
+    # Bands of the picked raster (custom raster layers only). Hooks: unconditional.
+    band_origin = "gee" if var_type == "GEEVar" else "file"
+    band_ref = ""
+    if source == "custom" and var_type == "GEEVar":
+        band_ref = asset_id.strip()
+    elif source == "custom" and var_type == "LocalRasterVar":
+        band_ref = file_path.strip()
+    bands_task = use_band_list(gee_interface, band_origin, band_ref)
+    band_items = band_choices(bands_task, band_ref)
+    band_values = [value for _, value in band_items]
+
+    def _default_band():
+        # A new list starts on its first band; an edit's saved band is kept.
+        if band_values and band not in band_values:
+            set_band(band_values[0])
+
+    solara.use_effect(_default_band, [tuple(band_values)])
+    # Only a multi-band source records a band; one band is the file as is.
+    picked_band = band if len(band_values) > 1 and band in band_values else None
 
     # Derived: catalogue entry for the selected predefined variable
     cat = PREDEFINED_CATALOGUE.get(predefined_key) if predefined_key else None
@@ -202,6 +230,7 @@ def VariableModal(
         set_file_path("")
         set_asset_id("")
         set_scale("")
+        set_band(None)
         set_raster_type(RasterType.categorical.value)
         set_rasterization_method(RasterizationMethod.binary.value)
         set_ramp(palettes.DEFAULT_RAMP)
@@ -234,6 +263,7 @@ def VariableModal(
         set_file_path(initial_entry.get("path", ""))
         set_asset_id(initial_entry.get("asset_id", ""))
         set_scale(initial_entry.get("scale", ""))
+        set_band(initial_entry.get("band"))
         set_raster_type(initial_entry.get("raster_type", RasterType.categorical.value))
         set_rasterization_method(
             initial_entry.get("rasterization_method", RasterizationMethod.binary.value)
@@ -260,9 +290,8 @@ def VariableModal(
         set_vmin(_number_text(vis["min"]) if pinned else "")
         set_vmax(_number_text(vis["max"]) if pinned else "")
         _clear_probes()
-        probed.current = (
-            initial_entry.get("asset_id") or initial_entry.get("path") or None
-        )
+        saved_ref = initial_entry.get("asset_id") or initial_entry.get("path")
+        probed.current = (saved_ref, initial_entry.get("band")) if saved_ref else None
         set_error(None)
 
     solara.use_effect(prefill_from_initial, [open_.value])
@@ -281,37 +310,41 @@ def VariableModal(
     )
 
     def _on_new_raster():
-        # Classes found on one raster are never kept on another. An emptied
-        # picker is not another raster: the asset field empties as it mounts.
+        # Classes found on one raster (or band) are never kept on another. An
+        # emptied picker is not another raster: the asset field empties as it
+        # mounts; nor is a first band, set once the band list is read.
         if not ref:
             return
-        if probed.current not in (None, ref):
+        prev = probed.current
+        if prev is not None and prev != (ref, band) and prev != (ref, None):
             set_classes(start)
             _clear_probes()
-        probed.current = ref
+        probed.current = (ref, band)
 
-    solara.use_effect(_on_new_raster, [ref])
+    solara.use_effect(_on_new_raster, [ref, band])
 
-    def _probe(gee_probe, file_probe, kind: str, source: str):
+    def _probe(gee_probe, file_probe, kind: str, source: str, picked=None):
         # Blocking: use_task runs a plain function on a worker thread.
+        extra = {} if picked is None else {"band": picked}
         if kind == "GEEVar":
-            out = gee_probe(gee_interface, source, aoi_ee())
+            out = gee_probe(gee_interface, source, aoi_ee(), **extra)
         else:
-            out = file_probe(source)
-        return {**out, "ref": source}
+            out = file_probe(source, **extra)
+        return {**out, "ref": (source, picked)}
 
     stretch_task = solara.lab.use_task(
-        lambda kind, source: _probe(
-            probes.gee_stretch, probes.file_stretch, kind, source
+        lambda kind, source, picked: _probe(
+            probes.gee_stretch, probes.file_stretch, kind, source, picked
         ),
         dependencies=None,
     )
     classes_task = solara.lab.use_task(
-        lambda kind, source: _probe(
+        lambda kind, source, picked: _probe(
             probes.gee_classes,
             probes.vector_classes if kind == "LocalVectorVar" else probes.file_classes,
             kind,
             source,
+            picked,
         ),
         dependencies=None,
     )
@@ -323,7 +356,7 @@ def VariableModal(
             set_probe_error(t("vars.modal.probe_failed", error=str(task.exception)))
             return None
         out = task.value if task.finished else None
-        if not out or out["ref"] != ref or not open_.value:
+        if not out or out["ref"] != (ref, picked_band) or not open_.value:
             return None  # another raster was picked, or the dialog closed
         if "error" in out:
             set_probe_error(t(out["error"]))
@@ -364,7 +397,7 @@ def VariableModal(
         if busy:  # a double click: one probe at a time
             return
         set_probe_error(None)
-        task(var_type, ref)
+        task(var_type, ref, picked_band)
 
     def _pick_kind(kind=None, method=None):
         # Another kind of layer starts from its own classes.
@@ -463,6 +496,7 @@ def VariableModal(
                 if file_path.strip()
                 else Path(f"/tmp/{name.strip()}.tif")
             )
+            entry["band"] = picked_band
             entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
             entry["vis_params"] = custom_vis(raster_type, classes, ramp, invert, span)
@@ -473,6 +507,7 @@ def VariableModal(
                 else f"projects/dummy/assets/{name.strip()}"
             )
             entry["default_scale"] = float(scale) if scale.strip() else None
+            entry["band"] = picked_band
             # to_local_raster refuses to convert without a raster type.
             entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
@@ -674,6 +709,9 @@ def VariableModal(
                         storage_key=storage_key,
                         key_exists=key_exists,
                         vis_fields=_vis_fields,
+                        band_field=lambda: _render_band_field(
+                            bands_task, band_ref, band_items, picked_band, set_band
+                        ),
                     )
 
                 if error:
@@ -687,6 +725,10 @@ def VariableModal(
                     submit_label,
                     on_click=on_submit,
                     color="primary",
+                    # a band list still being read, or unreadable: nothing to save
+                    disabled=source == "custom"
+                    and var_type in ("LocalRasterVar", "GEEVar")
+                    and bands_block_save(bands_task, band_ref),
                     small=True,
                     icon_name="mdi-plus",
                     classes=[ENTER_DEFAULT],  # Enter presses it
@@ -833,6 +875,7 @@ def _render_custom_fields(
     storage_key,
     key_exists,
     vis_fields=None,
+    band_field=lambda: None,
 ):
     """Fields shown when source == 'custom'.
 
@@ -880,8 +923,11 @@ def _render_custom_fields(
             ),
             clearable=True,
         )
+    if var_type == "LocalRasterVar":
+        band_field()
     if var_type == "GEEVar":
         _GeeAssetField(asset_id=asset_id, on_asset_id=set_asset_id)
+        band_field()
         rv.TextField(
             label=t("vars.modal.custom_scale_label"),
             v_model=scale,
@@ -918,6 +964,27 @@ def _render_custom_fields(
         )
         if vis_fields is not None:
             vis_fields()
+
+
+def _render_band_field(task, ref, items, picked, set_band):
+    """Band select of a multi-band raster; nothing for a single band."""
+    # One wrapper whatever shows inside: a status line or select appearing on
+    # its own shifts the fields below, and their buttons lose their handlers.
+    with rv.Html(tag="div"):
+        band_status(task, ref)
+        if len(items) > 1:
+            rv.Select(
+                label=t("vars.modal.band_label"),
+                items=[{"text": text, "value": value} for text, value in items],
+                # never a value that is not an item: a new list renders once
+                # before its default lands
+                v_model=picked,
+                on_v_model=set_band,
+                dense=True,
+                outlined=True,
+                hint=t("vars.modal.band_hint", count=len(items)),
+                persistent_hint=True,
+            )
 
 
 @solara.component
