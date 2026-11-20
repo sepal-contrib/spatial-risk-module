@@ -2,6 +2,8 @@
 
 import functools
 import json
+import threading
+import time
 
 import ipyvuetify as vw
 
@@ -26,6 +28,16 @@ def _icon_button(rc, icon):
         for b in rc.find(vw.Btn).widgets
         if any(isinstance(c, vw.Icon) and c.children == [icon] for c in b.children)
     )
+
+
+def _wait(check, timeout=10.0):
+    """Poll until ``check()`` holds: the rename runs in a background task."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(0.02)
+    return check()
 
 
 def _panel(tmp_path, monkeypatch):
@@ -77,10 +89,55 @@ def test_rename_from_the_manage_list(tmp_path, monkeypatch):
 
         field.v_model = "beta"
         _button(rc, t("project.button_rename")).fire_event("click", None)
+
+        def titles():
+            return [w.children[0] for w in rc.find(vw.ListItemTitle).widgets]
+
+        # the folder moved, and the open Manage list followed
+        assert _wait(lambda: titles() == ["beta", "other"])
         assert list_projects(tmp_path) == ["beta", "other"]
-        titles = [w.children[0] for w in rc.find(vw.ListItemTitle).widgets]
-        assert titles == ["beta", "other"]  # the open Manage list followed
     finally:
+        rc.close()
+
+
+def test_a_rename_in_flight_cannot_be_cancelled_or_started_twice(tmp_path, monkeypatch):
+    """The rename runs in a background task: it takes seconds on SEPAL.
+
+    While the move runs Cancel is disabled, and a second press does not start
+    a second rename.
+    """
+    box, rc = _panel(tmp_path, monkeypatch)
+    release, calls = threading.Event(), []
+
+    def slow_rename(old, new):
+        calls.append((old, new))
+        release.wait(10)
+        rename_project(old, new, data_dir=tmp_path)
+
+    monkeypatch.setattr(app, "rename_project", slow_rename)
+
+    def rename():
+        return _button(rc, t("project.button_rename"))
+
+    try:
+        _button(rc, t("project.manage_count", count=2)).fire_event("click", None)
+        _icon_button(rc, "mdi-pencil-outline").fire_event("click", None)
+        field = next(
+            f
+            for f in rc.find(vw.TextField).widgets
+            if f.label == t("project.dialog_new_name_label")
+        )
+        field.v_model = "beta"
+        rename().fire_event("click", None)
+
+        assert _wait(lambda: _button(rc, t("common.cancel")).disabled)
+        rename().fire_event("click", None)  # Enter, or a click that got through
+        release.set()
+
+        assert _wait(lambda: list_projects(tmp_path) == ["beta", "other"])
+        assert calls == [("alpha", "beta")]
+    finally:
+        release.set()
         rc.close()
 
 

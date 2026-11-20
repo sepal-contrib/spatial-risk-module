@@ -316,20 +316,16 @@ def ProjectPanel(on_close=None):
         set_rename_target(name)
         set_new_open(True)
 
-    def do_rename():
-        old = rename_target
-        validation = validate_project_name(new_name, [])
-        if old is None or not validation.valid or validation.cleaned == old:
-            return  # Rename button is disabled in this state; no-op guard
-        new = validation.cleaned
-        if delete_task.pending:
-            return  # a delete is in flight; nothing else may be staged
-        # A task still saving into the folder would re-create it under the old name.
-        if is_writing(old):
-            set_rename_error(t("project.rename_busy"))
-            return
+    @solara.lab.use_task(dependencies=None, raise_error=False, prefer_threaded=True)
+    async def rename_task(old, new):
+        """Rename the project off the render thread, like ``delete_task``.
+
+        Moving the folder and reading the open project again take seconds on a
+        network-backed SEPAL home; done in the click handler they would freeze
+        the UI for that long. ``old`` and ``new`` come from the click.
+        """
         try:
-            rename_project(old, new)
+            await asyncio.to_thread(rename_project, old, new)
         except FileExistsError:
             set_rename_error(t("project.name_exists", name=new))
             return
@@ -353,6 +349,23 @@ def ProjectPanel(on_close=None):
                 notifications.error(str(exc))
                 return
         notifications.success(t("project.status_renamed", old=old, name=new))
+
+    def do_rename():
+        old = rename_target
+        validation = validate_project_name(new_name, [])
+        if old is None or not validation.valid or validation.cleaned == old:
+            return  # Rename button is disabled in this state; no-op guard
+        new = validation.cleaned
+        if delete_task.pending:
+            return  # a delete is in flight; nothing else may be staged
+        # A task still saving into the folder would re-create it under the old name.
+        if is_writing(old):
+            set_rename_error(t("project.rename_busy"))
+            return
+        if rename_task.pending:
+            return  # a second click or Enter while the first rename runs
+        set_rename_error(None)
+        rename_task(old, new)
 
     # ---- Delete ----------------------------------------------------------
     def open_delete(info):
@@ -660,7 +673,12 @@ def ProjectPanel(on_close=None):
         else None
     )
     with rv.Dialog(
-        v_model=new_open, on_v_model=set_new_open, max_width="400px", eager=True
+        v_model=new_open,
+        on_v_model=set_new_open,
+        max_width="400px",
+        eager=True,
+        # Closing cannot stop a rename: it would only hide one still running.
+        persistent=rename_task.pending,
     ):
         with rv.Card():
             with rv.CardTitle():
@@ -695,6 +713,7 @@ def ProjectPanel(on_close=None):
                     on_click=lambda: set_new_open(False),
                     text=True,
                     small=True,
+                    disabled=rename_task.pending,
                 )
                 solara.Button(
                     t("project.button_rename") if renaming else t("common.create"),
