@@ -6,6 +6,7 @@ Run locally:
 
 import asyncio
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 
 import reacton.ipyvuetify as rv
@@ -39,12 +40,14 @@ from gui.scripts.project_io import (
     list_project_infos,
     load_project,
     project_dir_size,
+    rename_project,
     save_project,
 )
 from gui.scripts.project_ui_helpers import (
     aoi_project_name,
     compute_app_title,
     format_last_saved,
+    format_relative,
     manage_projects_label,
     overwrite_needed,
     validate_project_name,
@@ -135,6 +138,28 @@ def _loopback_bridge_widget():
         return None
 
 
+_CARD = "position: relative; overflow: hidden; border-radius: 6px; padding: 12px;"
+_CARD_LAYER = (
+    "position: absolute; top: 0; right: 0; bottom: 0; left: 0; pointer-events: none;"
+)
+_CARD_ROW = "position: relative; display: flex; align-items: center; gap: 8px;"
+
+
+@contextmanager
+def _tinted_card():
+    """The open (or most recent) project's card: a faint primary fill, thin outline."""
+    with rv.Html(tag="div", style_=_CARD):
+        rv.Html(tag="span", class_="primary", style_=_CARD_LAYER + "opacity: 0.12;")
+        rv.Html(
+            tag="span",
+            class_="primary--text",
+            style_=_CARD_LAYER
+            + "border: thin solid currentColor; border-radius: inherit;",
+        )
+        with rv.Html(tag="div", style_="position: relative; display: grid; gap: 6px;"):
+            yield
+
+
 @solara.component
 def ProjectPanel(on_close=None):
     """Current-project status + New / Load / Save controls (left drawer).
@@ -167,6 +192,12 @@ def ProjectPanel(on_close=None):
     load_busy, set_load_busy = solara.use_state(False)
 
     new_name, set_new_name = solara.use_state("")
+    # The New dialog doubles as the rename form: the project being renamed, or None.
+    rename_target, set_rename_target = solara.use_state(None)
+    rename_error, set_rename_error = solara.use_state(None)
+    sizes = solara.use_reactive(
+        {}
+    )  # {name: bytes on disk}, filled while Manage is open
 
     def refresh_infos():
         """Rescan the saved projects.
@@ -191,12 +222,50 @@ def ProjectPanel(on_close=None):
     def existing_names() -> list:
         return [i.name for i in list_project_infos(DATA_DIR)]
 
+    names = tuple(i.name for i in infos.value)
+
+    def measure_sizes():
+        """Count each listed folder in a worker thread; rows show "…" until then."""
+        if not load_open:
+            return
+        for name in names:
+            total = project_dir_size(name)
+            if tuple(i.name for i in infos.value) != names:
+                return  # the list changed: a newer run counts it
+            sizes.set({**sizes.value, name: total})
+
+    solara.lab.use_task(
+        measure_sizes, dependencies=[load_open, names], raise_error=False
+    )
+
     # ---- Manage / Load ---------------------------------------------------
     def open_manage():
         set_load_error(None)
         selected.set(None)
+        sizes.set({})  # counted again, not last time's value
         refresh_infos()
         set_load_open(True)
+
+    def _install(name):
+        """Read a saved project from disk and make it the open one. Raises."""
+        loaded = load_project(name)
+        when = next((i.modified for i in infos.value if i.name == name), None)
+        # Restore the saved AOI (sidecar geometry + metadata) so the map can
+        # frame it and the downstream tabs unlock. Set before installing the
+        # project so the load-zoom effect sees it on the same render, and
+        # so AoiTile reads the incoming spec off it on the switch.
+        # restoring_project(): Solara can render BETWEEN these sets, and
+        # the attach-on-select effect must not persist the incoming AOI
+        # into the outgoing project (see AppState.attach_current_aoi).
+        with app_state.restoring_project():
+            restored = load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
+            app_state.aoi_result.set(restored)
+            app_state.load_project_state(loaded, when)
+            # Only after the signal bump: its render resets the picker when
+            # needed (AoiTile) and syncs the draw control's visibility; this
+            # write then refills the picker, which seeds the draw control
+            # synchronously.
+            app_state.aoi_spec.set(restored.spec if restored is not None else None)
 
     def do_load():
         if delete_task.pending:
@@ -207,24 +276,7 @@ def ProjectPanel(on_close=None):
         set_load_busy(True)
         set_load_error(None)
         try:
-            loaded = load_project(name)
-            when = next((i.modified for i in infos.value if i.name == name), None)
-            # Restore the saved AOI (sidecar geometry + metadata) so the map can
-            # frame it and the downstream tabs unlock. Set before installing the
-            # project so the load-zoom effect sees it on the same render, and
-            # so AoiTile reads the incoming spec off it on the switch.
-            # restoring_project(): Solara can render BETWEEN these sets, and
-            # the attach-on-select effect must not persist the incoming AOI
-            # into the outgoing project (see AppState.attach_current_aoi).
-            with app_state.restoring_project():
-                restored = load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
-                app_state.aoi_result.set(restored)
-                app_state.load_project_state(loaded, when)
-                # Only after the signal bump: its render resets the picker when
-                # needed (AoiTile) and syncs the draw control's visibility; this
-                # write then refills the picker, which seeds the draw control
-                # synchronously.
-                app_state.aoi_spec.set(restored.spec if restored is not None else None)
+            _install(name)
             notifications.success(t("project.status_loaded", name=name))
             set_load_open(False)
             if on_close is not None:
@@ -233,6 +285,69 @@ def ProjectPanel(on_close=None):
             set_load_error(str(exc))
         finally:
             set_load_busy(False)
+
+    def do_continue(name):
+        """The Continue card: open the most recently saved project."""
+        try:
+            _install(name)
+        except Exception as exc:
+            notifications.error(str(exc))
+            return
+        notifications.success(t("project.status_loaded", name=name))
+        if on_close is not None:
+            on_close()
+
+    # ---- Rename ----------------------------------------------------------
+    def open_rename(name):
+        if delete_task.pending:
+            return  # a delete is in flight; nothing else may be staged
+        # The open project is read again from disk after the move (its paths
+        # change), so anything not saved yet would be lost.
+        if p is not None and p.project_name == name and (dirty or last_saved is None):
+            notifications.warning(t("project.rename_save_first"))
+            return
+        set_rename_error(None)
+        set_new_name(name)
+        set_rename_target(name)
+        set_new_open(True)
+
+    def do_rename():
+        old = rename_target
+        validation = validate_project_name(new_name, [])
+        if old is None or not validation.valid or validation.cleaned == old:
+            return  # Rename button is disabled in this state; no-op guard
+        new = validation.cleaned
+        if delete_task.pending:
+            return  # a delete is in flight; nothing else may be staged
+        # A task still saving into the folder would re-create it under the old name.
+        if is_writing(old):
+            set_rename_error(t("project.rename_busy"))
+            return
+        try:
+            rename_project(old, new)
+        except FileExistsError:
+            set_rename_error(t("project.rename_exists", name=new))
+            return
+        except Exception as exc:
+            set_rename_error(str(exc))
+            return
+        set_new_open(False)
+        set_rename_target(None)
+        if selected.value == old:
+            selected.set(new)
+        refresh_infos()
+        live = app_state.project.value
+        if live is not None and live.project_name == old:
+            # Every path it holds names the old folder: read it again from disk.
+            try:
+                _install(new)
+            except Exception as exc:
+                # Never keep the old name open: its next save would re-create
+                # the folder.
+                app_state.close_project_state()
+                notifications.error(str(exc))
+                return
+        notifications.success(t("project.status_renamed", old=old, name=new))
 
     # ---- Delete ----------------------------------------------------------
     def open_delete(info):
@@ -324,6 +439,7 @@ def ProjectPanel(on_close=None):
 
     def _open_new_dialog():
         set_discard_open(False)
+        set_rename_target(None)
         set_new_name("")
         set_new_open(True)
 
@@ -391,21 +507,58 @@ def ProjectPanel(on_close=None):
     # ---- Status block ---------------------------------------------------
     with solara.Column(style="gap: 8px; padding: 8px;"):
         if p is None:
-            # Empty state: one primary action (New), Load secondary, no Save —
-            # a disabled Save here can never become useful, so it's omitted.
-            rv.Icon(
-                children=["mdi-map-marker-plus-outline"],
-                style_="font-size: 40px; opacity: 0.5;",
+            # Empty state: one primary action, Load secondary, no Save — a
+            # disabled Save here can never become useful, so it's omitted.
+            # With saved projects the primary action is Continue (the most
+            # recently saved one); New is primary only when there is none.
+            recent = max(
+                (i for i in infos.value if i.readable),
+                key=lambda i: i.modified,
+                default=None,
             )
-            solara.Text(t("project.empty_heading"), style="font-weight: 600;")
-            solara.Text(
-                t("project.empty_help"),
-                style=MUTED,
-            )
+            if recent is not None:
+                with _tinted_card():
+                    rv.Html(
+                        tag="div",
+                        class_="primary--text",
+                        style_="font-size: 12.5px; font-weight: 500;",
+                        children=[t("project.continue_title")],
+                    )
+                    with rv.Html(tag="div", style_=_CARD_ROW):
+                        solara.Text(
+                            recent.name,
+                            style="font-weight: 700; font-size: 1.1rem; flex: 1; "
+                            "min-width: 0; overflow-wrap: anywhere;",
+                        )
+                        solara.Button(
+                            t("project.button_continue"),
+                            icon_name="mdi-folder-open-outline",
+                            color="primary",
+                            small=True,
+                            on_click=lambda: do_continue(recent.name),
+                        )
+                    solara.Text(
+                        t(
+                            "project.dialog_load_modified",
+                            time_ago=format_relative(recent.modified, datetime.now()),
+                        ),
+                        style="font-size: 12px; opacity: 0.7;",
+                    )
+            else:
+                rv.Icon(
+                    children=["mdi-map-marker-plus-outline"],
+                    style_="font-size: 40px; opacity: 0.5;",
+                )
+                solara.Text(t("project.empty_heading"), style="font-weight: 600;")
+                solara.Text(
+                    t("project.empty_help"),
+                    style=MUTED,
+                )
             solara.Button(
                 t("project.button_new_project"),
                 icon_name="mdi-plus",
                 color="primary",
+                outlined=recent is not None,
                 small=True,
                 block=True,
                 on_click=open_new,
@@ -423,29 +576,44 @@ def ProjectPanel(on_close=None):
                 on_click=open_manage,
             )
         else:
-            with solara.Row(style="gap: 8px; align-items: center;"):
-                solara.Text(p.project_name, style="font-weight: 600;")
-                rv.Chip(
-                    children=[
-                        t("project.chip_unsaved") if dirty else t("project.chip_saved")
-                    ],
-                    color="warning" if dirty else "primary",
-                    text_color="white",
-                    x_small=True,
+            with _tinted_card():
+                with rv.Html(tag="div", style_=_CARD_ROW):
+                    solara.Text(
+                        p.project_name,
+                        style="font-weight: 700; font-size: 1.1rem; min-width: 0; "
+                        "overflow-wrap: anywhere;",
+                    )
+                    rv.Chip(
+                        children=[
+                            t("project.chip_unsaved")
+                            if dirty
+                            else t("project.chip_saved")
+                        ],
+                        color="warning" if dirty else "primary",
+                        text_color="white",
+                        x_small=True,
+                    )
+                    rv.Spacer()
+                    solara.Button(
+                        icon_name="mdi-pencil-outline",
+                        icon=True,
+                        small=True,
+                        on_click=lambda: open_rename(p.project_name),
+                        attributes={"title": t("project.button_rename")},
+                    )
+                solara.Text(
+                    t(
+                        "project.stats",
+                        raw=len(p.raw_variables),
+                        processed=len(p.processed_variables),
+                        models=len(p.models),
+                    ),
+                    style="font-size: 12px; opacity: 0.7;",
                 )
-            solara.Text(
-                t(
-                    "project.stats",
-                    raw=len(p.raw_variables),
-                    processed=len(p.processed_variables),
-                    models=len(p.models),
-                ),
-                style=MUTED + "font-size: 12px;",
-            )
-            solara.Text(
-                format_last_saved(last_saved, datetime.now()),
-                style=MUTED + "font-size: 12px;",
-            )
+                solara.Text(
+                    format_last_saved(last_saved, datetime.now()),
+                    style="font-size: 12px; opacity: 0.7;",
+                )
             with solara.Row(style="gap: 8px;"):
                 solara.Button(
                     t("project.button_new"),
@@ -477,12 +645,24 @@ def ProjectPanel(on_close=None):
 
     # ---- New dialog -----------------------------------------------------
     validation = validate_project_name(new_name, existing_names()) if new_open else None
+    renaming = rename_target is not None
+    # Another project already has this name (its own name is not a clash).
+    taken = bool(
+        renaming
+        and validation
+        and validation.exists
+        and validation.cleaned != rename_target
+    )
     with rv.Dialog(
         v_model=new_open, on_v_model=set_new_open, max_width="400px", eager=True
     ):
         with rv.Card():
             with rv.CardTitle():
-                solara.Text(t("project.dialog_new_title"))
+                solara.Text(
+                    t("project.dialog_rename_title", name=rename_target)
+                    if renaming
+                    else t("project.dialog_new_title")
+                )
             with rv.CardText():
                 rv.TextField(
                     label=t("project.dialog_new_name_label"),
@@ -494,7 +674,16 @@ def ProjectPanel(on_close=None):
                 )
                 if validation and new_name and not validation.valid:
                     solara.Error(validation.error)
-                if validation and validation.valid and validation.exists:
+                if taken:
+                    solara.Error(t("project.rename_exists", name=validation.cleaned))
+                if renaming and rename_error:
+                    solara.Error(rename_error)
+                if (
+                    not renaming
+                    and validation
+                    and validation.valid
+                    and validation.exists
+                ):
                     solara.Warning(
                         t("project.dialog_new_exists_warning", name=validation.cleaned)
                     )
@@ -512,11 +701,13 @@ def ProjectPanel(on_close=None):
                     small=True,
                 )
                 solara.Button(
-                    t("common.create"),
-                    on_click=do_create,
+                    t("project.button_rename") if renaming else t("common.create"),
+                    on_click=do_rename if renaming else do_create,
                     color="primary",
                     small=True,
-                    disabled=not (validation and validation.valid),
+                    disabled=not (validation and validation.valid)
+                    or taken
+                    or (renaming and validation.cleaned == rename_target),
                     classes=[ENTER_DEFAULT],  # Enter presses it
                 )
 
@@ -589,6 +780,9 @@ def ProjectPanel(on_close=None):
         on_select=selected.set,
         on_load=do_load,
         on_delete=open_delete,
+        on_rename=open_rename,
+        sizes=sizes.value,
+        covered=new_open or target is not None,
         on_cancel=lambda: set_load_open(False),
         # `or delete_task.pending` so the Load button also *looks* disabled while a
         # delete is in flight; the handler-side guard in do_load is what actually

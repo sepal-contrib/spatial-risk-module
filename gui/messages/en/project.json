@@ -45,7 +45,16 @@
     "status_deleted": "Project '{name}' deleted.",
     "chip_models_trained": " ({trained} trained)",
     "validation_empty_name": "Name cannot be empty",
-    "validation_invalid_chars": "Use only letters, numbers, spaces, hyphens and underscores"
+    "validation_invalid_chars": "Use only letters, numbers, spaces, hyphens and underscores",
+    "button_rename": "Rename",
+    "button_continue": "Continue",
+    "continue_title": "Continue where you left off",
+    "dialog_rename_title": "Rename '{name}'",
+    "rename_exists": "A project named '{name}' already exists.",
+    "rename_busy": "A background task is still writing to this project. Wait for it to finish before renaming.",
+    "rename_save_first": "Save the project before renaming it.",
+    "status_renamed": "Project '{old}' renamed to '{name}'.",
+    "size_on_disk": "Size on disk"
   },
   "time": {
     "just_now": "just now",

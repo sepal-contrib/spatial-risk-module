@@ -45,7 +45,16 @@
     "status_deleted": "Projet '{name}' supprimé.",
     "chip_models_trained": " ({trained} entraînés)",
     "validation_empty_name": "Le nom ne peut pas être vide",
-    "validation_invalid_chars": "Utilisez uniquement des lettres, chiffres, espaces, tirets et tirets bas"
+    "validation_invalid_chars": "Utilisez uniquement des lettres, chiffres, espaces, tirets et tirets bas",
+    "button_rename": "Renommer",
+    "button_continue": "Reprendre",
+    "continue_title": "Reprendre là où vous vous étiez arrêté",
+    "dialog_rename_title": "Renommer '{name}'",
+    "rename_exists": "Un projet nommé '{name}' existe déjà.",
+    "rename_busy": "Une tâche en arrière-plan écrit encore dans ce projet. Attendez qu'elle se termine avant de renommer.",
+    "rename_save_first": "Enregistrez le projet avant de le renommer.",
+    "status_renamed": "Projet '{old}' renommé en '{name}'.",
+    "size_on_disk": "Taille sur le disque"
   },
   "time": {
     "just_now": "à l'instant",

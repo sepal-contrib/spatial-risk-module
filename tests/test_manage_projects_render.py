@@ -274,3 +274,43 @@ def test_an_idle_confirm_dialog_stays_dismissable():
     assert not rc.find(vw.Dialog).widget.persistent
     assert not _button(rc, t("common.cancel")).disabled
     rc.close()
+
+
+# --- rename pencil + folder sizes ----------------------------------------------
+
+
+def _icon_buttons(rc, icon):
+    return [
+        btn
+        for btn in rc.find(vw.Btn).widgets
+        if any(isinstance(c, vw.Icon) and c.children == [icon] for c in btn.children)
+    ]
+
+
+def test_each_row_pencil_renames_its_own_project():
+    """Each pencil hands up its own row's name, not the last row's."""
+    renamed = []
+    box, rc = _render_manage(on_rename=renamed.append)
+    for btn in _icon_buttons(rc, "mdi-pencil-outline"):
+        btn.fire_event("click", None)
+    assert renamed == ["GUY", "broken"]  # not the last row twice
+    rc.close()
+
+
+def test_no_pencil_without_a_rename_callback():
+    """Rename is opt-in: no callback, no pencil."""
+    box, rc = _render_manage()
+    assert _icon_buttons(rc, "mdi-pencil-outline") == []
+    rc.close()
+
+
+def test_rows_show_their_size_or_a_placeholder_while_counting():
+    """A counted folder shows its size; one still being counted shows an ellipsis."""
+    box, rc = _render_manage(sizes={"GUY": 3 * 1024**3})
+    texts = [
+        w.children[0]
+        for w in rc.find(vw.Html).widgets
+        if (w.attributes or {}).get("title") == t("project.size_on_disk")
+    ]
+    assert texts == ["3.0 GB", "…"]
+    rc.close()
