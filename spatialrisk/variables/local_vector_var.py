@@ -211,6 +211,7 @@ class LocalVectorVar(Variable):
                 "rasterized"
             ],  # Track that this came from vector rasterization
             tags=self.tags.copy() if self.tags else [],
+            vis_params=self.vis_params,  # the classes picked for the layer
             # xr_rasterize burns onto this exact geobox, so the base's grid is
             # the output's grid — stamp it here rather than reopening the file.
             grid_signature=geobox_signature(geobox),

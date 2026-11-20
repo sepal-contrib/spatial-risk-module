@@ -34,12 +34,9 @@ def _rgb(cmap, x):
 # ---- presets -----------------------------------------------------------------
 
 
-def test_categorical_vis_round_trips_the_presence_colour():
-    """Stored as white -> colour pinned to 0..1 (bare hex); editing reads it back."""
-    vis = vp.categorical_vis("#2E7D32")
-    assert vis == {"palette": ["ffffff", "2e7d32"], "min": 0, "max": 1}
-    assert vp.presence_color(vis) == "#2e7d32"
-    assert vp.presence_color(None) is None
+def _mask(color):
+    """The ``vis_params`` of a 0/1 mask saved before class lists existed."""
+    return {"palette": ["ffffff", color], "min": 0, "max": 1}
 
 
 def test_continuous_vis_round_trips_the_ramp_and_inversion():
@@ -48,6 +45,8 @@ def test_continuous_vis_round_trips_the_ramp_and_inversion():
     Editing reads both back; an unknown palette reads as no ramp.
     """
     assert vp.continuous_vis("blues") == {"palette": vp.RAMPS["blues"]}
+    pinned = vp.continuous_vis("blues", span=(2.5, 40))
+    assert (pinned["min"], pinned["max"]) == (2.5, 40)
     inverted = vp.continuous_vis("blues", invert=True)
     assert inverted == {"palette": list(reversed(vp.RAMPS["blues"]))}
     assert vp.ramp_choice(vp.continuous_vis("blues")) == ("blues", False)
@@ -56,18 +55,12 @@ def test_continuous_vis_round_trips_the_ramp_and_inversion():
     assert vp.ramp_choice(None) == (None, False)
 
 
-def test_valid_hex_accepts_six_digit_forms_only():
-    """Only six-digit hex (with or without #) counts as a colour."""
-    assert vp.is_hex("#2e7d32") and vp.is_hex("2E7D32")
-    assert not vp.is_hex("#2e7d3") and not vp.is_hex("green") and not vp.is_hex("")
-
-
 # ---- local raster styler -------------------------------------------------------
 
 
 def test_local_style_uses_the_variable_palette_before_the_fallback():
     """A downloaded custom mask renders the user's colour, not black/white."""
-    vis = vp.categorical_vis("#7b1fa2")
+    vis = _mask("7b1fa2")
     style = resolve_variable_style(_var(vis_params=vis))
 
     assert style["render_kind"] == "custom_palette"
@@ -112,7 +105,7 @@ def test_gee_style_uses_the_variable_palette_without_touching_gee():
             raise AssertionError("no stretch needed for a pinned palette")
 
     image = object()
-    vis = vp.categorical_vis("#2196f3")
+    vis = _mask("2196f3")
     out_image, out_vis, kind = _styled_layer(image, _var(vis_params=vis), _Iface())
     assert out_image is image
     assert out_vis == vis
@@ -128,7 +121,7 @@ def test_legend_follows_the_raster_type_on_both_sides():
     White absent, colour present, whether the legend is built from the GEE
     vis or the local style.
     """
-    vis = vp.categorical_vis("#2196f3")
+    vis = _mask("2196f3")
     mask = _var(vis_params=vis)
     from_vis = variable_spec_from_vis(vis, "custom_palette", mask, Label(literal="x"))
     from_style = variable_spec_from_style(

@@ -28,7 +28,12 @@ Kept free of Solara/ipyvuetify/localtileserver so the mapping stays unit-testabl
 from typing import Optional
 
 import matplotlib
-from matplotlib.colors import Colormap, LinearSegmentedColormap, to_rgb
+from matplotlib.colors import (
+    Colormap,
+    LinearSegmentedColormap,
+    ListedColormap,
+    to_rgb,
+)
 
 
 def _colormap_from_palette(hexes, name: str = "variable") -> Colormap:
@@ -53,7 +58,8 @@ def resolve_variable_style(var) -> dict:
     "render_kind": str}``. ``vmin``/``vmax`` are ``None`` when the value range
     should auto-stretch to the file's actual min/max (localtileserver does this
     when they are not pinned). ``render_kind`` names which branch was taken, one
-    of ``"postprocess_distance"``, ``"postprocess_change"``, ``"custom_palette"``,
+    of ``"postprocess_distance"``, ``"postprocess_change"``, ``"custom_classes"``,
+    ``"custom_palette"``,
     ``"catalogue_palette"``, ``"random_visualizer"``, ``"categorical_fallback"``,
     ``"continuous_fallback"`` —
     the legend builder uses it instead of re-deriving this dispatch logic.
@@ -62,7 +68,8 @@ def resolve_variable_style(var) -> dict:
 
     * post-process output (edge/dist/loss/gain, per ``postprocess_styles``) -> its
       QGIS-derived ramp, pinned;
-    * the variable's own ``vis_params`` (picked in the Variables modal) -> that
+    * the variable's own ``vis_params`` (picked in the Variables modal) -> its
+      class list (one colour per visible class, the rest transparent), or its
       palette, pinned to its ``min``/``max`` when given (else auto-stretched);
     * predefined catalogue entry with ``vis_params.palette`` -> that palette,
       pinned to its ``min``/``max`` when given (else auto-stretched);
@@ -76,6 +83,7 @@ def resolve_variable_style(var) -> dict:
         PREDEFINED_CATALOGUE,
         resolve_predefined,
     )
+    from gui.scripts.variable_classes import class_colormap, visible_classes
 
     # Post-process outputs (edge/dist/loss/gain) first: they are renamed because they
     # measure a *new* quantity, so a parent's catalogue palette would be meaningless
@@ -94,6 +102,18 @@ def resolve_variable_style(var) -> dict:
     # catalogue entry to take one from) wins over everything below. Same shape
     # the GEE side applies verbatim; a missing min/max means auto-stretch.
     own = getattr(var, "vis_params", None) or {}
+    shown = visible_classes(own.get("classes"))
+    if shown:
+        # A class list: variable_map draws it through a VRT that maps the
+        # visible classes to 1..m and every other value to 0, the nodata.
+        return {
+            "colormap": class_colormap(shown),
+            "vmin": 1,
+            "vmax": max(len(shown), 2),  # a lone class would rescale over nothing
+            "nodata": 0,
+            "classes": shown,
+            "render_kind": "custom_classes",
+        }
     if own.get("palette"):
         return {
             "colormap": _colormap_from_palette(own["palette"], name),
@@ -126,6 +146,19 @@ def resolve_variable_style(var) -> dict:
             }
 
     rt = _raster_type_str(var)
+    history = getattr(var, "processing_history", None) or []
+    if rt == "categorical" and "rasterized" in history:
+        # A vector burnt one id per feature (up to 255), with no classes picked
+        # (more features than the class list holds). Pinned to 0..255 so id i
+        # takes colour i of 20, cycling: neighbours in the file never share one.
+        tab20 = matplotlib.colormaps["tab20"].colors
+        return {
+            "colormap": ListedColormap([tab20[i % 20] for i in range(256)], "ids"),
+            "vmin": 0,
+            "vmax": 255,
+            "nodata": 0,
+            "render_kind": "random_visualizer",
+        }
     if rt == "categorical":
         return {
             "colormap": _colormap_from_palette(["000000", "ffffff"], name),
