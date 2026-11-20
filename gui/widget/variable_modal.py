@@ -1,6 +1,7 @@
 """Add / Edit Variable modal for the Variables step."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 import reacton.ipyvuetify as rv
@@ -11,7 +12,10 @@ from pysepal.solara.components.inputs import (
 )
 
 from gui.i18n import t
+from gui.scripts import variable_classes as vc
 from gui.scripts import variable_palettes as palettes
+from gui.scripts import variable_probes as probes
+from gui.scripts.legend_data import Label, format_number, variable_spec_from_vis
 from gui.scripts.predefined_variables import (
     PREDEFINED_CATALOGUE,
     build_predefined_name,
@@ -23,6 +27,12 @@ from gui.widget.artifact_name_field import ArtifactNameField
 from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
 from gui.widget.enter_key import ENTER_DEFAULT
 from gui.widget.text_style import MUTED
+from gui.widget.vis_style_fields import (
+    ClassList,
+    LegendPreview,
+    PaletteMenu,
+    RampSelect,
+)
 from spatialrisk.variables.models import (
     DataType,
     RasterizationMethod,
@@ -46,6 +56,8 @@ _TYPE_LABEL_KEYS = {
 }
 
 _RASTER_EXTENSIONS = [".tif", ".tiff", ".vrt", ".nc"]
+# The visualization fields stack with one gap; their own details are hidden.
+_VIS_FIELDS = "display:flex;flex-direction:column;gap:10px;margin-bottom:12px;"
 _VECTOR_EXTENSIONS = [".geojson", ".gpkg", ".shp", ".json"]
 
 
@@ -67,15 +79,21 @@ def _type_items():
     return [{"text": t(_TYPE_LABEL_KEYS[v]), "value": v} for v in VAR_TYPES]
 
 
-def custom_vis(raster_type: str, presence_hex: str, ramp: str, invert: bool):
+def custom_vis(raster_type: str, classes, ramp: str, invert: bool, span=None):
     """The ``vis_params`` a custom raster layer submits for its raster type.
 
-    Categorical: white -> the presence colour, pinned to 0..1. Continuous: the
-    named ramp, reversed when inverted, stretched by the renderer.
+    Categorical: its class list (a colour per value; a hidden or unlisted
+    value is transparent). Continuous: the named ramp, reversed when inverted,
+    pinned to ``span`` or, without one, stretched by the renderer.
     """
     if raster_type == RasterType.categorical.value:
-        return palettes.categorical_vis(presence_hex)
-    return palettes.continuous_vis(ramp, invert)
+        return {"classes": [dict(c) for c in classes]}
+    return palettes.continuous_vis(ramp, invert, span)
+
+
+def _number_text(value) -> str:
+    value = float(value)
+    return str(int(value)) if value.is_integer() else str(value)
 
 
 def _type_display(var_type: str) -> str:
@@ -93,8 +111,15 @@ def VariableModal(
     initial_entry: Optional[dict] = None,
     sepal_client=None,
     existing_keys=frozenset(),
+    gee_interface=None,
+    aoi_ee: Optional[Callable] = None,
 ):
-    """Modal dialog for adding or editing a variable."""
+    """Modal dialog for adding or editing a variable.
+
+    ``gee_interface`` and ``aoi_ee`` (a callable returning the AOI as an ee
+    object) serve the value probes of a custom Earth Engine layer; without
+    them those two buttons are disabled.
+    """
     # --- state ---
     source, set_source = solara.use_state(SOURCES[0])
     predefined_key, set_predefined_key = solara.use_state("")
@@ -112,10 +137,31 @@ def VariableModal(
     rasterization_method, set_rasterization_method = solara.use_state(
         RasterizationMethod.binary.value
     )
-    # Palette pick for custom raster layers (see gui.scripts.variable_palettes).
-    presence_hex, set_presence_hex = solara.use_state(f"#{palettes.DEFAULT_PRESENCE}")
+    # Visualization of a custom raster layer. Continuous: a ramp, optionally
+    # pinned to Min/Max (both empty = stretched by the renderer). Categorical:
+    # a class list, which starts as the 0/1 mask most custom layers are.
     ramp, set_ramp = solara.use_state(palettes.DEFAULT_RAMP)
     invert, set_invert = solara.use_state(False)
+    vmin, set_vmin = solara.use_state("")
+    vmax, set_vmax = solara.use_state("")
+    seed = vc.default_classes(t("legend.class.absent"), t("legend.class.present"))
+    classes, set_classes = solara.use_state(seed)
+
+    def _start_classes(kind, method):
+        """The classes a new layer of this kind starts from."""
+        if kind != "LocalVectorVar":
+            return seed
+        if method == RasterizationMethod.unique.value:
+            return []  # one class per feature: found in the file, not seeded
+        # A vector mask is drawn over the basemap: its background starts hidden.
+        return [{**seed[0], "visible": False}, seed[1]]
+
+    # What a probe refused or failed with, shown under its button.
+    stretch_error, set_stretch_error = solara.use_state(None)
+    classes_error, set_classes_error = solara.use_state(None)
+    zero_one, set_zero_one = solara.use_state(False)
+    # The raster the classes belong to: another raster starts from the seed.
+    probed = solara.use_ref(None)
     error, set_error = solara.use_state(None)
 
     is_edit = editing_key is not None
@@ -158,10 +204,19 @@ def VariableModal(
         set_scale("")
         set_raster_type(RasterType.categorical.value)
         set_rasterization_method(RasterizationMethod.binary.value)
-        set_presence_hex(f"#{palettes.DEFAULT_PRESENCE}")
         set_ramp(palettes.DEFAULT_RAMP)
         set_invert(False)
+        set_vmin("")
+        set_vmax("")
+        set_classes(seed)
+        _clear_probes()
+        probed.current = None
         set_error(None)
+
+    def _clear_probes():
+        set_stretch_error(None)
+        set_classes_error(None)
+        set_zero_one(False)
 
     def prefill_from_initial():
         if not open_.value or initial_entry is None:
@@ -183,15 +238,141 @@ def VariableModal(
         set_rasterization_method(
             initial_entry.get("rasterization_method", RasterizationMethod.binary.value)
         )
-        vis = initial_entry.get("vis_params")
-        saved_hex = palettes.presence_color(vis)
+        vis = initial_entry.get("vis_params") or {}
         saved_ramp, saved_invert = palettes.ramp_choice(vis)
-        set_presence_hex(saved_hex or f"#{palettes.DEFAULT_PRESENCE}")
         set_ramp(saved_ramp or palettes.DEFAULT_RAMP)
         set_invert(saved_invert)
+        # A greyscale ramp pinned to 0..1 has a mask's shape: go by the type.
+        continuous = initial_entry.get("raster_type") == RasterType.continuous.value
+        saved = (
+            None
+            if continuous
+            else vc.from_vis(vis, t("legend.class.absent"), t("legend.class.present"))
+        )
+        set_classes(
+            saved
+            or _start_classes(
+                initial_entry.get("type"), initial_entry.get("rasterization_method")
+            )
+        )
+        # A saved mask's 0..1 pin belongs to its classes, not to a ramp.
+        pinned = continuous and "min" in vis and "max" in vis
+        set_vmin(_number_text(vis["min"]) if pinned else "")
+        set_vmax(_number_text(vis["max"]) if pinned else "")
+        _clear_probes()
+        probed.current = (
+            initial_entry.get("asset_id") or initial_entry.get("path") or None
+        )
         set_error(None)
 
     solara.use_effect(prefill_from_initial, [open_.value])
+
+    # ---- value probes (gui.scripts.variable_probes) ----
+    is_gee = var_type == "GEEVar"
+    is_raster = var_type in ("LocalRasterVar", "GEEVar")
+    is_vector = var_type == "LocalVectorVar"
+    unique = is_vector and rasterization_method == RasterizationMethod.unique.value
+    # A vector layer is rasterized to classes: 0/1, or one value per feature.
+    categorical = is_vector or raster_type == RasterType.categorical.value
+    start = _start_classes(var_type, rasterization_method)
+    ref = (asset_id if is_gee else file_path).strip()
+    can_probe = bool(ref) and (
+        not is_gee or (gee_interface is not None and aoi_ee is not None)
+    )
+
+    def _on_new_raster():
+        # Classes found on one raster are never kept on another. An emptied
+        # picker is not another raster: the asset field empties as it mounts.
+        if not ref:
+            return
+        if probed.current not in (None, ref):
+            set_classes(start)
+            _clear_probes()
+        probed.current = ref
+
+    solara.use_effect(_on_new_raster, [ref])
+
+    def _probe(gee_probe, file_probe, kind: str, source: str):
+        # Blocking: use_task runs a plain function on a worker thread.
+        if kind == "GEEVar":
+            out = gee_probe(gee_interface, source, aoi_ee())
+        else:
+            out = file_probe(source)
+        return {**out, "ref": source}
+
+    stretch_task = solara.lab.use_task(
+        lambda kind, source: _probe(
+            probes.gee_stretch, probes.file_stretch, kind, source
+        ),
+        dependencies=None,
+    )
+    classes_task = solara.lab.use_task(
+        lambda kind, source: _probe(
+            probes.gee_classes,
+            probes.vector_classes if kind == "LocalVectorVar" else probes.file_classes,
+            kind,
+            source,
+        ),
+        dependencies=None,
+    )
+    busy = stretch_task.pending or classes_task.pending
+
+    def _probe_result(task, set_probe_error):
+        """A finished probe's reply for the raster still picked, else None."""
+        if task.error:
+            set_probe_error(t("vars.modal.probe_failed", error=str(task.exception)))
+            return None
+        out = task.value if task.finished else None
+        if not out or out["ref"] != ref or not open_.value:
+            return None  # another raster was picked, or the dialog closed
+        if "error" in out:
+            set_probe_error(t(out["error"]))
+            return None
+        return out
+
+    def _on_stretched():
+        out = _probe_result(stretch_task, set_stretch_error)
+        if out:
+            set_vmin(_number_text(round(out["span"][0], 6)))
+            set_vmax(_number_text(round(out["span"][1], 6)))
+
+    solara.use_effect(
+        _on_stretched, [stretch_task.pending, stretch_task.finished, stretch_task.error]
+    )
+
+    def _on_classes_found():
+        out = _probe_result(classes_task, set_classes_error)
+        if not out:
+            return
+        # A find adds the new values; the listed classes keep their colours,
+        # labels and visibility. The untouched seed is not a list to keep.
+        listed = [] if classes == start else classes
+        found = vc.classes_from_values(
+            out["values"],
+            palette=vc.palette_of(listed) or palettes.DEFAULT_QUALITATIVE,
+            known=out["known"],
+        )
+        set_zero_one(not listed and vc.is_zero_one(out["values"]) and not out["known"])
+        set_classes(vc.merge_found(listed, found))
+
+    solara.use_effect(
+        _on_classes_found,
+        [classes_task.pending, classes_task.finished, classes_task.error],
+    )
+
+    def _start_probe(task, set_probe_error):
+        if busy:  # a double click: one probe at a time
+            return
+        set_probe_error(None)
+        task(var_type, ref)
+
+    def _pick_kind(kind=None, method=None):
+        # Another kind of layer starts from its own classes.
+        kind, method = kind or var_type, method or rasterization_method
+        set_var_type(kind)
+        set_rasterization_method(method)
+        set_classes(_start_classes(kind, method))
+        _clear_probes()
 
     def on_cancel():
         reset()
@@ -257,14 +438,18 @@ def VariableModal(
         if not name.strip():
             set_error(t("vars.modal.error_name_required"))
             return
-        is_raster = var_type in ("LocalRasterVar", "GEEVar")
-        if (
-            is_raster
-            and raster_type == RasterType.categorical.value
-            and not palettes.is_hex(presence_hex)
-        ):
-            set_error(t("vars.modal.error_hex_invalid"))
-            return
+        span = None
+        # A "unique" vector layer may go unstyled (more features than classes).
+        if categorical and (classes or not unique):
+            class_error = vc.validate(classes)
+            if class_error:
+                set_error(t(class_error))
+                return
+        elif is_raster:
+            valid, span = probes.parse_span(vmin, vmax)
+            if not valid:
+                set_error(t("vars.modal.err_range"))
+                return
         yr = int(year) if year and str(year).strip() else None
         entry = {
             "source": "custom",
@@ -280,7 +465,7 @@ def VariableModal(
             )
             entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
-            entry["vis_params"] = custom_vis(raster_type, presence_hex, ramp, invert)
+            entry["vis_params"] = custom_vis(raster_type, classes, ramp, invert, span)
         elif var_type == "GEEVar":
             entry["path"] = (
                 asset_id.strip()
@@ -291,7 +476,7 @@ def VariableModal(
             # to_local_raster refuses to convert without a raster type.
             entry["raster_type"] = RasterType(raster_type)
             entry["data_type"] = DataType.raster
-            entry["vis_params"] = custom_vis(raster_type, presence_hex, ramp, invert)
+            entry["vis_params"] = custom_vis(raster_type, classes, ramp, invert, span)
         elif var_type == "LocalVectorVar":
             entry["path"] = (
                 Path(file_path.strip())
@@ -300,6 +485,8 @@ def VariableModal(
             )
             entry["rasterization_method"] = RasterizationMethod(rasterization_method)
             entry["data_type"] = DataType.vector
+            if classes:
+                entry["vis_params"] = {"classes": [dict(c) for c in classes]}
         reset()
         open_.set(False)
         if is_edit and on_save is not None:
@@ -312,6 +499,102 @@ def VariableModal(
             _submit_predefined()
         else:
             _submit_custom()
+
+    def _probe_button(label_key, hint_key, icon, task, set_probe_error, probe_error):
+        solara.Button(
+            label=t(label_key),
+            icon_name=icon,
+            on_click=lambda: _start_probe(task, set_probe_error),
+            outlined=True,
+            color="primary",
+            small=True,
+            disabled=busy or not can_probe,
+            style="align-self:flex-start;",
+        )
+        solara.Text(t(hint_key), style=MUTED + "font-size:0.8rem;")
+        if probe_error:
+            solara.Text(probe_error, classes=["error--text"])
+
+    def _legend_preview():
+        # The legend the map will show, built the way the map builds it.
+        mid = None
+        if categorical:
+            if not vc.visible_classes(classes):
+                return
+            vis, kind = {"classes": classes}, "custom_classes"
+        else:
+            valid, span = probes.parse_span(vmin, vmax)
+            if not valid:
+                return
+            vis, kind = palettes.continuous_vis(ramp, invert, span), "custom_palette"
+            if span:
+                mid = format_number((span[0] + span[1]) / 2)
+        var = SimpleNamespace(name=name, raster_type=raster_type, vis_params=vis)
+        spec = variable_spec_from_vis(vis, kind, var, Label(literal=name))
+        LegendPreview(spec=spec, mid=mid)
+
+    def _vis_fields():
+        """A custom layer's visualization, under its raster type or method."""
+        with rv.Html(tag="div", style_=_VIS_FIELDS):
+            if categorical:
+                if not is_vector or unique:  # a vector mask is always 0 and 1
+                    _probe_button(
+                        "vars.modal.find_classes",
+                        "vars.modal.find_features_hint"
+                        if is_vector
+                        else "vars.modal.find_classes_hint",
+                        "mdi-magnify",
+                        classes_task,
+                        set_classes_error,
+                        classes_error,
+                    )
+                if zero_one:
+                    solara.Text(
+                        t("vars.modal.zero_one_note"), style=MUTED + "font-size:0.8rem;"
+                    )
+                # Keyed on the raster: a clear also empties "Add a value".
+                ClassList(classes=classes, on_classes=set_classes, disabled=busy).key(
+                    f"classes|{ref}"
+                )
+                with rv.Html(tag="div"):
+                    PaletteMenu(
+                        value=vc.palette_of(classes),
+                        on_value=lambda key: set_classes(vc.recolor(classes, key)),
+                        disabled=busy or not classes,
+                    )
+            else:
+                RampSelect(
+                    value=ramp,
+                    on_value=set_ramp,
+                    invert=invert,
+                    on_invert=set_invert,
+                    disabled=busy,
+                )
+                with rv.Html(tag="div", style_="display:flex;gap:12px;"):
+                    for label_key, value, setter in (
+                        ("vars.modal.range_min", vmin, set_vmin),
+                        ("vars.modal.range_max", vmax, set_vmax),
+                    ):
+                        rv.TextField(
+                            label=t(label_key),
+                            v_model=value,
+                            on_v_model=setter,
+                            type="number",
+                            dense=True,
+                            outlined=True,
+                            hide_details=True,
+                            disabled=busy,
+                            style_="flex:1;min-width:0;",
+                        )
+                _probe_button(
+                    "vars.modal.stretch",
+                    "vars.modal.stretch_hint",
+                    "mdi-arrow-expand-horizontal",
+                    stretch_task,
+                    set_stretch_error,
+                    stretch_error,
+                )
+            _legend_preview()
 
     title = t("vars.modal.title_edit") if is_edit else t("vars.modal.title_add")
     submit_label = (
@@ -372,7 +655,7 @@ def VariableModal(
                 else:
                     _render_custom_fields(
                         var_type,
-                        set_var_type,
+                        lambda kind: _pick_kind(kind=kind),
                         name,
                         set_name,
                         year,
@@ -386,16 +669,11 @@ def VariableModal(
                         raster_type,
                         set_raster_type,
                         rasterization_method,
-                        set_rasterization_method,
+                        lambda method: _pick_kind(method=method),
                         sepal_client=sepal_client,
                         storage_key=storage_key,
                         key_exists=key_exists,
-                        presence_hex=presence_hex,
-                        set_presence_hex=set_presence_hex,
-                        ramp=ramp,
-                        set_ramp=set_ramp,
-                        invert=invert,
-                        set_invert=set_invert,
+                        vis_fields=_vis_fields,
                     )
 
                 if error:
@@ -554,14 +832,13 @@ def _render_custom_fields(
     sepal_client,
     storage_key,
     key_exists,
-    presence_hex="",
-    set_presence_hex=None,
-    ramp=palettes.DEFAULT_RAMP,
-    set_ramp=None,
-    invert=False,
-    set_invert=None,
+    vis_fields=None,
 ):
-    """Fields shown when source == 'custom'."""
+    """Fields shown when source == 'custom'.
+
+    ``vis_fields`` draws the layer's visualization fields under its raster
+    type or rasterization method (the modal owns their state).
+    """
     ArtifactNameField(
         value=name,
         on_input=set_name,
@@ -626,15 +903,8 @@ def _render_custom_fields(
             hint=t("vars.modal.custom_raster_type_hint"),
             persistent_hint=True,
         )
-        _render_palette_fields(
-            raster_type,
-            presence_hex,
-            set_presence_hex,
-            ramp,
-            set_ramp,
-            invert,
-            set_invert,
-        )
+        if vis_fields is not None:
+            vis_fields()
     if var_type == "LocalVectorVar":
         rv.Select(
             label=t("vars.modal.custom_rasterization_method_label"),
@@ -646,6 +916,8 @@ def _render_custom_fields(
             hint=t("vars.modal.custom_rasterization_method_hint"),
             persistent_hint=True,
         )
+        if vis_fields is not None:
+            vis_fields()
 
 
 @solara.component
@@ -676,134 +948,3 @@ def _GeeAssetField(asset_id: str, on_asset_id: Callable[[str], None]):
         value=seed,
         on_value=lambda sel: on_asset_id((sel or {}).get("asset_id") or ""),
     )
-
-
-_SWATCH_STYLE = (
-    "min-width:32px;width:32px;height:32px;border-radius:50%;padding:0;"
-    "background-color:{color};"
-)
-# Ramp cards: a gradient bar over its name, in a bordered card; the selected
-# card is ringed and bold (the mockup's look).
-_RAMP_GRID = (
-    "display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));"
-    "gap:8px;width:100%;"
-)
-_RAMP_CARD = (
-    "display:block;height:auto;min-width:0;width:100%;padding:6px;"
-    "text-transform:none;letter-spacing:normal;font-weight:400;text-align:left;"
-    "border:1px solid rgba(128,128,128,0.5);border-radius:4px;background:transparent;"
-)
-_RAMP_CARD_SELECTED = "box-shadow:0 0 0 2px currentColor;font-weight:600;"
-_RAMP_BAR = (
-    "display:block;height:14px;border-radius:3px;margin-bottom:6px;"
-    "border:1px solid rgba(0,0,0,0.1);background:{gradient};"
-)
-# Selection ring drawn on a wrapper, not the button: Vuetify's elevation
-# classes own the button's box-shadow, and its focus rules its outline.
-_WRAP_STYLE = (
-    "display:inline-block;margin:0 8px 8px 0;border-radius:{radius};padding:2px;"
-)
-_WRAP_SELECTED = "box-shadow:0 0 0 2px currentColor;"
-# Outlined box with a floating legend, the look of the dialog's outlined fields.
-_FIELDSET_STYLE = (
-    "border:1px solid rgba(128,128,128,0.6);border-radius:4px;"
-    "padding:8px 12px 4px;margin:4px 0 0;min-width:0;"
-)
-_LEGEND_STYLE = "padding:0 4px;font-size:0.75rem;opacity:0.75;"
-
-
-def _render_palette_fields(
-    raster_type,
-    presence_hex,
-    set_presence_hex,
-    ramp,
-    set_ramp,
-    invert,
-    set_invert,
-):
-    """Palette pick under the raster-type select for custom raster layers.
-
-    Categorical: unlabelled presence swatches (absence stays white) plus a hex
-    field that always shows the stored value — a swatch fills it, typing a
-    valid hex deselects the swatches. Continuous: the named ramps with an
-    invert switch. Buttons go through ``solara.Button`` (a raw ``rv.Btn``
-    drops clicks); the ``sr-swatch`` / ``sr-ramp`` classes and the
-    ``--selected`` modifier are what tests key on. The selected swatch also
-    carries a check mark, so the choice reads without relying on the ring.
-    """
-    is_categorical = raster_type == RasterType.categorical.value
-    legend = t(
-        "vars.modal.presence_color_label" if is_categorical else "vars.modal.ramp_label"
-    )
-    with rv.Html(tag="fieldset", style_=_FIELDSET_STYLE):
-        rv.Html(tag="legend", children=[legend], style_=_LEGEND_STYLE)
-        if is_categorical:
-            current = presence_hex.strip().lstrip("#").lower()
-            with solara.Row(gap="0", style="flex-wrap:wrap;align-items:center;"):
-                for color in palettes.PRESENCE_COLORS:
-                    selected = color == current
-                    with rv.Html(
-                        tag="div",
-                        style_=_WRAP_STYLE.format(radius="50%")
-                        + (_WRAP_SELECTED if selected else ""),
-                    ):
-                        solara.Button(
-                            label="",
-                            icon_name="mdi-check" if selected else None,
-                            on_click=lambda *_, c=color: set_presence_hex(f"#{c}"),
-                            style=_SWATCH_STYLE.format(color=f"#{color}"),
-                            classes=["sr-swatch"]
-                            + (["sr-swatch--selected"] if selected else []),
-                            elevation=0,
-                            dark=True,
-                        )
-            rv.TextField(
-                label=t("vars.modal.presence_hex_label"),
-                v_model=presence_hex,
-                on_v_model=set_presence_hex,
-                dense=True,
-                outlined=True,
-                hint=t("vars.modal.presence_hex_hint"),
-                persistent_hint=True,
-                style_="max-width:180px;",
-                class_="mt-2",
-            )
-            return
-
-        with rv.Html(tag="div", style_=_RAMP_GRID):
-            for key in palettes.RAMPS:
-                selected = key == ramp
-                solara.Button(
-                    # One full-width block: v-btn__content is a centred flex
-                    # row, so two direct children would sit side by side.
-                    children=[
-                        rv.Html(
-                            tag="span",
-                            style_="display:block;width:100%;",
-                            children=[
-                                rv.Html(
-                                    tag="span",
-                                    style_=_RAMP_BAR.format(
-                                        gradient=palettes.ramp_css(key, invert)
-                                    ),
-                                ),
-                                rv.Html(
-                                    tag="span",
-                                    children=[t(f"vars.modal.ramp_{key}")],
-                                ),
-                            ],
-                        )
-                    ],
-                    on_click=lambda *_, k=key: set_ramp(k),
-                    style=_RAMP_CARD + (_RAMP_CARD_SELECTED if selected else ""),
-                    classes=["sr-ramp"] + (["sr-ramp--selected"] if selected else []),
-                    text=True,
-                )
-        rv.Switch(
-            label=t("vars.modal.ramp_invert_label"),
-            v_model=invert,
-            on_v_model=set_invert,
-            dense=True,
-            hide_details=True,
-            class_="mt-0 mb-1",
-        )

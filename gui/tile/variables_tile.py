@@ -19,6 +19,7 @@ from gui.scripts.notify_bridge import (
 )
 from gui.scripts.project_ui_helpers import format_size
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context
+from gui.scripts.variable_classes import outline_style
 from gui.scripts.variable_identity import is_base_raster
 from gui.scripts.variable_map import add_raster_var_on_map
 from gui.store.project_writers import writing
@@ -102,7 +103,13 @@ def _toggle_var_on_map(key, p, map_, legend_port, notifier):
             )
             legend = _var_legend(key, var, vis=vis, render_kind=render_kind)
         elif type(var).__name__ == "LocalVectorVar":
-            add_vector_on_map(map_, str(var.path), label, layer_key)
+            add_vector_on_map(
+                map_,
+                str(var.path),
+                label,
+                layer_key,
+                style=outline_style((var.vis_params or {}).get("classes")),
+            )
         else:  # LocalRasterVar — reuse the palette it had as a GEE layer
             add_raster_var_on_map(
                 map_,
@@ -266,7 +273,8 @@ def _styled_layer(image, var, gee_interface):
 
     Returns (image_to_add, vis_params, render_kind). GEE variables are never
     post-process outputs (post-processing runs on downloaded rasters), so its
-    render_kind vocabulary is the catalogue subset: "custom_palette",
+    render_kind vocabulary is the catalogue subset: "custom_classes",
+    "custom_palette",
     "random_visualizer", "catalogue_palette", "categorical_fallback",
     "continuous_fallback".
     Synchronous — any GEE stretch it computes goes through the blocking
@@ -276,11 +284,16 @@ def _styled_layer(image, var, gee_interface):
         PREDEFINED_CATALOGUE,
         resolve_predefined,
     )
+    from gui.scripts.variable_classes import ee_remap, visible_classes
 
     # A palette the user picked in the Variables modal wins over the catalogue
     # and the raster-type fallbacks. Applied verbatim: a categorical pick is
     # pinned to 0..1, a ramp is palette-only and GEE stretches it.
     own = getattr(var, "vis_params", None) or {}
+    if visible_classes(own.get("classes")):
+        # remap masks every value it is not given: the rest is transparent.
+        src, dst, vis = ee_remap(own["classes"])
+        return image.remap(src, dst), vis, "custom_classes"
     if own.get("palette"):
         return image, dict(own), "custom_palette"
 
@@ -845,6 +858,9 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         initial_entry=editing_entry,
         sepal_client=sepal_client,
         existing_keys=frozenset(p.raw_variables) if p else frozenset(),
+        # For the value probes of a custom Earth Engine layer.
+        gee_interface=getattr(map_, "gee_interface", None),
+        aoi_ee=_current_aoi_ee,
     )
 
     _pending_var = (

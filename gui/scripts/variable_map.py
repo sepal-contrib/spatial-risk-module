@@ -56,6 +56,10 @@ def add_raster_var_on_map(
     # reproduce that bug. Catalogue / raster_type styles carry no "nodata" key, so
     # they fall back to sniffing the file exactly as before.
     nodata = style.get("nodata", _file_nodata(path))
+    if style.get("classes"):
+        from gui.scripts.variable_classes import categorical_vrt
+
+        path = str(categorical_vrt(path, style["classes"]))
 
     client = TileClient(path)
     layer = get_leaflet_tile_layer(

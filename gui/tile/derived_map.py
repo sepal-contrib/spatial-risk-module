@@ -25,6 +25,7 @@ from gui.scripts.inflight import InflightKeys
 from gui.scripts.layer_labels import processed_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.solara_threads import spawn_in_context
+from gui.scripts.variable_classes import outline_style
 from gui.scripts.variable_map import add_raster_var_on_map
 
 logger = logging.getLogger("spatial_risk")
@@ -126,7 +127,13 @@ def use_derived_map_toggle(project, map_, notifier, legend_port=None):
             generation = legend_port.generation() if legend_port is not None else None
             legend = None
             if type(var).__name__ == "LocalVectorVar":
-                add_vector_on_map(map_, str(var.path), label, layer_key)
+                add_vector_on_map(
+                    map_,
+                    str(var.path),
+                    label,
+                    layer_key,
+                    style=outline_style((var.vis_params or {}).get("classes")),
+                )
             else:  # LocalRasterVar — same palette resolution as source rasters
                 add_raster_var_on_map(
                     map_,

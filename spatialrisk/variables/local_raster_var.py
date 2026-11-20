@@ -312,6 +312,7 @@ class LocalRasterVar(Variable):
             active=True,
             year=self.year,
             tags=self.tags.copy() if self.tags else [],
+            vis_params=self.vis_params,  # the style picked for the layer (#55)
         )
 
     def reproject_and_match(
@@ -417,6 +418,7 @@ class LocalRasterVar(Variable):
             active=self.active,
             year=self.year,
             tags=self.tags.copy() if self.tags else [],
+            vis_params=self.vis_params,  # the style picked for the layer (#55)
             # Stamped from the target geobox, not from the file just written:
             # xr_reproject writes *onto* this geobox, so the two are the same
             # grid by construction, and taking it from here keeps the
