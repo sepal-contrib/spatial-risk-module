@@ -2,13 +2,14 @@
 
 import json
 import logging
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from spatialrisk.project import Project, DATA_DIR
+from spatialrisk.project import DATA_DIR, Project
 
 logger = logging.getLogger("spatial_risk")
 
@@ -26,7 +27,8 @@ def save_project(project: Project) -> Path:
 def list_projects(data_dir: Path) -> list[str]:
     """Return names of all saved projects found under data_dir."""
     return sorted(
-        p.name for p in data_dir.iterdir()
+        p.name
+        for p in data_dir.iterdir()
         if p.is_dir() and (p / f"{p.name}_project.json").exists()
     )
 
@@ -198,3 +200,52 @@ def delete_project(name: str, data_dir: Path = DATA_DIR) -> bool:
     folder.rmdir()
     logger.info("Deleted project folder: %s", folder)
     return True
+
+
+def _retarget(node, old_dir: str, new_dir: str, old: str, new: str, key: str = ""):
+    """Copy of a manifest with ``old_dir`` paths and ``project_name`` values renamed."""
+    if isinstance(node, dict):
+        return {k: _retarget(v, old_dir, new_dir, old, new, k) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_retarget(v, old_dir, new_dir, old, new, key) for v in node]
+    if isinstance(node, str):
+        if key == "project_name" and node == old:
+            return new
+        if node == old_dir or node.startswith(old_dir + os.sep):
+            return new_dir + node[len(old_dir) :]
+    return node
+
+
+def rename_project(old: str, new: str, data_dir: Path = DATA_DIR) -> None:
+    """Rename a saved project: its folder, its manifest and the paths inside it.
+
+    The manifest stores absolute paths and the name itself, so moving the folder
+    alone would leave every layer pointing at a folder that is gone. Callers must
+    refuse while a writer is active (``gui.store.project_writers``) and reopen
+    the project afterwards when it is the one open.
+
+    Raises ``FileExistsError`` when ``new`` is taken, ``FileNotFoundError`` when
+    ``old`` is not a project and ``ValueError`` for an unsafe name or a manifest
+    that cannot be read.
+    """
+    src, dst = _project_dir(old, data_dir), _project_dir(new, data_dir)
+    manifest = src / f"{src.name}_project.json"
+    if not manifest.is_file():
+        raise FileNotFoundError(f"Not a project folder (no manifest): {src}")
+    if dst.exists():  # os.rename would silently replace an empty folder
+        raise FileExistsError(f"A folder named '{dst.name}' already exists.")
+    data = json.loads(manifest.read_text(encoding="utf-8"))
+    data = _retarget(data, str(src), str(dst), src.name, dst.name)
+
+    # New manifest first, folder second: until the move the folder still lists
+    # under the old name, after it under the new one. Never a folder that no
+    # longer looks like a project.
+    staged = src / f"{dst.name}_project.json"
+    staged.write_text(json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.rename(src, dst)
+    except OSError:
+        staged.unlink(missing_ok=True)
+        raise
+    (dst / manifest.name).unlink(missing_ok=True)
+    logger.info("Renamed project folder: %s -> %s", src, dst)

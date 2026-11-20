@@ -9,15 +9,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from gui.i18n import t, plural
+from gui.i18n import plural, t
 
 _NAME_RE = re.compile(r"[A-Za-z0-9 _-]+")
 
 
 def compute_app_title(project, dirty: bool, base: str = None) -> str:
     """Header title: always '<base>', plus a '●' when there are unsaved changes.
+
     The project name is shown elsewhere, not in the header. Plain text (header
-    cannot host a widget)."""
+    cannot host a widget).
+    """
     base = base if base is not None else t("app.title")
     suffix = t("app.title_dirty_suffix") if dirty and project is not None else ""
     return f"{base}{suffix}"
@@ -39,7 +41,7 @@ def format_relative(when: datetime, now: datetime) -> str:
 
 
 def format_last_saved(when: Optional[datetime], now: datetime) -> str:
-    """'never saved' when None, else 'saved <relative>'."""
+    """Return 'never saved' when None, else 'saved <relative>'."""
     if when is None:
         return t("project.never_saved")
     return t("project.saved_relative", time_ago=format_relative(when, now))
@@ -47,16 +49,19 @@ def format_last_saved(when: Optional[datetime], now: datetime) -> str:
 
 @dataclass
 class CountChip:
-    """One count chip for the load list: a label plus whether it's accented
-    (colored) rather than neutral grey."""
+    """One count chip for the load list.
+
+    A label plus whether it's accented (colored) rather than neutral grey.
+    """
 
     label: str
     accent: bool
 
 
 def project_count_chips(info) -> list[CountChip]:
-    """Chip specs summarising one saved project's contents, in display order:
-    raw, processed, models, predictions.
+    """Chip specs summarising one saved project's contents.
+
+    In display order: raw, processed, models, predictions.
 
     Raw/processed are always neutral. The models chip appends ``(K trained)``
     when any models exist and is accented when at least one is trained. The
@@ -64,17 +69,33 @@ def project_count_chips(info) -> list[CountChip]:
     """
     models_label = plural(info.model_count, "chips.models_one", "chips.models_other")
     if info.model_count:
-        models_label += t("project.chip_models_trained", trained=info.trained_model_count)
+        models_label += t(
+            "project.chip_models_trained", trained=info.trained_model_count
+        )
     return [
         CountChip(plural(info.raw_count, "chips.raw_one", "chips.raw_other"), False),
-        CountChip(plural(info.processed_count, "chips.processed_one", "chips.processed_other"), False),
+        CountChip(
+            plural(
+                info.processed_count, "chips.processed_one", "chips.processed_other"
+            ),
+            False,
+        ),
         CountChip(models_label, info.trained_model_count >= 1),
-        CountChip(plural(info.prediction_count, "chips.predictions_one", "chips.predictions_other"), info.prediction_count > 0),
+        CountChip(
+            plural(
+                info.prediction_count,
+                "chips.predictions_one",
+                "chips.predictions_other",
+            ),
+            info.prediction_count > 0,
+        ),
     ]
 
 
 @dataclass
 class NameValidation:
+    """Outcome of checking a project name."""
+
     valid: bool
     cleaned: str
     exists: bool
@@ -82,8 +103,13 @@ class NameValidation:
 
 
 def validate_project_name(name: str, existing_names: list[str]) -> NameValidation:
-    """Validate a new project name. Non-empty and filesystem-safe
-    ([A-Za-z0-9 _-]). ``exists`` is informational (a warning, not an error)."""
+    """Validate a new project name.
+
+    Non-empty, filesystem-safe ([A-Za-z0-9 _-]) and not taken: a second project
+    under a saved one's name would replace its list of layers and models on the
+    first save. ``exists`` says the error is that clash, so the caller can offer
+    to load the project instead.
+    """
     cleaned = name.strip()
     if not cleaned:
         return NameValidation(False, "", False, t("project.validation_empty_name"))
@@ -94,14 +120,21 @@ def validate_project_name(name: str, existing_names: list[str]) -> NameValidatio
             False,
             t("project.validation_invalid_chars"),
         )
-    return NameValidation(True, cleaned, cleaned in existing_names, None)
+    if cleaned in existing_names:
+        return NameValidation(
+            False, cleaned, True, t("project.name_exists", name=cleaned)
+        )
+    return NameValidation(True, cleaned, False, None)
 
 
 def overwrite_needed(
     name: str, last_saved: Optional[datetime], existing_names: list[str]
 ) -> bool:
-    """True only when this is a new/never-saved-this-session project whose name
-    already exists on disk — i.e. saving would clobber a different project."""
+    """True when saving would clobber a different project.
+
+    That is: a new/never-saved-this-session project whose name already exists
+    on disk.
+    """
     return last_saved is None and name in existing_names
 
 
@@ -151,8 +184,17 @@ def delete_confirm_valid(typed: str, name: str) -> bool:
     return (typed or "").strip() == name
 
 
-def aoi_project_name(aoi_name: str, when: datetime) -> str:
-    """Auto-name for a project created from an AOI selection: ``<aoi>_<yyyymmdd>``
-    (e.g. ``San Marino_20260623``). The date is the creation moment, so the same
-    AOI picked on different days yields distinct, non-colliding project names."""
-    return f"{aoi_name}_{when:%Y%m%d}"
+def aoi_project_name(aoi_name: str, when: datetime, existing_names=()) -> str:
+    """Auto-name for a project created from an AOI selection.
+
+    ``<aoi>_<yyyymmdd>`` (e.g. ``San Marino_20260623``). The date is the creation
+    moment, so the same AOI picked on different days yields distinct project
+    names; picked again the same day it gets ``_2``, ``_3``… rather than a saved
+    project's name, whose list of layers and models its first save would replace.
+    """
+    base = f"{aoi_name}_{when:%Y%m%d}"
+    name, n = base, 1
+    while name in existing_names:
+        n += 1
+        name = f"{base}_{n}"
+    return name

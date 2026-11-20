@@ -10,6 +10,7 @@ changing how the editable-installed ``spatialrisk`` package resolves.
 
 import os
 import sys
+import tempfile
 
 # Tests must never attempt a real SEPAL login even if the developer's shell
 # exported PYSEPAL_DEV_AUTH. solara/settings.py calls dotenv.load_dotenv(),
@@ -17,5 +18,9 @@ import sys
 # override existing environment variables — this guard ensures the app defaults
 # to a safe state for test isolation.
 os.environ["PYSEPAL_DEV_AUTH"] = "0"
+
+# spatialrisk fixes its data folder at first import; without this the suite
+# saves projects named "race", "p", "proj"… into the developer's real one.
+os.environ["SPATIAL_RISK_DATA_DIR"] = tempfile.mkdtemp(prefix="spatial_risk_tests_")
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

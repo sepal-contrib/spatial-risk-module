@@ -11,7 +11,6 @@
     "stats": "{raw} crudas · {processed} armonizadas · {models} modelos",
     "dialog_new_title": "Nuevo proyecto",
     "dialog_new_name_label": "Nombre del proyecto",
-    "dialog_new_exists_warning": "Ya existe un proyecto llamado '{name}' — al guardar luego lo sobrescribirás.",
     "dialog_new_load_instead": "Cargarlo en su lugar",
     "dialog_discard_title": "¿Descartar cambios sin guardar?",
     "dialog_discard_message": "El proyecto '{name}' tiene cambios sin guardar. Iniciar un proyecto nuevo los descartará.",
@@ -45,7 +44,17 @@
     "status_deleted": "Proyecto '{name}' eliminado.",
     "chip_models_trained": " ({trained} entrenados)",
     "validation_empty_name": "El nombre no puede estar vacío",
-    "validation_invalid_chars": "Usá solo letras, números, espacios, guiones y guiones bajos"
+    "validation_invalid_chars": "Usá solo letras, números, espacios, guiones y guiones bajos",
+    "button_rename": "Renombrar",
+    "button_continue": "Continuar",
+    "continue_title": "Continuar donde lo dejaste",
+    "dialog_rename_title": "Renombrar '{name}'",
+    "name_exists": "Ya existe un proyecto llamado '{name}'.",
+    "load_busy": "Una tarea en segundo plano sigue escribiendo en este proyecto. Espera a que termine antes de volver a cargarlo.",
+    "rename_busy": "Una tarea en segundo plano sigue escribiendo en este proyecto. Espera a que termine antes de renombrarlo.",
+    "rename_save_first": "Guarda el proyecto antes de renombrarlo.",
+    "status_renamed": "Proyecto '{old}' renombrado a '{name}'.",
+    "size_on_disk": "Tamaño en disco"
   },
   "time": {
     "just_now": "recién",

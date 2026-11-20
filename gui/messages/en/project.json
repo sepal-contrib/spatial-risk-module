@@ -11,7 +11,6 @@
     "stats": "{raw} raw · {processed} harmonized · {models} models",
     "dialog_new_title": "New Project",
     "dialog_new_name_label": "Project name",
-    "dialog_new_exists_warning": "A project named '{name}' already exists — saving later will overwrite it.",
     "dialog_new_load_instead": "Load it instead",
     "dialog_discard_title": "Discard unsaved changes?",
     "dialog_discard_message": "Project '{name}' has unsaved changes. Starting a new project will discard them.",
@@ -45,7 +44,17 @@
     "status_deleted": "Project '{name}' deleted.",
     "chip_models_trained": " ({trained} trained)",
     "validation_empty_name": "Name cannot be empty",
-    "validation_invalid_chars": "Use only letters, numbers, spaces, hyphens and underscores"
+    "validation_invalid_chars": "Use only letters, numbers, spaces, hyphens and underscores",
+    "button_rename": "Rename",
+    "button_continue": "Continue",
+    "continue_title": "Continue where you left off",
+    "dialog_rename_title": "Rename '{name}'",
+    "name_exists": "A project named '{name}' already exists.",
+    "load_busy": "A background task is still writing to this project. Wait for it to finish before loading it again.",
+    "rename_busy": "A background task is still writing to this project. Wait for it to finish before renaming.",
+    "rename_save_first": "Save the project before renaming it.",
+    "status_renamed": "Project '{old}' renamed to '{name}'.",
+    "size_on_disk": "Size on disk"
   },
   "time": {
     "just_now": "just now",

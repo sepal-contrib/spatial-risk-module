@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import threading
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -56,6 +57,9 @@ downloads_folder = DATA_DIR
 root_folder: Path = DATA_DIR
 
 logger = logging.getLogger("spatial_risk")
+
+# Serialises Project.save across the job threads (re-entrant: a save hook may save).
+_SAVE_LOCK = threading.RLock()
 
 
 def _stringify_paths(obj: Any) -> Any:
@@ -800,6 +804,16 @@ class Project(BaseModel):
         return result
 
     def save(self, filename: Optional[str] = None) -> Path:
+        """Save the project (see ``_save``), one save at a time.
+
+        Every background job saves from its own thread. Unordered, a job that
+        read the registries before another job added its result could write
+        last and drop that result from the file.
+        """
+        with _SAVE_LOCK:
+            return self._save(filename)
+
+    def _save(self, filename: Optional[str] = None) -> Path:
         """
         Save the project to a JSON file in the project folder.
 
@@ -976,7 +990,9 @@ class Project(BaseModel):
 
         # Create project instance without variables first
         project = cls(
-            project_name=data["project_name"],
+            # The folder's name, not the one stored in the file: a copied folder
+            # would otherwise open as the original and save into it.
+            project_name=project_name,
             years=data.get("years"),
             aoi=data.get("aoi"),
         )

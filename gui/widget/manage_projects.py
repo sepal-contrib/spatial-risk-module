@@ -1,4 +1,4 @@
-"""Manage-projects dialog: search, load and delete saved projects.
+"""Manage-projects dialog: search, load, rename and delete saved projects.
 
 Both components are presentational — every action is a callback supplied by
 ``ProjectPanel``, which owns the app state. The confirm dialog is rendered once
@@ -39,8 +39,11 @@ def ManageProjectsDialog(
     current=None,
     busy=False,
     error=None,
+    on_rename=None,
+    sizes=None,
+    covered=False,
 ):
-    """List / search / load / delete saved projects.
+    """List / search / load / rename / delete saved projects.
 
     Args:
         open: bool — whether the dialog is shown.
@@ -58,7 +61,11 @@ def ManageProjectsDialog(
             opens the confirm dialog. This widget never touches the disk.
         busy: a load is in progress.
         error: the load's error text, if any.
+        on_rename: callback(name) — the row's pencil; no pencil without it.
+        sizes: {name: bytes on disk}; a project not in it shows "…" (still counted).
+        covered: another dialog (rename, delete) is open on top of this one.
     """
+    sizes = sizes or {}
     query, set_query = solara.use_state("")
 
     # A stale filter would hide rows the next time the dialog opens.
@@ -80,13 +87,19 @@ def ManageProjectsDialog(
     with rv.Dialog(
         v_model=open,
         on_v_model=lambda v: None if v else on_cancel(),
-        max_width="480px",
+        max_width="520px",
         eager=True,
+        # Only the list scrolls: with many projects the footer's Load stays in reach.
+        scrollable=True,
+        # Two dialogs that both hold the focus pull it back and forth (the
+        # browser ends in "Maximum call stack size exceeded"); this one lets go.
+        retain_focus=not covered,
     ):
         with rv.Card():
             with rv.CardTitle():
                 solara.Text(t("project.dialog_load_title"))
-            with rv.CardText():
+            # Outside the card text, which is what a scrollable dialog scrolls.
+            with rv.Html(tag="div", class_="px-6 pb-3", style_="flex: 0 0 auto;"):
                 if infos:
                     rv.TextField(
                         label=t("project.dialog_manage_search"),
@@ -98,6 +111,12 @@ def ManageProjectsDialog(
                         clearable=True,
                         hide_details=True,
                     )
+                if busy:
+                    rv.ProgressLinear(indeterminate=True, class_="mt-3")
+                if error:
+                    solara.Error(error)
+            rv.Divider()
+            with rv.CardText(style_="max-height: 60vh;"):
                 if not infos:
                     solara.Info(t("project.dialog_load_empty"))
                 elif not shown:
@@ -162,7 +181,39 @@ def ManageProjectsDialog(
                                                     )
                                                 ]
                                             )
-                                    with rv.ListItemAction():
+                                    with rv.ListItemAction(
+                                        style_="flex-direction: row; "
+                                        "align-items: center; gap: 2px;"
+                                    ):
+                                        size = sizes.get(info.name)
+                                        rv.Html(
+                                            tag="span",
+                                            children=[
+                                                "…"
+                                                if size is None
+                                                else format_size(size)
+                                            ],
+                                            # Tabular digits: sizes line up row to row.
+                                            style_="font-size: 13px; min-width: 60px; "
+                                            "text-align: right; "
+                                            "font-variant-numeric: tabular-nums;"
+                                            + ("opacity: 0.5;" if size is None else ""),
+                                            attributes={
+                                                "title": t("project.size_on_disk")
+                                            },
+                                        )
+                                        if on_rename is not None:
+                                            solara.Button(
+                                                icon_name="mdi-pencil-outline",
+                                                icon=True,
+                                                small=True,
+                                                on_click=lambda n=info.name: on_rename(
+                                                    n
+                                                ),
+                                                attributes={
+                                                    "title": t("project.button_rename")
+                                                },
+                                            )
                                         solara.Button(
                                             icon_name="mdi-delete-outline",
                                             icon=True,
@@ -170,10 +221,7 @@ def ManageProjectsDialog(
                                             color="error",
                                             on_click=lambda info=info: on_delete(info),
                                         )
-                if busy:
-                    rv.ProgressLinear(indeterminate=True)
-                if error:
-                    solara.Error(error)
+            rv.Divider()
             with rv.CardActions(style_="justify-content: flex-end; gap: 8px;"):
                 solara.Button(
                     t("common.cancel"), on_click=on_cancel, text=True, small=True

@@ -11,7 +11,6 @@
     "stats": "{raw} brutas · {processed} harmonizadas · {models} modelos",
     "dialog_new_title": "Novo projeto",
     "dialog_new_name_label": "Nome do projeto",
-    "dialog_new_exists_warning": "Já existe um projeto chamado '{name}' — salvar depois vai sobrescrevê-lo.",
     "dialog_new_load_instead": "Carregar esse projeto",
     "dialog_discard_title": "Descartar alterações não salvas?",
     "dialog_discard_message": "O projeto '{name}' tem alterações não salvas. Iniciar um novo projeto vai descartá-las.",
@@ -45,7 +44,17 @@
     "status_deleted": "Projeto '{name}' excluído.",
     "chip_models_trained": " ({trained} treinados)",
     "validation_empty_name": "O nome não pode ficar vazio",
-    "validation_invalid_chars": "Use apenas letras, números, espaços, hifens e sublinhados"
+    "validation_invalid_chars": "Use apenas letras, números, espaços, hifens e sublinhados",
+    "button_rename": "Renomear",
+    "button_continue": "Continuar",
+    "continue_title": "Continuar de onde você parou",
+    "dialog_rename_title": "Renomear '{name}'",
+    "name_exists": "Já existe um projeto chamado '{name}'.",
+    "load_busy": "Uma tarefa em segundo plano ainda está gravando neste projeto. Aguarde ela terminar antes de carregá-lo de novo.",
+    "rename_busy": "Uma tarefa em segundo plano ainda está gravando neste projeto. Aguarde ela terminar antes de renomear.",
+    "rename_save_first": "Salve o projeto antes de renomeá-lo.",
+    "status_renamed": "Projeto '{old}' renomeado para '{name}'.",
+    "size_on_disk": "Tamanho em disco"
   },
   "time": {
     "just_now": "agora mesmo",

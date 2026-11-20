@@ -42,13 +42,23 @@ def _infos():
     """
     return [
         ProjectInfo(
-            name="GUY", raw_count=6, processed_count=6, model_count=3,
-            modified=datetime.now() - timedelta(hours=5), readable=True,
-            trained_model_count=1, prediction_count=2,
+            name="GUY",
+            raw_count=6,
+            processed_count=6,
+            model_count=3,
+            modified=datetime.now() - timedelta(hours=5),
+            readable=True,
+            trained_model_count=1,
+            prediction_count=2,
         ),
         ProjectInfo(
-            name="broken", raw_count=0, processed_count=0, model_count=0,
-            modified=None, readable=False, error="unreadable project file",
+            name="broken",
+            raw_count=0,
+            processed_count=0,
+            model_count=0,
+            modified=None,
+            readable=False,
+            error="unreadable project file",
         ),
     ]
 
@@ -82,7 +92,8 @@ def _render_confirm(**kwargs):
 def _trash_buttons(rc):
     """The rendered row trash buttons, in row order."""
     return [
-        btn for btn in rc.find(vw.Btn).widgets
+        btn
+        for btn in rc.find(vw.Btn).widgets
         if any(
             isinstance(child, vw.Icon) and child.children == ["mdi-delete-outline"]
             for child in btn.children
@@ -119,7 +130,9 @@ def _open_chips_by_row(rc):
 
 # --- the row -> target binding (the bug the substring tests cannot see) --------
 
+
 def test_each_row_trash_button_deletes_its_own_project():
+    """Each row trash button deletes its own project."""
     deleted = []
     box, rc = _render_manage(on_delete=lambda info: deleted.append(info.name))
 
@@ -135,8 +148,10 @@ def test_each_row_trash_button_deletes_its_own_project():
 
 
 def test_row_hands_up_the_whole_info_not_just_a_name():
-    """open_delete() prices the folder off the ProjectInfo, so the row must pass
-    the record itself, not the name it happens to display."""
+    """The row must pass the record itself, not the name it happens to display.
+
+    open_delete() prices the folder off the ProjectInfo.
+    """
     captured = []
     box, rc = _render_manage(on_delete=captured.append)
 
@@ -148,7 +163,9 @@ def test_row_hands_up_the_whole_info_not_just_a_name():
 
 # --- "this one is already open" -----------------------------------------------
 
+
 def test_the_open_project_row_wears_the_open_chip():
+    """The open project row wears the open chip."""
     box, rc = _render_manage(current="GUY")
 
     assert _open_chips_by_row(rc) == {"GUY": [t("project.chip_open")], "broken": []}
@@ -164,8 +181,11 @@ def test_no_row_is_badged_when_no_project_is_open():
 
 
 def test_an_open_project_that_was_never_saved_badges_nothing():
-    """`current` is the in-memory project name; until its first save it has no row
-    on disk to badge — and must not badge a same-named stranger's."""
+    """An unsaved project has no row to badge, nor a same-named stranger's.
+
+    `current` is the in-memory project name; until its first save it has no row
+    on disk.
+    """
     box, rc = _render_manage(current="unsaved-draft")
 
     assert _open_chips_by_row(rc) == {"GUY": [], "broken": []}
@@ -174,20 +194,22 @@ def test_an_open_project_that_was_never_saved_badges_nothing():
 
 # --- mount smoke: hook order + the states nothing else exercises ---------------
 
+
 def test_manage_dialog_mounts_with_a_corrupt_row():
-    """The unreadable row renders its error instead of counts — and keeps its trash
-    button: a disabled ListItem would kill it on exactly the projects to remove."""
+    """The unreadable row renders its error instead of counts, and keeps its trash.
+
+    A disabled ListItem would kill the button on exactly the projects to remove.
+    """
     box, rc = _render_manage()
 
-    subtitles = [
-        str(w.children) for w in rc.find(vw.ListItemSubtitle).widgets
-    ]
+    subtitles = [str(w.children) for w in rc.find(vw.ListItemSubtitle).widgets]
     assert any("unreadable project file" in s for s in subtitles)
     assert len(_trash_buttons(rc)) == 2
     rc.close()
 
 
 def test_manage_dialog_mounts_with_no_projects():
+    """Manage dialog mounts with no projects."""
     box, rc = _render_manage(infos=[], selected=None)
     assert _trash_buttons(rc) == []
     assert _button(rc, t("common.load")).disabled  # nothing to load
@@ -195,12 +217,14 @@ def test_manage_dialog_mounts_with_no_projects():
 
 
 def test_load_is_disabled_for_an_unreadable_selection():
+    """Load is disabled for an unreadable selection."""
     box, rc = _render_manage(selected="broken")
     assert _button(rc, t("common.load")).disabled
     rc.close()
 
 
 def test_confirm_dialog_mounts_in_every_state():
+    """Confirm dialog mounts in every state."""
     for kwargs in (
         {},
         {"is_open_project": True},
@@ -214,6 +238,7 @@ def test_confirm_dialog_mounts_in_every_state():
 
 
 def test_confirm_dialog_refuses_while_a_writer_holds_the_project():
+    """Confirm dialog refuses while a writer holds the project."""
     box, rc = _render_confirm(writer_active=True)
 
     assert _button(rc, t("project.dialog_delete_confirm")).disabled
@@ -225,6 +250,7 @@ def test_confirm_dialog_refuses_while_a_writer_holds_the_project():
 
 # --- an rmtree in flight cannot be called back --------------------------------
 
+
 def test_a_delete_in_flight_cannot_be_dismissed():
     """While the rmtree runs, the dialog must not hand the app back.
 
@@ -235,15 +261,56 @@ def test_a_delete_in_flight_cannot_be_dismissed():
     """
     box, rc = _render_confirm(busy=True)
 
-    assert rc.find(vw.Dialog).widget.persistent is True   # ESC / scrim click blocked
-    assert _button(rc, t("common.cancel")).disabled       # and Cancel is not a way out
+    assert rc.find(vw.Dialog).widget.persistent is True  # ESC / scrim click blocked
+    assert _button(rc, t("common.cancel")).disabled  # and Cancel is not a way out
     assert _button(rc, t("project.dialog_delete_confirm")).disabled  # no re-entry
     rc.close()
 
 
 def test_an_idle_confirm_dialog_stays_dismissable():
+    """An idle confirm dialog stays dismissable."""
     box, rc = _render_confirm()
 
     assert not rc.find(vw.Dialog).widget.persistent
     assert not _button(rc, t("common.cancel")).disabled
+    rc.close()
+
+
+# --- rename pencil + folder sizes ----------------------------------------------
+
+
+def _icon_buttons(rc, icon):
+    return [
+        btn
+        for btn in rc.find(vw.Btn).widgets
+        if any(isinstance(c, vw.Icon) and c.children == [icon] for c in btn.children)
+    ]
+
+
+def test_each_row_pencil_renames_its_own_project():
+    """Each pencil hands up its own row's name, not the last row's."""
+    renamed = []
+    box, rc = _render_manage(on_rename=renamed.append)
+    for btn in _icon_buttons(rc, "mdi-pencil-outline"):
+        btn.fire_event("click", None)
+    assert renamed == ["GUY", "broken"]  # not the last row twice
+    rc.close()
+
+
+def test_no_pencil_without_a_rename_callback():
+    """Rename is opt-in: no callback, no pencil."""
+    box, rc = _render_manage()
+    assert _icon_buttons(rc, "mdi-pencil-outline") == []
+    rc.close()
+
+
+def test_rows_show_their_size_or_a_placeholder_while_counting():
+    """A counted folder shows its size; one still being counted shows an ellipsis."""
+    box, rc = _render_manage(sizes={"GUY": 3 * 1024**3})
+    texts = [
+        w.children[0]
+        for w in rc.find(vw.Html).widgets
+        if (w.attributes or {}).get("title") == t("project.size_on_disk")
+    ]
+    assert texts == ["3.0 GB", "…"]
     rc.close()
