@@ -18,6 +18,7 @@ from gui.i18n import t
 from gui.scripts.echarts_options import RENDERER_SVG
 from gui.scripts.evaluation_charts import (
     map_label,
+    map_title_parts,
     metric_bar_option,
     record_csizes,
     record_metrics,
@@ -35,6 +36,7 @@ from gui.scripts.product_rows import evaluation_tab_rows
 from gui.tile.evaluation_helpers import rows_for_record
 from gui.widget.echarts import EChartsChart, theme_accent
 from gui.widget.product_table import ProductTable
+from gui.widget.text_style import MUTED
 
 logger = logging.getLogger("spatial_risk")
 
@@ -45,6 +47,30 @@ _CHART_HEIGHT = "260px"
 # tab loads its point CSVs only when it is the active one, so the scatter for a
 # 200k-point run is never parsed just because the dialog opened on the table.
 _FIGURES_TAB_INDEX = 2
+
+# Card header text: never wider than the 380 px card, full text on hover.
+_ONE_LINE = (
+    "white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;"
+)
+_TWO_LINES = (
+    "display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+    " overflow: hidden; overflow-wrap: anywhere;"
+)
+_CARD_NAME = "font-size: 0.85rem; font-weight: 600;"
+_CARD_META = MUTED + " font-size: 0.75rem;"
+
+
+def _thinned_text(plot_data, option):
+    """Text "Showing X of N points" for a thinned scatter, else None."""
+    total = len(plot_data.finite_points)
+    shown = len(option["series"][0]["data"])
+    if shown == total:
+        return None
+    return t(
+        "widgets.evaluation_results.points_thinned",
+        shown=f"{shown:,}",
+        n=f"{total:,}",
+    )
 
 
 @solara.component
@@ -206,12 +232,16 @@ def _PredObsCard(
     eval_key,
     active_tab,
     prediction_key=None,
+    title_parts=None,
 ):
     """One map's card: the interactive scatter, or the PNG fallback ladder.
 
-    The card header always names the map and, when the PNG exists, offers it as
-    a download — the PNG stays the offline/report artifact. Below it, the
-    fallback ladder (all non-fatal):
+    The header names the map: family chip + run name over a muted
+    "dataset · target" line when ``title_parts`` resolved, else the joined
+    ``label``, centered. Under the figure sits a caption-style download of the
+    PNG when it exists — the PNG stays the offline/report artifact — preceded
+    by a "showing X of N points" line when the scatter was thinned. In
+    between, the fallback ladder (all non-fatal):
 
     * a DRAWABLE option -> the interactive ECharts scatter;
     * (a) a point CSV this run RECORDED that is gone or unreadable -> PNG
@@ -345,26 +375,34 @@ def _PredObsCard(
     with solara.Column(
         style=f"gap: 6px; width: {PRED_OBS_SQUARE_HEIGHT};" " max-width: 100%;"
     ):
-        with solara.Row(
-            style="justify-content: space-between;" " align-items: center; gap: 8px;"
-        ):
-            solara.Text(label, style="font-size: 0.85rem; font-weight: 600;")
-            if png_exists:
-                # An explicit child button rather than FileDownload's default
-                # one: the default is a full-size raised button, which on a
-                # 380px card crowds the chart below it.
-                with solara.FileDownload(
-                    lambda p=png_path: p.read_bytes(),
-                    filename=png_path.name,
-                    mime_type="image/png",
+        with solara.Column(gap="0px", style="min-width: 0; text-align: center;"):
+            if title_parts:
+                family, run, meta = title_parts
+                with solara.Row(
+                    style="align-items: center; justify-content: center; gap: 6px;"
+                    " flex-wrap: nowrap; min-width: 0;"
                 ):
-                    solara.Button(
-                        t("widgets.evaluation_results.download_png"),
-                        icon_name="mdi-cloud-download-outline",
-                        text=True,
-                        small=True,
-                        style="font-size: 0.7rem; letter-spacing: 0;",
+                    rv.Chip(children=[family], x_small=True, class_="flex-shrink-0")
+                    rv.Html(
+                        tag="div",
+                        children=[run],
+                        attributes={"title": run},
+                        style_=_CARD_NAME + _ONE_LINE,
                     )
+                if meta:
+                    rv.Html(
+                        tag="div",
+                        children=[meta],
+                        attributes={"title": meta},
+                        style_=_CARD_META + _ONE_LINE,
+                    )
+            else:
+                rv.Html(
+                    tag="div",
+                    children=[label],
+                    attributes={"title": label},
+                    style_=_CARD_NAME + _TWO_LINES,
+                )
         if option is not None:
             EChartsChart(
                 option=option,
@@ -396,10 +434,33 @@ def _PredObsCard(
             solara.Info(
                 t("widgets.evaluation_results.missing_figure", path=str(png_path))
             )
+        thinned = _thinned_text(plot_data, option) if option is not None else None
+        if thinned:
+            rv.Html(
+                tag="div",
+                children=[thinned],
+                style_=_CARD_META + " text-align: center;",
+            )
+        if png_exists:
+            # A caption-style link under the figure: an explicit child button
+            # rather than FileDownload's default full-size raised one.
+            with solara.Row(style="justify-content: center;"):
+                with solara.FileDownload(
+                    lambda p=png_path: p.read_bytes(),
+                    filename=png_path.name,
+                    mime_type="image/png",
+                ):
+                    solara.Button(
+                        t("widgets.evaluation_results.download_png"),
+                        icon_name="mdi-download",
+                        text=True,
+                        small=True,
+                        style=MUTED + " font-size: 0.7rem; letter-spacing: 0;",
+                    )
 
 
 @solara.component
-def _FiguresTab(record, eval_key=None, active_tab=None):
+def _FiguresTab(record, eval_key=None, active_tab=None, project=None):
     """Interactive predicted-vs-observed scatter (one card per map).
 
     One chart card per prediction at a user-chosen cell size — the same
@@ -452,7 +513,10 @@ def _FiguresTab(record, eval_key=None, active_tab=None):
         key=map_label,
     )
     shown = 0
-    with solara.Row(style="flex-wrap: wrap; gap: 16px; align-items: flex-start;"):
+    with solara.Row(
+        style="flex-wrap: wrap; gap: 24px 16px; align-items: flex-start;"
+        " margin-top: 16px;"
+    ):
         for row in rows:
             prediction_key = row.get("prediction")
             if row.get("fig_path"):
@@ -481,6 +545,9 @@ def _FiguresTab(record, eval_key=None, active_tab=None):
                 eval_key=eval_key,
                 active_tab=active_tab,
                 prediction_key=prediction_key,
+                title_parts=map_title_parts(
+                    row, project.value if project is not None else None
+                ),
             )
     if not shown:
         solara.Info(t("widgets.evaluation_results.no_figures_info"))
@@ -543,7 +610,10 @@ def EvaluationTableDialog(project, eval_key, on_close):
                             _ChartsTab(record=record, eval_key=eval_key)
                         with rv.TabItem():
                             _FiguresTab(
-                                record=record, eval_key=eval_key, active_tab=active_tab
+                                record=record,
+                                eval_key=eval_key,
+                                active_tab=active_tab,
+                                project=project,
                             )
                 elif record is not None:
                     solara.Info(t("widgets.evaluation_results.no_indices_info"))

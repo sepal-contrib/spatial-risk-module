@@ -9,7 +9,8 @@ The headline assertion is ``test_scatter_coordinates_are_exactly_the_saved_csv
 _values``: the coordinates the chart plots must be the *exact* floats sitting in
 ``pred_obs_*.csv``. That is the whole point of the migration — the interactive
 chart and the archived PNG are two renderings of one frozen table, and any
-rounding, resampling or downsampling between them would make the two disagree.
+rounding or resampling between them would make the two disagree. (Dense runs draw
+a subset of real rows — see the thinning tests — never altered values.)
 
 That assertion reads the expected values with ``float()`` on the raw file TEXT,
 never with a second ``pd.read_csv``. pandas' default C float parser is fast but
@@ -242,36 +243,60 @@ def test_scatter_coordinates_are_exactly_the_saved_csv_values(tmp_path):
     assert plotted == _csv_floats(csv_path, "ndefor_obs_ha", "ndefor_pred_ha")
 
 
-def test_every_saved_point_is_plotted(tmp_path):
-    """No downsampling, ever — not even above the large-mode threshold.
-
-    Large mode changes HOW the points are drawn (one batched canvas call), never
-    how many there are. Dropping points would quietly redraw the model's error
-    distribution, so the count is pinned on both sides of the threshold.
-
-    Point count is deliberately several multiples past the threshold, not
-    ``threshold + 500``: a cap-style downsample ("keep the first N") only shows
-    up when the data is bigger than a cap someone would plausibly pick. The
-    first and last rows are asserted too, so truncation from either end is
-    caught by value and not only by count.
-    """
+def test_up_to_the_thin_threshold_every_saved_point_is_plotted(tmp_path):
+    """At or below ``PRED_OBS_THIN_POINT_COUNT`` nothing is dropped."""
     from gui.scripts.evaluation_echarts import (
-        PRED_OBS_LARGE_POINT_COUNT,
+        PRED_OBS_THIN_POINT_COUNT,
         load_pred_obs_plot_data,
         pred_obs_scatter_option,
     )
 
-    n = 5 * PRED_OBS_LARGE_POINT_COUNT + 1  # 10001 — past 5000 and 10000
+    n = PRED_OBS_THIN_POINT_COUNT
     obs = [float(i) for i in range(n)]
     pred = [float(i) * 1.1 for i in range(n)]
-    csv_path, record = _saved(tmp_path, obs=obs, pred=pred)
+    _, record = _saved(tmp_path, obs=obs, pred=pred)
     plot_data = load_pred_obs_plot_data(record, "GLM", "d1", 300)
     values = _scatter(pred_obs_scatter_option(plot_data))["data"]
 
     assert len(values) == n
-    assert (values[0][0], values[0][1]) == (obs[0], pred[0])
     assert (values[-1][0], values[-1][1]) == (obs[-1], pred[-1])
-    assert csv_path.exists()
+
+
+def test_a_dense_scatter_keeps_one_real_point_per_bin(tmp_path):
+    """Past the threshold: one exact CSV row per occupied bin, outliers kept.
+
+    Thinning must never invent or round a value (each drawn row is a real
+    row, tooltip columns included), must keep a lone outlier, and must leave
+    the annotation's ``n`` at the full cell count like the PNG.
+    """
+    from gui.scripts.evaluation_echarts import (
+        PRED_OBS_THIN_BINS,
+        PRED_OBS_THIN_POINT_COUNT,
+        pred_obs_annotation,
+        pred_obs_scatter_option,
+    )
+
+    n = 3 * PRED_OBS_THIN_POINT_COUNT
+    # A dense blob near the origin plus one far outlier.
+    obs = [(i % 97) / 1000.0 for i in range(n)] + [500.0]
+    pred = [(i % 89) / 1000.0 for i in range(n)] + [3.0]
+    frame, plot_data = _loaded(tmp_path, obs=obs, pred=pred)
+    values = _scatter(pred_obs_scatter_option(plot_data))["data"]
+
+    assert len(values) < PRED_OBS_THIN_POINT_COUNT
+    assert len(values) <= PRED_OBS_THIN_BINS**2
+    rows = {
+        (c, o, p, f)
+        for c, o, p, f in zip(
+            frame["cell"],
+            frame["ndefor_obs_ha"],
+            frame["ndefor_pred_ha"],
+            frame["nfor_obs_ha"],
+        )
+    }
+    assert all((v[2], v[0], v[1], v[3]) in rows for v in values)
+    assert [500.0, 3.0] in [v[:2] for v in values]
+    assert f"n = {n + 1}" in pred_obs_annotation(plot_data)
 
 
 def test_scatter_values_carry_cell_forest_and_residual(tmp_path):

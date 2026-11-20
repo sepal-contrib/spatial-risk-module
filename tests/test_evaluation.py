@@ -2880,3 +2880,90 @@ def test_run_scoped_artifact_records_defrate_csv(tmp_path, monkeypatch):
     assert (
         _Path(art.defrate_csv).parent == tmp_path / "evaluation" / "truth" / "abcd1234"
     )
+
+
+def _html_texts(rc):
+    """Every plain string an ``rv.Html`` in the render holds."""
+    import ipyvuetify as vw
+
+    return [
+        c
+        for w in rc.find(vw.Html).widgets
+        for c in (w.children or [])
+        if isinstance(c, str)
+    ]
+
+
+def test_figures_card_header_splits_family_run_dataset_and_target(tmp_path):
+    """A resolvable prediction gets a chip + run name over "dataset · target"."""
+    import ipyvuetify as vw
+    import solara
+
+    _write_points(
+        tmp_path / "pred_obs_GLM_glm_v1_validation_300.csv", obs=[1.0], pred=[1.0]
+    )
+    key = "glm_v1__validation_y2001"  # the storage key, not the registry key
+    pred = types.SimpleNamespace(
+        model_key="glm_v1",
+        name=None,
+        window=None,
+        dataset_name="validation",
+        storage_key=lambda: key,
+    )
+    project = types.SimpleNamespace(
+        predictions={"glm_v1__validation": pred},
+        get_dataset=lambda name: types.SimpleNamespace(
+            target=types.SimpleNamespace(name="loss_2020")
+        ),
+    )
+    record = _figures_record(
+        indices=[_fig_index_row(prediction=key, model="GLM_glm_v1")],
+        csv_path=tmp_path / "indices_all.csv",
+    )
+    rc, _ = _render_figures_tab(record=record, project=solara.reactive(project))
+
+    assert [w.children for w in rc.find(vw.Chip).widgets] == [["GLM"]]
+    texts = _html_texts(rc)
+    assert "glm_v1" in texts
+    assert "validation · loss_2020" in texts
+    rc.close()
+
+
+def test_figures_card_header_falls_back_to_the_joined_label(tmp_path):
+    """A deleted prediction (or no project) keeps today's '<model> — <period>'."""
+    import ipyvuetify as vw
+
+    from gui.scripts.evaluation_charts import map_label
+
+    _write_points(tmp_path / "pred_obs_GLM_validation_300.csv", obs=[1.0], pred=[1.0])
+    row = _fig_index_row(prediction="gone__validation")
+    record = _figures_record(indices=[row], csv_path=tmp_path / "indices_all.csv")
+    rc, _ = _render_figures_tab(record=record)
+
+    assert not rc.find(vw.Chip).widgets
+    assert map_label(row) in _html_texts(rc)
+    rc.close()
+
+
+def test_figures_card_says_when_the_scatter_is_thinned(tmp_path):
+    """Past the threshold "showing X of N"; below it nothing (n is on the chart)."""
+    from gui.i18n import t as _t
+    from gui.scripts.evaluation_echarts import PRED_OBS_THIN_POINT_COUNT
+
+    n = PRED_OBS_THIN_POINT_COUNT + 1
+    _write_points(
+        tmp_path / "pred_obs_GLM_validation_300.csv", obs=[1.0] * n, pred=[1.0] * n
+    )
+    record = _figures_record(
+        indices=[_fig_index_row()], csv_path=tmp_path / "indices_all.csv"
+    )
+    rc, _ = _render_figures_tab(record=record)
+    assert _t(
+        "widgets.evaluation_results.points_thinned", shown="1", n=f"{n:,}"
+    ) in _html_texts(rc)
+    rc.close()
+
+    _write_points(tmp_path / "pred_obs_GLM_validation_300.csv", obs=[1.0], pred=[1.0])
+    rc, _ = _render_figures_tab(record=record)
+    assert not [x for x in _html_texts(rc) if x.endswith("points")]
+    rc.close()

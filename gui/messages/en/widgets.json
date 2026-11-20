@@ -66,7 +66,8 @@
       "chart_residual": "Residual",
       "chart_csize_title": "Grid cells of {csize_ha} ha",
       "chart_unavailable_warning": "Interactive chart unavailable — showing the saved image instead.",
-      "download_png": "Download plot"
+      "download_png": "Download plot",
+      "points_thinned": "Showing {shown} of {n} points"
     },
     "dataset_list": {
       "title": "Datasets",
