@@ -8,8 +8,10 @@ The widget layer renders it; nothing here imports solara, ipyvuetify or
 ipecharts, so the whole chart is unit-testable without a render harness.
 
 **One frozen table, two renderings.** The chart plots the exact float values
-sitting in ``pred_obs_{model}_{period}_{csize}.csv`` — no rounding, no
-resampling, and no downsampling at any point count. The PNG and this chart must
+sitting in ``pred_obs_{model}_{period}_{csize}.csv`` — no rounding and no
+resampling. Past ``PRED_OBS_THIN_POINT_COUNT`` points the chart draws a SUBSET
+(one real row per screen-sized bin, see ``_one_point_per_bin``) so the browser
+stays responsive; every drawn value is still a CSV value. The PNG and this chart must
 never disagree about what a model predicted for a cell, so the numbers travel
 from the CSV to the option untouched. That exactness depends on HOW the file is
 read: pandas' default CSV float parser is fast but not correctly rounded (it
@@ -89,9 +91,20 @@ PRED_OBS_LARGE_POINT_COUNT = 2000
 # option, so larger chunks mean fewer frames to first complete paint.
 PRED_OBS_PROGRESSIVE_CHUNK = 5000
 
+# Past this many finite points the scatter is thinned to one point per cell of a
+# PRED_OBS_THIN_BINS x PRED_OBS_THIN_BINS grid over the shared axis domain (~1.5
+# px on the 380 px card, under the 7 px marker): the default view looks the same,
+# every outlier survives, and a 200k-point run stops shipping 17.5 MB of option
+# per card. Kept points are real CSV rows, so their values and tooltips stay exact.
+PRED_OBS_THIN_POINT_COUNT = 10_000
+PRED_OBS_THIN_BINS = 200
+
 # Two caches, two very different per-entry costs — so two constants. Re-measured
 # 2026-07-21 on a 200k-point run (the realistic upper end), CPython 3.11.10 /
-# pandas 2.x:
+# pandas 2.x. These are PRE-THINNING figures: since PRED_OBS_THIN_POINT_COUNT a
+# row entry holds at most PRED_OBS_THIN_BINS**2 = 40k rows (~9 MB), so the
+# 47 MB / 94 MB / 140 MB numbers below are upper bounds that no longer occur.
+# The frame figures are unchanged (the full table is still loaded).
 #
 #   _load_cached entry   (4-column DataFrame)      6.4 MB   -> 8 x  6.4 =  51 MB
 #   _scatter_rows entry  (boxed [[float x5], ...]) 47.2 MB  -> 2 x 47.2 =  94 MB
@@ -614,10 +627,11 @@ def _scatter_rows(plot_data):
     which makes this a hit.
 
     Kept to ``SCATTER_ROWS_CACHE_SIZE`` (not the loader's size): an entry here
-    costs 7.4x the DataFrame it comes from — 47 MB at 200k points against the
-    frame's 6.4 MB — because every value is a boxed Python scalar in its own
-    list. That is also why this cache is not the multi-map dialog's protection;
-    the widget memoizes the finished option instead. See the constants block.
+    costs 7.4x the DataFrame rows it holds — 47 MB for 200k rows before
+    thinning, at most ~9 MB (40k rows) since — because every value is a boxed
+    Python scalar in its own list. That is also why this cache is not the
+    multi-map dialog's protection; the widget memoizes the finished option
+    instead. See the constants block.
 
     Values are converted through ``.tolist()`` so they are native Python floats
     and ints, never numpy scalars: the option is serialized to the frontend as
@@ -631,12 +645,27 @@ def _scatter_rows(plot_data):
     points = plot_data.finite_points
     obs = points["ndefor_obs_ha"].to_numpy(dtype="float64")
     pred = points["ndefor_pred_ha"].to_numpy(dtype="float64")
+    if len(points) > PRED_OBS_THIN_POINT_COUNT:
+        keep = _one_point_per_bin(obs, pred, plot_data.axis_min, plot_data.axis_max)
+        points, obs, pred = points.iloc[keep], obs[keep], pred[keep]
     cells = points["cell"].to_numpy(dtype="int64").tolist()
     forest = points["nfor_obs_ha"].to_numpy(dtype="float64").tolist()
     residual = (pred - obs).tolist()
     return [
         list(row) for row in zip(obs.tolist(), pred.tolist(), cells, forest, residual)
     ]
+
+
+def _one_point_per_bin(obs, pred, lo, hi):
+    """Sorted row positions keeping the first point in each grid bin."""
+    import numpy as np
+
+    bins = PRED_OBS_THIN_BINS
+    scale = bins / ((float(hi) - float(lo)) or 1.0)
+    ix = np.clip(((obs - float(lo)) * scale).astype(np.int64), 0, bins - 1)
+    iy = np.clip(((pred - float(lo)) * scale).astype(np.int64), 0, bins - 1)
+    _, first = np.unique(ix * bins + iy, return_index=True)
+    return np.sort(first)
 
 
 def pred_obs_annotation(plot_data, labels=None):
