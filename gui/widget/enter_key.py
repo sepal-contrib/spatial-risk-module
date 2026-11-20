@@ -40,13 +40,19 @@ the dialog on top:
   Enter is for the topmost one whatever the focused control is. That is the
   state a replace prompt opens in: the form's own retain-focus handler pulls
   the focus straight back to the form's first focusable (seen in the browser)
-  — a select in every real form, the Train form's info icon (a button). So the
-  listener also takes Enter in the capture phase, before that control's own
-  handler could open its menu or click it behind the prompt, and presses the
-  prompt's Replace;
+  — a select in every real form, the Train form's info icon (a button). The
+  listener then keeps Enter from that control, which would open its menu or
+  click it behind the prompt, and presses the prompt's Replace;
 * not a held key's auto-repeat (it would run on into the next dialog — Create,
   then that prompt's Replace), not an IME composition, not a modifier chord,
   and not an event something else already handled (``defaultPrevented``).
+
+The listener works in the capture phase only. Under voila and JupyterLab,
+jupyter-vuetify puts every dialog in a host element that stops ``keydown``
+from bubbling (so notebook shortcuts stay quiet while typing), and a bubble
+listener on ``document`` never hears a key pressed inside a dialog; ``solara
+run`` has no such host, so the difference shows only on SEPAL. A field that
+answers Enter itself therefore opts out with ``ENTER_OWN``.
 
 The press waits for the kernel. ipywidgets throttles each model's updates: while
 one is in flight, the field's newest value is held back in the browser until the
@@ -99,14 +105,14 @@ module.exports = {
     this.srWaiting = new Map();
     this.srNextToken = 0;
     // Capture phase: runs before the focused control's own handler, so Enter
-    // left behind the topmost dialog reaches that dialog instead.
+    // left behind the topmost dialog reaches that dialog instead. And the
+    // only phase that works under voila / JupyterLab: jupyter-vuetify stops
+    // every keydown at its dialog host, so none bubbles up to document.
     document.addEventListener("keydown", this.onKeydownCapture, true);
-    document.addEventListener("keydown", this.onEnterKeydown);
     document.addEventListener("click", this.onBackdropClick, true);
   },
   beforeDestroy() {
     document.removeEventListener("keydown", this.onKeydownCapture, true);
-    document.removeEventListener("keydown", this.onEnterKeydown);
     document.removeEventListener("click", this.onBackdropClick, true);
     this.srWaiting.clear();
   },
@@ -130,21 +136,14 @@ module.exports = {
       if (!this.isPlainEnter(e)) return;
       const top = this.topmostDialog();
       const around = e.target.closest(".v-dialog__content");
-      // Only the focus left in a dialog under the topmost one; everything
-      // else goes the normal way, below.
-      if (!top || !around || around === top) return;
-      const button = this.defaultButton(top);
-      if (!button) return;
-      e.preventDefault();
-      e.stopPropagation();
-      this.press(button);
-    },
-    onEnterKeydown(e) {
-      if (!this.isPlainEnter(e) || !this.enterIsFree(e.target)) return;
-      const top = this.topmostDialog();
+      // The focus left in a dialog under the topmost one: Enter is for the
+      // topmost, and must not reach the control behind it.
+      const stranded = top && around && around !== top;
+      if (!stranded && !this.enterIsFree(e.target)) return;
       const button = top && this.defaultButton(top);
       if (!button) return;
       e.preventDefault();
+      if (stranded) e.stopPropagation();
       this.press(button);
     },
     onBackdropClick(e) {
