@@ -376,3 +376,55 @@ def test_custom_gee_asset_roundtrips_raster_type():
 
     assert entry["source"] == "custom"
     assert entry["raster_type"] == "categorical"
+
+
+def test_local_raster_band_becomes_single_band_vrt(tmp_path, monkeypatch):
+    """A band picked from a multi-band file is exposed as a one-band VRT.
+
+    Every reader takes band 1, so the layer's path must be a file holding only
+    the picked band; editing it shows the original file and band again.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from gui.tile.variables_tile import _build_variable
+    from spatialrisk import Project
+
+    src = tmp_path / "multi.tif"
+    with rasterio.open(
+        src,
+        "w",
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 3, 1, 1),
+    ) as dst:
+        for b in (1, 2, 3):
+            dst.write(np.full((3, 4), b * 10, dtype="uint8"), b)
+    monkeypatch.setenv("SPATIAL_RISK_DATA_DIR", str(tmp_path / "data"))
+    project = Project(project_name="p")
+
+    var = _build_variable(
+        {
+            "source": "custom",
+            "type": "LocalRasterVar",
+            "name": "multi",
+            "year": None,
+            "path": src,
+            "band": 2,
+            "raster_type": RasterType.continuous,
+            "data_type": DataType.raster,
+        },
+        project,
+    )
+
+    with rasterio.open(var.path) as ds:
+        assert ds.count == 1
+        assert ds.read(1).max() == 20
+    entry = _variable_to_entry("multi", var, _FakeProject())
+    assert entry["path"] == str(src)
+    assert entry["band"] == 2
