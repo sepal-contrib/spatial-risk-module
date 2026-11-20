@@ -38,6 +38,7 @@ from gui.scripts.notify_bridge import install_task_log_handler
 from gui.scripts.project_io import (
     delete_project,
     list_project_infos,
+    list_projects,
     load_project,
     project_dir_size,
     rename_project,
@@ -64,7 +65,7 @@ from gui.tile.dataset_tile import DatasetTile
 from gui.tile.derived_map import derived_on_map
 from gui.tile.evaluation_tile import EvaluationTile, eval_jobs
 from gui.tile.inference_tile import InferenceTile, inference_jobs, preds_on_map
-from gui.tile.postprocess_tile import PostProcessTile
+from gui.tile.postprocess_tile import PostProcessTile, derived_jobs
 from gui.tile.process_tile import ProcessTile
 from gui.tile.sampling_tile import SamplingTile, samples_on_map, sampling_jobs
 from gui.tile.summary_tile import ProjectSummaryTile
@@ -220,7 +221,7 @@ def ProjectPanel(on_close=None):
     saved_count = None if scan_failed.value else len(infos.value)
 
     def existing_names() -> list:
-        return [i.name for i in list_project_infos(DATA_DIR)]
+        return list_projects(DATA_DIR)
 
     names = tuple(i.name for i in infos.value)
 
@@ -248,6 +249,10 @@ def ProjectPanel(on_close=None):
 
     def _install(name):
         """Read a saved project from disk and make it the open one. Raises."""
+        # A job still running on this project holds the copy it started with and
+        # saves it when done: over a fresh load that would undo newer work.
+        if is_writing(name):
+            raise RuntimeError(t("project.load_busy"))
         loaded = load_project(name)
         when = next((i.modified for i in infos.value if i.name == name), None)
         # Restore the saved AOI (sidecar geometry + metadata) so the map can
@@ -326,7 +331,7 @@ def ProjectPanel(on_close=None):
         try:
             rename_project(old, new)
         except FileExistsError:
-            set_rename_error(t("project.rename_exists", name=new))
+            set_rename_error(t("project.name_exists", name=new))
             return
         except Exception as exc:
             set_rename_error(str(exc))
@@ -644,14 +649,15 @@ def ProjectPanel(on_close=None):
                 )
 
     # ---- New dialog -----------------------------------------------------
-    validation = validate_project_name(new_name, existing_names()) if new_open else None
     renaming = rename_target is not None
-    # Another project already has this name (its own name is not a clash).
-    taken = bool(
-        renaming
-        and validation
-        and validation.exists
-        and validation.cleaned != rename_target
+    validation = (
+        validate_project_name(
+            new_name,
+            # A project's own name is not a clash with itself.
+            [n for n in existing_names() if n != rename_target],
+        )
+        if new_open
+        else None
     )
     with rv.Dialog(
         v_model=new_open, on_v_model=set_new_open, max_width="400px", eager=True
@@ -674,19 +680,9 @@ def ProjectPanel(on_close=None):
                 )
                 if validation and new_name and not validation.valid:
                     solara.Error(validation.error)
-                if taken:
-                    solara.Error(t("project.rename_exists", name=validation.cleaned))
                 if renaming and rename_error:
                     solara.Error(rename_error)
-                if (
-                    not renaming
-                    and validation
-                    and validation.valid
-                    and validation.exists
-                ):
-                    solara.Warning(
-                        t("project.dialog_new_exists_warning", name=validation.cleaned)
-                    )
+                if not renaming and validation and validation.exists:
                     solara.Button(
                         t("project.dialog_new_load_instead"),
                         text=True,
@@ -706,7 +702,6 @@ def ProjectPanel(on_close=None):
                     color="primary",
                     small=True,
                     disabled=not (validation and validation.valid)
-                    or taken
                     or (renaming and validation.cleaned == rename_target),
                     classes=[ENTER_DEFAULT],  # Enter presses it
                 )
@@ -994,7 +989,7 @@ def Page():
             return
         from spatialrisk.project import Project
 
-        name = aoi_project_name(aoi.name, datetime.now())
+        name = aoi_project_name(aoi.name, datetime.now(), list_projects(DATA_DIR))
         app_state.project.set(Project(project_name=name))
 
     solara.use_effect(sync_project_from_aoi, [app_state.aoi_result.value])
@@ -1043,6 +1038,7 @@ def Page():
     # previous project's runs need clearing on switch.
     def reset_jobs_on_load():
         train_jobs.set([])
+        derived_jobs.set([])
         inference_jobs.set([])
         eval_jobs.set([])
         sampling_jobs.set([])

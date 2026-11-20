@@ -82,3 +82,22 @@ def test_rename_from_the_manage_list(tmp_path, monkeypatch):
         assert titles == ["beta", "other"]  # the open Manage list followed
     finally:
         rc.close()
+
+
+def test_new_refuses_a_saved_projects_name(tmp_path, monkeypatch):
+    """A taken name cannot be created; the form offers to load that project."""
+    box, rc = _panel(tmp_path, monkeypatch)
+    try:
+        _button(rc, t("project.button_new_project")).fire_event("click", None)
+        field = next(
+            f
+            for f in rc.find(vw.TextField).widgets
+            if f.label == t("project.dialog_new_name_label")
+        )
+        field.v_model = "alpha"
+        assert _button(rc, t("common.create")).disabled
+        assert _button(rc, t("project.dialog_new_load_instead")) is not None
+        field.v_model = "gamma"
+        assert not _button(rc, t("common.create")).disabled
+    finally:
+        rc.close()

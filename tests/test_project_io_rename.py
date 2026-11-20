@@ -80,3 +80,16 @@ def test_rename_refuses_unsafe_names(tmp_path, bad):
         with pytest.raises(ValueError):
             rename_project(old, new, tmp_path)
     assert list_projects(tmp_path) == ["ok"]
+
+
+def test_a_copied_folder_opens_under_its_own_name(tmp_path, monkeypatch):
+    """Project.load names the project after its folder, not the stored name."""
+    import spatialrisk.project as project_module
+
+    folder = tmp_path / "copy"
+    folder.mkdir()
+    (folder / "copy_project.json").write_text(
+        json.dumps({"project_name": "original"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(project_module, "downloads_folder", tmp_path)
+    assert project_module.Project.load("copy").project_name == "copy"

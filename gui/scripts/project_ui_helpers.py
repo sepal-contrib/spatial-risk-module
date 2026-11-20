@@ -105,8 +105,10 @@ class NameValidation:
 def validate_project_name(name: str, existing_names: list[str]) -> NameValidation:
     """Validate a new project name.
 
-    Non-empty and filesystem-safe ([A-Za-z0-9 _-]). ``exists`` is informational
-    (a warning, not an error).
+    Non-empty, filesystem-safe ([A-Za-z0-9 _-]) and not taken: a second project
+    under a saved one's name would replace its list of layers and models on the
+    first save. ``exists`` says the error is that clash, so the caller can offer
+    to load the project instead.
     """
     cleaned = name.strip()
     if not cleaned:
@@ -118,7 +120,11 @@ def validate_project_name(name: str, existing_names: list[str]) -> NameValidatio
             False,
             t("project.validation_invalid_chars"),
         )
-    return NameValidation(True, cleaned, cleaned in existing_names, None)
+    if cleaned in existing_names:
+        return NameValidation(
+            False, cleaned, True, t("project.name_exists", name=cleaned)
+        )
+    return NameValidation(True, cleaned, False, None)
 
 
 def overwrite_needed(
@@ -178,11 +184,17 @@ def delete_confirm_valid(typed: str, name: str) -> bool:
     return (typed or "").strip() == name
 
 
-def aoi_project_name(aoi_name: str, when: datetime) -> str:
+def aoi_project_name(aoi_name: str, when: datetime, existing_names=()) -> str:
     """Auto-name for a project created from an AOI selection.
 
     ``<aoi>_<yyyymmdd>`` (e.g. ``San Marino_20260623``). The date is the creation
-    moment, so the same AOI picked on different days yields distinct,
-    non-colliding project names.
+    moment, so the same AOI picked on different days yields distinct project
+    names; picked again the same day it gets ``_2``, ``_3``… rather than a saved
+    project's name, whose list of layers and models its first save would replace.
     """
-    return f"{aoi_name}_{when:%Y%m%d}"
+    base = f"{aoi_name}_{when:%Y%m%d}"
+    name, n = base, 1
+    while name in existing_names:
+        n += 1
+        name = f"{base}_{n}"
+    return name

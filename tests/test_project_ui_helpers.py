@@ -140,11 +140,12 @@ def test_validate_ok_unique():
     assert v.error is None
 
 
-def test_validate_ok_but_exists():
-    """Validate ok but exists."""
+def test_validate_refuses_a_taken_name():
+    """A saved project's name is an error: creating over it would replace it."""
     v = validate_project_name("mtq", ["mtq", "other"])
-    assert v.valid is True
+    assert v.valid is False
     assert v.exists is True
+    assert v.error
 
 
 def test_overwrite_needed():
@@ -219,3 +220,10 @@ def test_aoi_project_name_pads_month_and_day():
     """Aoi project name pads month and day."""
     when = datetime(2026, 1, 5, 0, 0, 0)
     assert aoi_project_name("amazon", when) == "amazon_20260105"
+
+
+def test_aoi_project_name_never_reuses_a_saved_name():
+    """The same area picked again the same day gets its own name."""
+    when = datetime(2026, 6, 23)
+    taken = ["San Marino_20260623", "San Marino_20260623_2"]
+    assert aoi_project_name("San Marino", when, taken) == "San Marino_20260623_3"
