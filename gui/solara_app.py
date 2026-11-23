@@ -1004,7 +1004,9 @@ def Page():
 
     def sync_project_from_aoi():
         aoi = app_state.aoi_result.value
-        if aoi is None or app_state.project.value is not None:
+        # A load sets the AOI before the project: without the restoring check
+        # the render between the two would open a new empty project first.
+        if aoi is None or app_state.project.value is not None or app_state.restoring:
             return
         from spatialrisk.project import Project
 
