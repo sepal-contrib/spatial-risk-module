@@ -29,7 +29,6 @@
     "modal": {
       "title_add": "Ajouter une variable",
       "title_edit": "Modifier la variable",
-      "submit_add": "Créer la variable",
       "submit_save": "Enregistrer",
       "source_label": "Source",
       "source_hint": "Prédéfinie = couches Earth Engine prêtes à l'emploi ; Utilisateur = votre propre raster, vecteur ou asset GEE.",

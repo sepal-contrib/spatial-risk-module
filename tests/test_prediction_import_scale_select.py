@@ -65,7 +65,7 @@ def _alerts(box):
 
 def _create(box):
     """Press the dialog's create button."""
-    label = t("tiles.inference.run_button")
+    label = t("common.add")
     btn = next(b for b in _find(box, vw.Btn) if label in str(b.children))
     btn.fire_event("click", {})
 

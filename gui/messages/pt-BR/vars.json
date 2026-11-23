@@ -29,7 +29,6 @@
     "modal": {
       "title_add": "Adicionar variável",
       "title_edit": "Editar variável",
-      "submit_add": "Criar variável",
       "submit_save": "Salvar",
       "source_label": "Origem",
       "source_hint": "Predefinida = camadas prontas do Earth Engine; Usuário = seu próprio raster, vetor ou asset do GEE.",

@@ -136,7 +136,7 @@ def SampleFormDialog(
     with CreationDialog(
         open_=open_,
         title=t("tiles.sampling.dialog_title"),
-        create_label=t("tiles.sampling.generate_button"),
+        create_label=t("common.add"),
         validate=validate,
         will_replace=will_replace,
         launch=launch,

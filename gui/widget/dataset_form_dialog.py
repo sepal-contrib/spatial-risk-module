@@ -130,9 +130,7 @@ def DatasetFormDialog(
             if duplicate_of
             else t("tiles.dataset.dialog_title_new")
         ),
-        create_label=t("common.save")
-        if is_edit
-        else t("tiles.dataset.register_button"),
+        create_label=t("common.save") if is_edit else t("common.add"),
         validate=validate,
         will_replace=will_replace,
         launch=launch,

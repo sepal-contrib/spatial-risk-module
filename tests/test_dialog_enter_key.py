@@ -193,7 +193,7 @@ def test_variable_modal_defaults_to_its_submit_button():
         handle_error=False,
     )
     try:
-        assert _label(_only_default(box)) == t("vars.modal.submit_add")
+        assert _label(_only_default(box)) == t("common.add")
     finally:
         rc.close()
 

@@ -396,6 +396,6 @@ def test_multiband_file_shows_a_band_select_and_submits_the_pick(tmp_path):
     assert [i["value"] for i in selects[0].items] == [1, 2, 3]
 
     selects[0].v_model = 3
-    add = t("vars.modal.submit_add")
+    add = t("common.add")
     next(b for b in _find(box, vw.Btn) if add in str(b.children)).click()
     assert added[0]["band"] == 3

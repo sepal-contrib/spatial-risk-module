@@ -280,7 +280,7 @@ def test_dialog_submits_each_variable_with_its_year(tmp_path):
     box, rc, submitted, open_ = _render_dialog(_project(tmp_path))
     try:
         _fill(box, "defor@2020", ["forest_gfc@2015", "roads@2021", "altitude"])
-        _click(box, t("tiles.dataset.register_button"))
+        _click(box, t("common.add"))
         assert open_.value is False
         ((entry, _key),) = submitted
         assert (entry["target"], entry["target_year"]) == ("defor", 2020)
@@ -309,7 +309,7 @@ def test_dialog_keeps_the_modal_open_without_features(tmp_path):
     box, rc, submitted, open_ = _render_dialog(_project(tmp_path))
     try:
         _fill(box, "defor@2015", [])
-        _click(box, t("tiles.dataset.register_button"))
+        _click(box, t("common.add"))
         assert not submitted
         assert open_.value is True
         assert _alert_text(box) == t("tiles.dataset.error_features_required")
@@ -326,7 +326,7 @@ def test_dialog_never_submits_the_target_as_a_feature(tmp_path):
             "defor@2015",
         ]
         _select(box, "tiles.dataset.target_variable_label").v_model = "defor@2020"
-        _click(box, t("tiles.dataset.register_button"))
+        _click(box, t("common.add"))
         ((entry, _key),) = submitted
         assert (entry["target"], entry["features"]) == ("defor", ["altitude"])
     finally:
@@ -393,7 +393,7 @@ def test_tile_registers_variables_with_different_years(tile):
     """The dataset is built with each variable at the year picked with it."""
     box, project, notifier, _ = tile
     _fill(box, "defor@2015", ["forest_gfc@2020", "roads@2016"])
-    _click(box, t("tiles.dataset.register_button"))
+    _click(box, t("common.add"))
 
     assert _dialog(box).v_model is False
     assert not _alert_text(box)
@@ -410,7 +410,7 @@ def test_tile_edit_prefills_each_variable_with_its_year(tile):
     """Edit reopens with the saved (variable, year) picks selected."""
     box, project, _, captured = tile
     _fill(box, "defor@2015", ["roads@2021"])
-    _click(box, t("tiles.dataset.register_button"))
+    _click(box, t("common.add"))
 
     captured["on_edit"]("dataset_1")
     assert _select(box, "tiles.dataset.target_variable_label").v_model == "defor@2015"
@@ -443,7 +443,7 @@ def test_tile_edit_prefills_a_single_year_feature(tile, tmp_path):
     box, project, _, captured = tile
     _add_single_year_layer(project, tmp_path)
     _fill(box, "forest_loss", ["cover", "altitude"])
-    _click(box, t("tiles.dataset.register_button"))
+    _click(box, t("common.add"))
 
     captured["on_edit"]("dataset_1")
     assert _select(box, "tiles.dataset.feature_variables_label").v_model == [
@@ -457,7 +457,7 @@ def test_tile_edit_prefills_a_single_year_target(tile, tmp_path):
     box, project, _, captured = tile
     _add_single_year_layer(project, tmp_path)
     _fill(box, "cover", ["altitude"])
-    _click(box, t("tiles.dataset.register_button"))
+    _click(box, t("common.add"))
 
     captured["on_edit"]("dataset_1")
     assert _select(box, "tiles.dataset.target_variable_label").v_model == "cover"
@@ -468,7 +468,7 @@ def test_tile_reports_a_builder_failure_as_a_toast(tile, tmp_path):
     box, project, notifier, _ = tile
     (tmp_path / "altitude.tif").unlink()
     _fill(box, "forest_loss", ["altitude"])
-    _click(box, t("tiles.dataset.register_button"))
+    _click(box, t("common.add"))
 
     assert _dialog(box).v_model is False
     assert not _alert_text(box)

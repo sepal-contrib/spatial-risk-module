@@ -74,7 +74,7 @@ def DerivedLayerDialog(project, open_, on_submit: Callable[[dict], None]):
     with CreationDialog(
         open_=open_,
         title=t("tiles.postprocess.dialog_title"),
-        create_label=t("tiles.postprocess.generate_button"),
+        create_label=t("common.add"),
         validate=validate,
         will_replace=will_replace,
         launch=launch,

@@ -146,7 +146,7 @@ def test_model_dialog_rejects_a_name_that_is_still_training():
     try:
         _select(box, t("tiles.train.model_select_label")).v_model = "rf"
         _text_field(box, t("tiles.train.model_name_label")).v_model = "twice"
-        _click(box, t("tiles.train.train_button"))
+        _click(box, t("common.add"))
         assert not submitted
         assert _alert_text(box) == t("tiles.train.error_name_running", name="twice")
     finally:
@@ -179,7 +179,7 @@ def test_prediction_dialog_rejects_a_name_that_is_still_running(tmp_path):
     )
     try:
         _text_field(box, t("tiles.inference.pred_name_label")).v_model = "twice"
-        _click(box, t("tiles.inference.run_button"))
+        _click(box, t("common.add"))
         assert not submitted
         assert _alert_text(box) == t("tiles.inference.error_name_running", name="twice")
     finally:
@@ -214,7 +214,7 @@ def test_allocation_dialog_rejects_a_name_that_is_still_running(tmp_path):
     )
     try:
         _text_field(box, t("toolbox.allocation.field_name")).v_model = "twice"
-        _click(box, t("toolbox.allocation.run"))
+        _click(box, t("common.add"))
         assert not launched
         assert _alert_text(box) == t(
             "toolbox.allocation.error_name_running", name="twice"
@@ -240,7 +240,7 @@ def test_variable_modal_double_submit_adds_once():
     )
     try:
         _select(box, t("vars.modal.predefined_variable_label")).v_model = "altitude"
-        _click(box, t("vars.modal.submit_add"), times=2)
+        _click(box, t("common.add"), times=2)
         assert len(added) == 1
     finally:
         rc.close()

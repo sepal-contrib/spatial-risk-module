@@ -88,7 +88,7 @@ def EvaluationFormDialog(project, open_, on_submit: Callable[[dict], None]):
     with CreationDialog(
         open_=open_,
         title=t("tiles.evaluation.dialog_title"),
-        create_label=t("tiles.evaluation.run_button"),
+        create_label=t("common.add"),
         validate=validate,
         will_replace=lambda: None,
         launch=launch,

@@ -1,6 +1,7 @@
 {
   "common": {
     "save": "Guardar",
+    "add": "Añadir",
     "load": "Cargar",
     "cancel": "Cancelar",
     "create": "Crear",

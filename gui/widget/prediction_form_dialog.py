@@ -355,7 +355,7 @@ def PredictionFormDialog(
     with CreationDialog(
         open_=open_,
         title=t("tiles.inference.dialog_title"),
-        create_label=t("tiles.inference.run_button"),
+        create_label=t("common.add"),
         validate=validate,
         will_replace=will_replace,
         launch=launch,

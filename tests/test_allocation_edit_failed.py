@@ -619,7 +619,7 @@ def test_submitting_an_edit_removes_the_old_failed_job_row(monkeypatch, tmp_path
         try:
             _icon_button(box, "mdi-pencil-outline").fire_event("click", {})
 
-            run_label = t("toolbox.allocation.run")
+            run_label = t("common.save")
             run_btn = next(b for b in _find(box, vw.Btn) if run_label in b.children)
             run_btn.fire_event("click", {})
 
