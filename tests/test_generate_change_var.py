@@ -104,25 +104,46 @@ def test_gain_naming(tmp_path):
     assert m_lrv.call_args.kwargs["name"] == "gain_forest_gfc_2015_2020"
 
 
-def test_idempotent_existing_key_returns_existing_no_save(tmp_path):
-    """An existing layer is handed back without computing or saving."""
+def test_existing_layer_is_recomputed_not_reused(tmp_path):
+    """A registered layer may come from an older grid or older inputs."""
     p = _proj(tmp_path)
     sentinel = MagicMock(name="already_there")
     p.processed_variables["loss_forest_gfc_2015_2020"] = sentinel
     out, m_proc, _ = _generate(p, "loss", "forest_gfc_2015", "forest_gfc_2020")
-    assert out is sentinel
-    m_proc.assert_not_called()
-    assert p.saved is False
+    assert out is not sentinel
+    m_proc.assert_called_once()
+    out.add_as_processed.assert_called_once_with(auto_save=False)
+    assert p.saved is True
 
 
-def test_existing_tif_reused_but_still_registered(tmp_path):
-    """An existing file is registered without computing."""
+def test_existing_tif_is_overwritten(tmp_path):
+    """A file left by a run that died mid-write must not be registered as is."""
     p = _proj(tmp_path)
     (tmp_path / "loss_forest_gfc_2015_2020.tif").touch()
     out, m_proc, _ = _generate(p, "loss", "forest_gfc_2015", "forest_gfc_2020")
-    m_proc.assert_not_called()
+    m_proc.assert_called_once()
     out.add_as_processed.assert_called_once_with(auto_save=False)
     assert p.saved is True
+
+
+def test_dialog_asks_before_recomputing_an_existing_change_layer(tmp_path):
+    """Only a loss or gain that is already registered asks to be replaced."""
+    from gui.widget.derived_layer_dialog import replaced_change_key
+
+    p = _proj(tmp_path)
+    loss = {
+        "op": "loss",
+        "start_key": "forest_gfc_2015",
+        "end_key": "forest_gfc_2020",
+        "pp_key": "",
+    }
+    assert replaced_change_key(p, loss) is None
+    p.processed_variables["loss_forest_gfc_2015_2020"] = MagicMock()
+    assert replaced_change_key(p, loss) == "loss_forest_gfc_2015_2020"
+    assert replaced_change_key(p, {**loss, "op": "gain"}) is None
+    dist = {"op": "dist", "start_key": "", "end_key": "", "pp_key": "altitude"}
+    assert replaced_change_key(p, dist) is None
+    assert replaced_change_key(None, loss) is None
 
 
 def test_rejects_bad_op(tmp_path):
