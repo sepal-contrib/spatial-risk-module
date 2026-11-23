@@ -179,6 +179,7 @@ def DerivedVariableList(
     jobs=None,
     on_dismiss: Optional[Callable[[str], None]] = None,
     toggling_keys: frozenset = frozenset(),
+    on_open: Optional[Callable[[str], None]] = None,
 ):
     """Derived (processed) variables, plus the layers still being generated.
 
@@ -194,7 +195,8 @@ def DerivedVariableList(
     derived layer is a row from the moment its form is submitted instead of
     appearing out of nowhere minutes later. A job row has no product to act on
     (and the GDAL pass behind it is not cancellable), so it carries no actions
-    until it fails, when ``on_dismiss`` lets the user clear it.
+    until it fails, when ``on_dismiss`` lets the user clear it. ``on_open``
+    (the processed key) puts a details action on every product row.
     """
     p = project.value
     if p is None:
@@ -219,6 +221,10 @@ def DerivedVariableList(
                         "is_on": r["key"] in on_map,
                         "loading": r["key"] in toggling_keys,
                     }
+                )
+            if on_open is not None:
+                actions.append(
+                    {"kind": "open", "on_click": lambda *_, k=r["key"]: on_open(k)}
                 )
             if on_remove is not None:
                 actions.append(

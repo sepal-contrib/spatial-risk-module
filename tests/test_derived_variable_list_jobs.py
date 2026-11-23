@@ -128,6 +128,16 @@ def test_product_rows_keep_their_actions_and_ready_status():
     assert [c["status"] for c in status_cells] == ["ready"]
 
 
+def test_product_rows_offer_details_and_job_rows_do_not():
+    """The info action opens a product row by its key; a job has no product."""
+    opened = []
+    rows = _captured_rows(_project_with_one_derived(), [_job()], on_open=opened.append)
+    assert [a["kind"] for a in rows[0]["actions"]] == ["map_toggle", "open", "delete"]
+    assert rows[1]["actions"] == []
+    rows[0]["actions"][1]["on_click"]()
+    assert opened == ["loss_forest_2010_2015"]
+
+
 def test_a_job_row_sits_after_the_products():
     """Rows stay in creation order: new work appends below what is done."""
     rows = _captured_rows(_project_with_one_derived(), jobs=[_job()])

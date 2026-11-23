@@ -12,6 +12,7 @@ t("common.cancel")  # warm the translator before the first render
 
 from gui.widget.variable_details_dialog import (  # noqa: E402
     VariableDetailsDialog,
+    derived_details,
     harmonized_details,
 )
 from spatialrisk.harmonization import HarmonizationStatus  # noqa: E402
@@ -118,6 +119,92 @@ def test_gone_rows_have_no_details():
     assert harmonized_details(_project(None), "nope") is None
 
 
+def _derived_project():
+    raw = {
+        "forest_2020": _named("LocalRasterVar", name="forest", year=2020),
+        "forest_2024": _named("LocalRasterVar", name="forest", year=2024),
+        "roads": _named("LocalRasterVar", name="roads", year=None),
+    }
+    processed = {
+        "forest_edge_2020": _named(
+            "LocalRasterVar",
+            name="forest_edge",
+            year=2020,
+            processing_history=["reprojected_matched", "edge"],
+            tags=[],
+            path="/x/out/forest_edge_2020.tif",
+        ),
+        "loss_forest_2020_2024": _named(
+            "LocalRasterVar",
+            name="loss_forest_2020_2024",
+            year=None,
+            processing_history=[],
+            tags=["loss", "change", "2020_2024"],
+            path="/x/out/loss.tif",
+        ),
+        "loss_forest_2020_2024_dist": _named(
+            "LocalRasterVar",
+            name="loss_forest_2020_2024_dist",
+            year=None,
+            processing_history=["dist"],
+            tags=["loss", "change", "2020_2024"],
+            path=None,
+        ),
+    }
+    return SimpleNamespace(raw_variables=raw, processed_variables=processed)
+
+
+def test_derived_edge_shows_its_operation_source_and_year():
+    """An edge layer: the source the list names, the inherited year, the path."""
+    details = derived_details(_derived_project(), "forest_edge_2020")
+    assert details.name == "forest_edge (2020)"
+    rows = dict(details.rows)
+    assert rows[t(K + "operation")] == t("tiles.postprocess.op_label_edge")
+    assert rows[t(K + "inputs")] == ["forest (2020)"]
+    assert rows[t(K + "years")] == [2020]
+    assert rows[t(K + "processing_steps")] == ["reprojected_matched", "edge"]
+    assert rows[t(K + "file_path")] == "/x/out/forest_edge_2020.tif"
+
+
+def test_derived_change_layer_names_both_inputs_and_years():
+    """A loss layer: both layers and both years, read off its name."""
+    rows = dict(derived_details(_derived_project(), "loss_forest_2020_2024").rows)
+    assert rows[t(K + "operation")] == t("tiles.postprocess.op_label_loss")
+    assert rows[t(K + "inputs")] == ["forest (2020)", "forest (2024)"]
+    assert rows[t(K + "years")] == [2020, 2024]
+
+
+def test_distance_of_a_loss_layer_is_a_distance():
+    """The history wins over the inherited loss name and tags."""
+    p = _derived_project()
+    rows = dict(derived_details(p, "loss_forest_2020_2024_dist").rows)
+    assert rows[t(K + "operation")] == t("tiles.postprocess.op_label_dist")
+    assert rows[t(K + "years")] is None
+    assert rows[t(K + "file_path")] is None
+    assert derived_details(p, "nope") is None
+    assert derived_details(None, "forest_edge_2020") is None
+
+
+def test_dialog_shows_a_derived_row():
+    """``kind="derived"`` reads the processed key."""
+    _, rc = reacton.render(
+        VariableDetailsDialog(
+            project=solara.reactive(_derived_project()),
+            kind="derived",
+            key="loss_forest_2020_2024",
+            on_close=lambda: None,
+        ),
+        handle_error=False,
+    )
+    try:
+        assert rc.find(vw.Dialog).widget.v_model is True
+        fields = {f.label: f.v_model for f in rc.find(vw.TextField).widgets}
+        assert fields[t(K + "inputs")] == "forest (2020), forest (2024)"
+        assert fields[t(K + "years")] == "2020, 2024"
+    finally:
+        rc.close()
+
+
 def test_dialog_never_opens_a_file(monkeypatch):
     """Rendering reads the project only: the paths here do not exist."""
     import builtins
@@ -130,6 +217,7 @@ def test_dialog_never_opens_a_file(monkeypatch):
     monkeypatch.setattr(rasterio, "open", _boom)
     monkeypatch.setattr(builtins, "open", _boom)
     harmonized_details(_project(_output()), "slope_2020", CURRENT)
+    derived_details(_derived_project(), "forest_edge_2020")
 
 
 def test_dialog_renders_the_rows_and_closes():

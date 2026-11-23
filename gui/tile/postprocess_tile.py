@@ -21,6 +21,7 @@ from gui.tile.derived_map import (
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.derived_layer_dialog import CHANGE_OPS, DerivedLayerDialog
 from gui.widget.help import InfoButton
+from gui.widget.variable_details_dialog import DERIVED, VariableDetailsDialog
 from gui.widget.variable_list import DerivedVariableList
 from spatialrisk.variables.file_cleanup import FilePlan
 
@@ -126,6 +127,8 @@ def PostProcessTile(project, map_=None, legend_port=None):
     pending_remove, set_pending_remove = solara.use_state(None)
     # Reset for every removal — see the same state in Step 3.
     delete_files, set_delete_files = solara.use_state(False)
+    # The row whose read-only Details dialog is open.
+    details_key, set_details_key = solara.use_state(None)
 
     p = project.value
 
@@ -239,6 +242,7 @@ def PostProcessTile(project, map_=None, legend_port=None):
             on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
             jobs=derived_jobs,
             on_dismiss=dismiss_derived_job,
+            on_open=set_details_key,
         )
 
     DerivedLayerDialog(project=project, open_=dialog_open, on_submit=on_submit)
@@ -264,4 +268,10 @@ def PostProcessTile(project, map_=None, legend_port=None):
         on_checkbox=set_delete_files,
         details=_files.details,
         note=_files.note,
+    )
+    VariableDetailsDialog(
+        project=project,
+        kind=DERIVED,
+        key=details_key,
+        on_close=lambda: set_details_key(None),
     )

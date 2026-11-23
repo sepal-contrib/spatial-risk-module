@@ -1,10 +1,12 @@
-"""Read-only details of one Harmonization row.
+"""Read-only details of one Harmonization or Derived-layers row.
 
-The field selection is a plain function (``harmonized_details``) so it is
-tested without rendering. It reads only what the project already holds: no
-file is opened, so rendering never waits on the disk.
+The field selection lives in plain functions (``harmonized_details`` and
+``derived_details``) so it is tested without rendering. They read only what
+the project already holds: no file is opened, so rendering never waits on
+the disk.
 """
 
+import re
 from typing import Callable, List, NamedTuple, Optional, Tuple
 
 import reacton.ipyvuetify as rv
@@ -13,6 +15,7 @@ import solara
 from gui.i18n import t
 from gui.scripts.variable_labels import year_label
 from gui.widget.details_fields import ro_field
+from gui.widget.variable_list import derived_source_key
 from spatialrisk.harmonization import (
     expected_raster_type,
     lacks_categorical_levels,
@@ -24,6 +27,15 @@ from spatialrisk.harmonization import (
 DEFAULT_RESAMPLING = {"categorical": "nearest", "continuous": "bilinear"}
 #: Its fallback when the raster type is unknown.
 FALLBACK_RESAMPLING = "nearest"
+
+HARMONIZED = "harmonized"
+DERIVED = "derived"
+
+_CHANGE_OPS = ("loss", "gain")
+_LAYER_OPS = ("edge", "dist")
+# A change layer's name (``process_actions.change_output_name``):
+# ``{op}_{start}_{y1}_{y2}`` or ``{op}_{start}_{y1}_{end}_{y2}``.
+_CHANGE_NAME = re.compile(r"(.+)_(\d{4})_(?:(.+)_)?(\d{4})")
 
 _K = "widgets.variable_details."
 
@@ -113,19 +125,87 @@ def harmonized_details(project, key, status=None) -> Optional[VariableDetails]:
     return VariableDetails(name, rows)
 
 
+def derived_operation(product) -> Optional[str]:
+    """The operation a derived layer came from: loss, gain, edge or dist.
+
+    An edge or distance step in the history wins: a distance computed from a
+    loss layer keeps the loss name and tags but is a distance.
+    """
+    name = getattr(product, "name", "") or ""
+    history = getattr(product, "processing_history", None) or []
+    for step in reversed(history):
+        if step in _LAYER_OPS:
+            return step
+    tags = getattr(product, "tags", None) or []
+    for op in _CHANGE_OPS:
+        if op in tags or name.startswith(f"{op}_"):
+            return op
+    for op in _LAYER_OPS:
+        if name.endswith(f"_{op}"):
+            return op
+    return None
+
+
+def derived_details(project, key) -> Optional[VariableDetails]:
+    """The details of the Derived-layers row ``key`` (a processed key).
+
+    A loss or gain names both its layers and years, read off its name. An
+    edge or distance names the source the list's subtitle shows. None when
+    the project or the layer is gone.
+    """
+    product = (getattr(project, "processed_variables", None) or {}).get(key)
+    if product is None:
+        return None
+    name = getattr(product, "name", None) or key
+    year = getattr(product, "year", None)
+    op = derived_operation(product)
+    span = _CHANGE_NAME.fullmatch(name[len(op) + 1 :]) if op in _CHANGE_OPS else None
+    if span:
+        start, y1, end, y2 = span.groups()
+        inputs = [year_label(start, int(y1)), year_label(end or start, int(y2))]
+        years = [int(y1), int(y2)]
+    else:
+        raw = (getattr(project, "raw_variables", None) or {}).get(
+            derived_source_key(project, name, None, year=year)
+        )
+        inputs = [year_label(raw.name, getattr(raw, "year", None))] if raw else []
+        years = [year] if year is not None else []
+    path = getattr(product, "path", None)
+    rows = [
+        (t(_K + "operation"), t(f"tiles.postprocess.op_label_{op}") if op else None),
+        (t(_K + "inputs"), inputs or None),
+        (t(_K + "years"), years or None),
+        (
+            t(_K + "processing_steps"),
+            list(getattr(product, "processing_history", None) or []) or None,
+        ),
+        (t(_K + "file_path"), str(path) if path else None),
+    ]
+    return VariableDetails(year_label(name, year), rows)
+
+
 @solara.component
 def VariableDetailsDialog(
-    project, key: Optional[str], on_close: Callable[[], None], status=None
+    project,
+    key: Optional[str],
+    on_close: Callable[[], None],
+    status=None,
+    kind: str = HARMONIZED,
 ):
-    """Read-only view of one Harmonization row, with a Close button.
+    """Read-only view of one row, with a Close button.
 
     Args:
         project: the project reactive (the dialog reads its current value).
-        key: the row's raw variable key, or None while the dialog is closed.
+        key: the row key, or None while the dialog is closed: a raw variable
+            key for ``"harmonized"``, a processed key for ``"derived"``.
         on_close: () -> None; clears the tile's selected key.
         status: the ``HarmonizationStatus`` the Harmonization list shows.
+        kind: the list the row comes from, ``"harmonized"`` or ``"derived"``.
     """
-    details = harmonized_details(project.value, key, status)
+    if kind == DERIVED:
+        details = derived_details(project.value, key) if key else None
+    else:
+        details = harmonized_details(project.value, key, status)
     with rv.Dialog(
         v_model=details is not None,
         on_v_model=lambda v: None if v else on_close(),

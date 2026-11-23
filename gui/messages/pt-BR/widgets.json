@@ -100,6 +100,9 @@
       "grid_reason_raster_type": "Desatualizada: o tipo de raster mudou desde a harmonização",
       "grid_reason_categories": "Desatualizada: faltam suas categorias (harmonizada por uma versão anterior)",
       "processing_steps": "Etapas de processamento",
+      "operation": "Operação",
+      "inputs": "Camadas de entrada",
+      "years": "Anos",
       "file_path": "Caminho do arquivo"
     },
     "variable_list": {

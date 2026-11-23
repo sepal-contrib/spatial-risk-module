@@ -100,6 +100,9 @@
       "grid_reason_raster_type": "Obsolète : le type de raster a changé depuis son harmonisation",
       "grid_reason_categories": "Obsolète : ses catégories manquent (harmonisée par une version antérieure)",
       "processing_steps": "Étapes de traitement",
+      "operation": "Opération",
+      "inputs": "Couches d'entrée",
+      "years": "Années",
       "file_path": "Chemin du fichier"
     },
     "variable_list": {
