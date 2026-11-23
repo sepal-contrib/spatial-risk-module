@@ -30,13 +30,21 @@
       "loss": "Forest loss",
       "gain": "Forest gain",
       "non_forest": "Non-forest",
-      "forest": "Forest"
+      "forest": "Forest",
+      "burned": "Burned",
+      "unburned": "Not burned",
+      "fire": "Fire",
+      "no_fire": "No fire"
     },
     "note": { "random_classes": "Categorical — colours assigned at random" },
     "unit": {
       "m_value": "{value} m",
       "deg_value": "{value}°",
-      "plain_value": "{value}"
+      "plain_value": "{value}",
+      "days_value": "{value} d",
+      "mw_value": "{value} MW",
+      "years_value": "{value} yr",
+      "mm_value": "{value} mm"
     }
   }
 }

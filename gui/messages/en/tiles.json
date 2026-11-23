@@ -322,6 +322,7 @@
       "error_invalid_dataset": "Select a valid dataset.",
       "error_invalid_sample": "Select a valid sample.",
       "error_select_layer": "Select a layer for '{label}'.",
+      "error_needs_interval_target": "MW and JNR models need a change layer with a start and end year in its name as the target (e.g. forest_loss_2015_2020); '{name}' has none. Use GLM, RF or iCAR for this dataset.",
       "error_layer_not_in_dataset": "'{label}' = '{val}' is not a feature in dataset '{dataset}'.",
       "confirm_delete_model_title": "Delete model?",
       "confirm_delete_model_message": "Delete model '{key}'? This removes it from the project and deletes its files. This cannot be undone.",

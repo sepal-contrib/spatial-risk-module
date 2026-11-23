@@ -14,7 +14,11 @@ from gui.scripts.icar_warning import (
     icar_slow_estimate,
     icar_slow_message,
 )
-from gui.scripts.model_registry import MODEL_KEYS, MODEL_REGISTRY
+from gui.scripts.model_registry import (
+    MODEL_KEYS,
+    MODEL_REGISTRY,
+    interval_target_error,
+)
 from gui.widget.artifact_name_field import ArtifactNameField, use_artifact_name
 from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS, CreationDialog
 from gui.widget.details_fields import ro_field
@@ -270,6 +274,12 @@ def ModelFormDialog(
             return t("tiles.train.error_invalid_dataset")
         if needs_sample and (not selected_sample or selected_sample not in p.samples):
             return t("tiles.train.error_invalid_sample")
+        target = getattr(selected_ds_obj, "target", None)
+        if target is not None:
+            interval_err = interval_target_error(selected_key, target.name)
+            if interval_err:
+                key, kwargs = interval_err
+                return t(key, **kwargs)
         if has_formula:
             if prefill_formula.pending:
                 return t("tiles.train.error_formula_generating")

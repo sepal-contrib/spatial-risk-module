@@ -46,7 +46,6 @@ def test_layers_without_params_report_empty():
     assert param_specs("altitude") == []
     assert default_param_values("altitude") == {}
     assert param_specs("not_a_layer") == []
-    assert param_specs("precipitation") == []
 
 
 def test_default_param_values():
@@ -200,22 +199,27 @@ def test_temperature_get_image_default_matches_catalogue_default():
     import inspect
 
     sig = inspect.signature(PREDEFINED_CATALOGUE["temperature_2m"]["get_image"])
-    (spec,) = param_specs("temperature_2m")
+    spec = param_specs("temperature_2m")[0]
     assert sig.parameters["aggregation"].default == spec["default"] == "median"
 
 
 def test_default_param_values_for_choice():
     """Retrieve default param values for a choice-typed catalogue entry."""
-    assert default_param_values("temperature_2m") == {"aggregation": "median"}
+    assert default_param_values("temperature_2m") == {
+        "aggregation": "median",
+        "period": "year",
+    }
 
 
 @pytest.mark.parametrize("metric", ["mean", "max", "min", "median"])
 def test_coerce_accepts_each_choice_option(metric):
     """Choice values stay strings — no int coercion."""
-    values, bad = coerce_param_values("temperature_2m", {"aggregation": metric})
+    values, bad = coerce_param_values(
+        "temperature_2m", {"aggregation": metric, "period": "year"}
+    )
 
     assert bad is None
-    assert values == {"aggregation": metric}
+    assert values == {"aggregation": metric, "period": "year"}
     assert isinstance(values["aggregation"], str)
 
 
@@ -248,7 +252,10 @@ def test_build_name_appends_bare_choice_suffix():
 def test_choice_roundtrip_is_exact(metric):
     """Build and resolve are exact inverses for every choice option."""
     name = build_predefined_name("temperature_2m", {"aggregation": metric})
-    assert resolve_predefined(name) == ("temperature_2m", {"aggregation": metric})
+    assert resolve_predefined(name) == (
+        "temperature_2m",
+        {"aggregation": metric, "period": "year"},
+    )
 
 
 @pytest.mark.parametrize(

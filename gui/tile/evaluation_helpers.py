@@ -148,6 +148,11 @@ def build_truth_spec(project, truth_key, forest_key, interval):
         return None, "Select a truth (deforestation) variable."
     if not forest_key:
         return None, "Select a forest-at-start variable."
+    if interval is None or not str(interval).strip():
+        return None, (
+            "The interval (years) could not be read from the truth variable's "
+            "name: enter the number of years it covers."
+        )
     try:
         ti = int(interval)
     except (TypeError, ValueError):

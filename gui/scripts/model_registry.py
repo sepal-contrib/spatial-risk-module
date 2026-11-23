@@ -229,3 +229,26 @@ MODEL_REGISTRY = {
 }
 
 MODEL_KEYS = list(MODEL_REGISTRY.keys())
+
+
+#: Families whose fit/apply derive the period length from the target's name
+#: (``forest_loss_2015_2020`` -> 5 years).
+INTERVAL_FAMILIES = ("jnr", "mw")
+
+
+def interval_target_error(model_key, target_name):
+    """``(i18n key, kwargs)`` when an MW/JNR model cannot use this target.
+
+    Their fit and apply need the period length, read from two 4-digit years
+    in the target's name. A single-period target (``burned_area_sep``,
+    ``active_fire``) has none: refuse it in the dialog instead of failing
+    deep in the fit. Other families take any target (None).
+    """
+    if str(model_key or "").split("_")[0] not in INTERVAL_FAMILIES:
+        return None
+    # Lazy: spatialrisk.evaluation pulls in matplotlib.
+    from spatialrisk.evaluation import interval_from_target
+
+    if interval_from_target(target_name) is not None:
+        return None
+    return ("tiles.train.error_needs_interval_target", {"name": target_name or ""})

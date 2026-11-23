@@ -30,13 +30,21 @@
       "loss": "Pérdida de bosque",
       "gain": "Ganancia de bosque",
       "non_forest": "No bosque",
-      "forest": "Bosque"
+      "forest": "Bosque",
+      "burned": "Quemado",
+      "unburned": "No quemado",
+      "fire": "Fuego",
+      "no_fire": "Sin fuego"
     },
     "note": { "random_classes": "Categórico — colores asignados al azar" },
     "unit": {
       "m_value": "{value} m",
       "deg_value": "{value}°",
-      "plain_value": "{value}"
+      "plain_value": "{value}",
+      "days_value": "{value} d",
+      "mw_value": "{value} MW",
+      "years_value": "{value} años",
+      "mm_value": "{value} mm"
     }
   }
 }

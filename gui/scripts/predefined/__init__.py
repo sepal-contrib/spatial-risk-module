@@ -7,11 +7,16 @@ Public API. Theme modules (``terrain``, ``infrastructure``, ``water``,
 
 from gui.scripts.predefined.aoi import get_aoi_ee_feature, resolve_aoi_ee
 from gui.scripts.predefined.catalogue import (
+    DYNAMIC_ATTRS,
     GROUP_ORDER,
     PREDEFINED_CATALOGUE,
     PREDEFINED_NAMES,
+    entry_for_name,
+    resolved_entry,
+    validate_entry,
 )
 from gui.scripts.predefined.params import (
+    active_param_specs,
     advanced_param_specs,
     basic_param_specs,
     build_predefined_name,
@@ -19,6 +24,7 @@ from gui.scripts.predefined.params import (
     coerce_param_values,
     default_param_values,
     describe_params,
+    inactive_to_defaults,
     normalize_value,
     omits_default,
     param_rows,
@@ -27,11 +33,21 @@ from gui.scripts.predefined.params import (
     resolve_predefined,
     spec_segments,
 )
+from gui.scripts.predefined.periods import (
+    MONTHS,
+    month_index,
+    period_param,
+    period_range,
+    period_start,
+)
 
 __all__ = [
+    "DYNAMIC_ATTRS",
     "GROUP_ORDER",
     "PREDEFINED_CATALOGUE",
     "PREDEFINED_NAMES",
+    "MONTHS",
+    "active_param_specs",
     "advanced_param_specs",
     "basic_param_specs",
     "build_predefined_name",
@@ -39,13 +55,21 @@ __all__ = [
     "coerce_param_values",
     "default_param_values",
     "describe_params",
+    "entry_for_name",
     "get_aoi_ee_feature",
+    "inactive_to_defaults",
+    "month_index",
     "normalize_value",
     "omits_default",
     "param_rows",
     "param_specs",
     "parse_segment",
+    "period_param",
+    "period_range",
+    "period_start",
     "resolve_aoi_ee",
     "resolve_predefined",
+    "resolved_entry",
     "spec_segments",
+    "validate_entry",
 ]

@@ -61,6 +61,40 @@ def default_param_values(catalogue_key):
     return {spec["key"]: _copy(spec["default"]) for spec in param_specs(catalogue_key)}
 
 
+def _depends_active(spec, current):
+    """Is ``spec`` in use given the ``current`` values of its entry?
+
+    ``depends_on`` maps a controller param key to the controller values under
+    which ``spec`` is shown and used. A spec without it is always active.
+    """
+    return all(
+        current.get(controller) in allowed
+        for controller, allowed in (spec.get("depends_on") or {}).items()
+    )
+
+
+def active_param_specs(catalogue_key, values):
+    """Specs in use for ``values`` (typed or raw form values).
+
+    A controller missing from ``values`` counts as its default. Inactive specs
+    are hidden in the modal and forced to their default (see
+    ``inactive_to_defaults``), so they never reach the name.
+    """
+    specs = param_specs(catalogue_key)
+    current = {s["key"]: values.get(s["key"], s["default"]) for s in specs}
+    return [s for s in specs if _depends_active(s, current)]
+
+
+def inactive_to_defaults(catalogue_key, values):
+    """Copy of ``values`` with every inactive param set to its default."""
+    active = {s["key"] for s in active_param_specs(catalogue_key, values)}
+    out = dict(values)
+    for spec in param_specs(catalogue_key):
+        if spec["key"] not in active:
+            out[spec["key"]] = _copy(spec["default"])
+    return out
+
+
 def _canonical_multi(spec, selected):
     """Option values of ``selected`` in declared order, duplicates removed."""
     chosen = set(selected)
@@ -101,6 +135,9 @@ def coerce_param_values(catalogue_key, raw):
     ``multichoice`` params must be a list of option values with at least
     ``min_selected`` items, returned in declared order.
     """
+    # A hidden (inactive) param takes its default: whatever its field still
+    # holds must neither block submit nor reach the name.
+    raw = inactive_to_defaults(catalogue_key, raw)
     values = {}
     for spec in param_specs(catalogue_key):
         kind = _kind(spec)
@@ -151,6 +188,7 @@ def build_predefined_name(catalogue_key, values):
     default), so ``("rivers", defaults)`` stays ``"rivers"``. The year is NOT
     part of the name — ``entry_key`` appends it when forming the storage key.
     """
+    values = inactive_to_defaults(catalogue_key, values)
     parts = [catalogue_key]
     for spec in param_specs(catalogue_key):
         if omits_default(spec):
@@ -260,6 +298,9 @@ def resolve_predefined(name):
     Injective: the parsed values are rebuilt into a name and any mismatch is
     rejected, so only the canonical form resolves (no zero-padded ints, no
     out-of-order codes, no explicit default segments).
+
+    A segment of an inactive conditional param (``depends_on`` unmet) is
+    rejected the same way: the rebuild leaves it out, so the names differ.
     """
     if not name:
         return None, {}
@@ -306,13 +347,14 @@ def _value_text(spec, value, t):
 def param_rows(catalogue_key, values):
     """``(label, text)`` for every param of ``catalogue_key`` found in ``values``.
 
-    The Details dialog lists them one field each, defaults included.
+    The Details dialog lists them one field each, defaults included. Params
+    hidden by an unmet ``depends_on`` are left out.
     """
     from gui.i18n import t
 
     return [
         (t(spec["label_key"]), _value_text(spec, values[spec["key"]], t))
-        for spec in param_specs(catalogue_key)
+        for spec in active_param_specs(catalogue_key, values)
         if spec["key"] in values
     ]
 
@@ -331,6 +373,7 @@ def describe_params(name):
     parts = [
         f"{t(spec['label_key'])}: {_value_text(spec, values[spec['key']], t)}"
         for spec in advanced_param_specs(key)
-        if not _is_default(spec, values[spec["key"]])
+        if spec in active_param_specs(key, values)
+        and not _is_default(spec, values[spec["key"]])
     ]
     return " · ".join(parts)

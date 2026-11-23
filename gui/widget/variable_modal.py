@@ -16,6 +16,11 @@ from gui.scripts import variable_classes as vc
 from gui.scripts import variable_palettes as palettes
 from gui.scripts import variable_probes as probes
 from gui.scripts.legend_data import Label, format_number, variable_spec_from_vis
+from gui.scripts.predefined import (
+    active_param_specs,
+    resolved_entry,
+    validate_entry,
+)
 from gui.scripts.predefined_variables import (
     GROUP_ORDER,
     PREDEFINED_CATALOGUE,
@@ -25,6 +30,7 @@ from gui.scripts.predefined_variables import (
     changed_advanced_count,
     coerce_param_values,
     default_param_values,
+    param_specs,
 )
 from gui.widget.artifact_name_field import ArtifactNameField
 from gui.widget.band_select import (
@@ -132,6 +138,30 @@ def _raw_params(values):
     }
 
 
+def _resolvable_params(predefined_key, params_raw):
+    """The form's choice values that are valid options.
+
+    Dynamic catalogue fields (years, raster type, scale...) depend on choice
+    params (period, source, metric). While a number field is mid-edit and the
+    form does not coerce, the year list must still follow the choices on
+    screen rather than jump back to the defaults.
+    """
+    out = {}
+    for spec in param_specs(predefined_key):
+        value = params_raw.get(spec["key"])
+        if spec.get("type", "int") == "choice" and value in spec["options"]:
+            out[spec["key"]] = value
+    return out
+
+
+def _parse_year(year):
+    """The year field's value as an int, or None when blank."""
+    try:
+        return int(str(year).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 @solara.component
 def VariableModal(
     open_: solara.Reactive[bool],
@@ -221,14 +251,41 @@ def VariableModal(
     # Only a multi-band source records a band; one band is the file as is.
     picked_band = band if len(band_values) > 1 and band in band_values else None
 
-    # Derived: catalogue entry for the selected predefined variable
-    cat = PREDEFINED_CATALOGUE.get(predefined_key) if predefined_key else None
+    # Typed param values when the form is valid; dynamic catalogue fields
+    # (years, raster type, scale...) are resolved for them.
+    _values, _bad_param = (
+        coerce_param_values(predefined_key, params_raw)
+        if predefined_key
+        else ({}, None)
+    )
+    _typed = (
+        _values
+        if _bad_param is None
+        else _resolvable_params(predefined_key, params_raw)
+    )
+
+    # Derived: catalogue entry for the selected predefined variable, with its
+    # param-dependent fields evaluated for the values on screen.
+    cat = (
+        resolved_entry(predefined_key, _typed)
+        if predefined_key in PREDEFINED_CATALOGUE
+        else None
+    )
+
+    # Static availability check (never Earth Engine): a year or month past the
+    # source's last complete month, or an impossible combination (FRP from
+    # FIRMS), shows inline next to the fields and blocks submit.
+    _unavailable = (
+        validate_entry(predefined_key, _values, _parse_year(year))
+        if cat is not None and _bad_param is None
+        else None
+    )
+    availability_error = t(_unavailable[0], **_unavailable[1]) if _unavailable else None
 
     # Storage key the entry will land under (mirrors variables_tile.entry_key).
     # A predefined layer's params are baked into its name (forest_gfc_tc30), so
     # the preview only shows the suffix once the values are valid.
     if source == "predefined":
-        _values, _bad_param = coerce_param_values(predefined_key, params_raw)
         _key_name = (
             build_predefined_name(predefined_key, _values)
             if predefined_key and _bad_param is None
@@ -457,7 +514,7 @@ def VariableModal(
             set_error(t("vars.modal.error_no_predefined_selected"))
             return
         cat_entry = PREDEFINED_CATALOGUE[predefined_key]
-        yr = int(year) if year and str(year).strip() else None
+        yr = _parse_year(year)
         if cat_entry["temporal"] and yr is None:
             set_error(t("vars.modal.error_year_required"))
             return
@@ -489,6 +546,9 @@ def VariableModal(
                     )
                 )
             return
+        # Already shown inline (availability alert); refuse without repeating it.
+        if validate_entry(predefined_key, values, yr) is not None:
+            return
         entry = {
             "source": "predefined",
             "type": "GEEVar",
@@ -497,7 +557,11 @@ def VariableModal(
             "name": build_predefined_name(predefined_key, values),
             "year": yr,
             "data_type": DataType.raster,
-            "raster_type": RasterType(cat_entry["raster_type"]),
+            # Resolved: e.g. active_fire is categorical for "any" detection but
+            # continuous for fire days.
+            "raster_type": RasterType(
+                resolved_entry(predefined_key, values)["raster_type"]
+            ),
             "predefined_key": predefined_key,
             "params": values,
         }
@@ -727,6 +791,7 @@ def VariableModal(
                         set_params_raw,
                         advanced_open,
                         set_advanced_open,
+                        availability_error=availability_error,
                     )
                 else:
                     _render_custom_fields(
@@ -793,6 +858,7 @@ def _render_predefined_fields(
     set_params_raw,
     advanced_open,
     set_advanced_open,
+    availability_error=None,
 ):
     """Fields shown when source == 'predefined'."""
     rv.Select(
@@ -828,9 +894,18 @@ def _render_predefined_fields(
         # Layer-specific knobs declared by the catalogue, rendered generically
         # (no per-layer branching here). Basic knobs first; advanced ones sit
         # in a collapsed section.
-        for spec in basic_param_specs(predefined_key):
-            _render_param_field(spec, params_raw, set_params_raw)
-        advanced = advanced_param_specs(predefined_key)
+        # Conditional params (depends_on) ruled out by their controller are
+        # hidden; their values are reset to the default on submit. The
+        # always-present div keeps later siblings (and their click handlers)
+        # in place when a field comes and goes.
+        active = {s["key"] for s in active_param_specs(predefined_key, params_raw)}
+        with rv.Html(tag="div"):
+            for spec in basic_param_specs(predefined_key):
+                if spec["key"] in active:
+                    _render_param_field(spec, params_raw, set_params_raw)
+        advanced = [
+            s for s in advanced_param_specs(predefined_key) if s["key"] in active
+        ]
         if advanced:
             _render_advanced_section(
                 predefined_key,
@@ -840,6 +915,15 @@ def _render_predefined_fields(
                 advanced_open,
                 set_advanced_open,
             )
+
+        with rv.Html(tag="div"):
+            if availability_error:
+                rv.Alert(
+                    type="error",
+                    dense=True,
+                    class_="sr-availability-error",
+                    children=[availability_error],
+                )
 
         # Read-only info fields
         rv.TextField(
@@ -960,8 +1044,9 @@ def _render_advanced_section(
         style="padding-left:8px;margin-bottom:8px;"
         "border-left:2px solid rgba(128,128,128,0.35);"
     ):
-        for spec in specs:
-            _render_param_field(spec, params_raw, set_params_raw)
+        with rv.Html(tag="div"):
+            for spec in specs:
+                _render_param_field(spec, params_raw, set_params_raw)
         solara.Button(
             t("vars.modal.advanced_reset"),
             icon_name="mdi-restore",

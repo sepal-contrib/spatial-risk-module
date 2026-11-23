@@ -55,7 +55,9 @@ def _project(tmp_path, *, persisted=False, mask_layer="geobosques_2010"):
         model_snapshot={},
     )
     dataset = types.SimpleNamespace(
-        name="dataset_1", target=types.SimpleNamespace(name="x", path="/x"), features=[]
+        name="dataset_1",
+        target=types.SimpleNamespace(name="forest_loss_2010_2019", path="/x"),
+        features=[],
     )
     return types.SimpleNamespace(
         predictions={"run": pred},

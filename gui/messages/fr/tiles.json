@@ -322,6 +322,7 @@
       "error_invalid_dataset": "Sélectionnez un jeu de données valide.",
       "error_invalid_sample": "Sélectionnez un échantillon valide.",
       "error_select_layer": "Sélectionnez une couche pour '{label}'.",
+      "error_needs_interval_target": "Les modèles MW et JNR ont besoin comme cible d'une couche de changement avec une année de début et de fin dans son nom (p. ex. forest_loss_2015_2020) ; '{name}' n'en a pas. Utilisez GLM, RF ou iCAR pour ce jeu de données.",
       "error_layer_not_in_dataset": "'{label}' = '{val}' n'est pas une variable explicative du jeu de données '{dataset}'.",
       "confirm_delete_model_title": "Supprimer le modèle ?",
       "confirm_delete_model_message": "Supprimer le modèle '{key}' ? Cela le retire du projet et supprime ses fichiers. Cette action est irréversible.",

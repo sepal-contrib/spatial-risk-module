@@ -281,10 +281,7 @@ def _styled_layer(image, var, gee_interface):
     Synchronous — any GEE stretch it computes goes through the blocking
     interface, so call it from a worker thread.
     """
-    from gui.scripts.predefined_variables import (
-        PREDEFINED_CATALOGUE,
-        resolve_predefined,
-    )
+    from gui.scripts.predefined import entry_for_name
     from gui.scripts.variable_classes import ee_remap, visible_classes
 
     # A palette the user picked in the Variables modal wins over the catalogue
@@ -300,8 +297,9 @@ def _styled_layer(image, var, gee_interface):
 
     # The name may carry a param suffix (forest_gfc_tc30), so resolve it back to
     # the catalogue key rather than looking the raw name up.
-    cat_key, _params = resolve_predefined(getattr(var, "name", "") or "")
-    cat = PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
+    # Resolved entry: param-dependent fields (palette, unit, raster type) are
+    # evaluated for the params baked into the name.
+    _key, _params, cat = entry_for_name(getattr(var, "name", "") or "")
     if cat:
         if cat.get("random_visualizer"):
             return image.randomVisualizer(), {}, "random_visualizer"
@@ -489,21 +487,24 @@ def _current_aoi_ee():
 
 def _build_predefined(entry: dict, project):
     """Build a GEEVar from a predefined catalogue entry."""
-    from gui.scripts.predefined_variables import PREDEFINED_CATALOGUE
+    from gui.scripts.predefined import resolved_entry
+    from spatialrisk.variables.models import RasterType
 
     key = entry["predefined_key"]
-    cat = PREDEFINED_CATALOGUE[key]
+    params = entry.get("params") or {}
+    # Param-dependent fields (raster type, scale) evaluated for these params.
+    cat = resolved_entry(key, params)
 
     aoi_ee = _current_aoi_ee()
     year = entry.get("year")
     # Declared params (e.g. forest_gfc's tree_cover_threshold) travel as kwargs;
     # entries for unparameterised layers carry none and call through unchanged.
-    image = cat["get_image"](aoi_ee, year, **entry.get("params") or {})
+    image = cat["get_image"](aoi_ee, year, **params)
 
     return GEEVar(
         name=entry["name"],
         data_type=entry["data_type"],
-        raster_type=entry.get("raster_type"),
+        raster_type=entry.get("raster_type") or RasterType(cat["raster_type"]),
         gee_images=[image],
         aoi=aoi_ee,
         project=project,
@@ -528,14 +529,12 @@ def _var_legend(key: str, var, *, vis=None, render_kind=None):
         variable_spec_from_vis,
     )
     from gui.scripts.legend_registry import LayerLegend
-    from gui.scripts.predefined_variables import (
-        PREDEFINED_CATALOGUE,
-        resolve_predefined,
-    )
+    from gui.scripts.predefined import entry_for_name
     from gui.scripts.variable_styles import resolve_variable_style
 
-    cat_key, _params = resolve_predefined(getattr(var, "name", "") or "")
-    cat = PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
+    # Resolved entry: param-dependent fields (palette, unit, raster type) are
+    # evaluated for the params baked into the name.
+    _key, _params, cat = entry_for_name(getattr(var, "name", "") or "")
     label = (
         Label(key=cat["label_key"])
         if cat and cat.get("label_key")

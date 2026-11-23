@@ -4,17 +4,26 @@ Each later part adds layers and params; these checks keep the name grammar
 unambiguous and the four-digit year contract intact without per-layer tests.
 """
 
+import importlib
 import inspect
 import itertools
 import re
 
 import pytest
+from _ee_fake import install
 
 from gui import i18n
-from gui.scripts.predefined import GROUP_ORDER, PREDEFINED_CATALOGUE
+from gui.scripts.predefined import (
+    DYNAMIC_ATTRS,
+    GROUP_ORDER,
+    PREDEFINED_CATALOGUE,
+    resolved_entry,
+    validate_entry,
+)
 from gui.scripts.predefined.params import (
     build_predefined_name,
     default_param_values,
+    inactive_to_defaults,
     omits_default,
     param_specs,
     parse_segment,
@@ -128,7 +137,9 @@ def test_exhaustive_roundtrip(key):
     specs = param_specs(key)
     spaces = [_value_space(spec) for spec in specs]
     for combo in itertools.product(*spaces):
-        values = {spec["key"]: value for spec, value in zip(specs, combo)}
+        values = inactive_to_defaults(
+            key, {spec["key"]: value for spec, value in zip(specs, combo)}
+        )
         name = build_predefined_name(key, values)
         assert not re.search(r"\d{4}", name), name
         if name == key:
@@ -144,3 +155,129 @@ def test_default_name_unchanged_for_advanced_only_entries(key):
     specs = param_specs(key)
     if specs and all(omits_default(s) for s in specs):
         assert build_predefined_name(key, default_param_values(key)) == key
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_depends_on_shape(key):
+    """A conditional param is omittable and controlled by an earlier choice."""
+    specs = param_specs(key)
+    for index, spec in enumerate(specs):
+        depends_on = spec.get("depends_on") or {}
+        where = f"{key}.{spec['key']}"
+        if depends_on:
+            assert omits_default(spec), f"{where}: depends_on needs omit_default"
+        earlier = {s["key"]: s for s in specs[:index]}
+        for controller, allowed in depends_on.items():
+            assert controller in earlier, f"{where}: {controller!r} must come first"
+            ctrl = earlier[controller]
+            assert ctrl.get("type", "int") == "choice", where
+            assert allowed, where
+            assert set(allowed) <= set(ctrl["options"]), where
+
+
+def _combos(key):
+    """Every distinct full value combination (inactive params at default)."""
+    specs = param_specs(key)
+    seen = []
+    for combo in itertools.product(*[_value_space(spec) for spec in specs]):
+        values = inactive_to_defaults(
+            key, {spec["key"]: value for spec, value in zip(specs, combo)}
+        )
+        if values not in seen:
+            seen.append(values)
+    return seen or [{}]
+
+
+YEAR_MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_only_dynamic_attrs_are_callables(key):
+    """Only dynamic attrs are callables."""
+    for attr, value in PREDEFINED_CATALOGUE[key].items():
+        if callable(value) and attr not in ("get_image", "validate"):
+            assert attr in DYNAMIC_ATTRS, (key, attr)
+
+
+@pytest.mark.parametrize("key", KEYS)
+def test_dynamic_fields_resolve_for_every_combination(key):
+    """Dynamic fields resolve for every combination."""
+    for values in _combos(key):
+        entry = resolved_entry(key, values)
+        where = (key, values)
+        assert entry["raster_type"] in ("categorical", "continuous"), where
+        if entry.get("temporal"):
+            years = entry.get("years")
+            assert years, where
+            assert all(isinstance(y, int) for y in years), where
+            assert years == sorted(set(years)), where
+        scale = entry.get("default_scale")
+        assert scale is None or scale > 0, where
+        vis = entry.get("vis_params")
+        if vis is not None:
+            assert isinstance(vis, dict) and vis.get("palette"), where
+        unit = entry.get("unit_key")
+        if unit:
+            assert i18n.t(unit, value=1) != unit, where
+        for class_key in entry.get("legend_class_keys") or ():
+            assert i18n.t(class_key) != class_key, where
+
+
+@pytest.mark.parametrize(
+    "key", [k for k in KEYS if "availability" in PREDEFINED_CATALOGUE[k]]
+)
+def test_availability_shape(key):
+    """Availability shape."""
+    entry = PREDEFINED_CATALOGUE[key]
+    windows = entry["availability"]
+    by = {s["key"]: s for s in param_specs(key)}
+    selector = next((by[k] for k in ("source", "sensor") if k in by), None)
+    if selector is not None:
+        assert set(windows) == set(selector["options"]), key
+    else:
+        assert len(windows) == 1, key
+    for first, last in windows.values():
+        assert YEAR_MONTH.fullmatch(first) and YEAR_MONTH.fullmatch(last), key
+        assert first <= last, key
+    assert callable(entry.get("validate")), key
+
+
+@pytest.mark.parametrize(
+    "key", [k for k in KEYS if "availability" in PREDEFINED_CATALOGUE[k]]
+)
+def test_offered_years_pass_validate(key):
+    """The year list never offers a year validate refuses for lack of data."""
+    for values in _combos(key):
+        years = resolved_entry(key, values)["years"]
+        for year in years:
+            err = validate_entry(key, values, year)
+            assert err is None or err[0] != "vars.modal.error_period_unavailable", (
+                key,
+                values,
+                year,
+            )
+        err = validate_entry(key, values, years[-1] + 1)
+        assert err is not None, (key, values, "the year after the list must fail")
+
+
+@pytest.mark.parametrize(
+    "key", [k for k in KEYS if "availability" in PREDEFINED_CATALOGUE[k]]
+)
+def test_every_combination_builds_against_a_fake_ee(monkeypatch, key):
+    """Each period layer's builder runs for every value combination.
+
+    ``ee`` is replaced on the module that owns the builder, so no Earth Engine
+    session is needed; combinations the entry's ``validate`` refuses for a
+    reason other than availability must raise ValueError instead.
+    """
+    entry = PREDEFINED_CATALOGUE[key]
+    module = importlib.import_module(entry["get_image"].__module__)
+    install(monkeypatch, module)
+    for values in _combos(key):
+        year = resolved_entry(key, values)["years"][-1]
+        refused = validate_entry(key, values, year)
+        if refused is not None:
+            with pytest.raises(ValueError):
+                entry["get_image"]("AOI", year, **values)
+        else:
+            entry["get_image"]("AOI", year, **values)

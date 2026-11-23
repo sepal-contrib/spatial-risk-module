@@ -181,19 +181,15 @@ DEFAULT_CLASS_KEYS = ("legend.class.absent", "legend.class.present")
 
 
 def _catalogue_entry(var):
-    """The PREDEFINED_CATALOGUE entry behind ``var``'s name, or None.
+    """The resolved catalogue entry behind ``var``'s name, or None.
 
     Parameterised names (``forest_gfc_tc30``) resolve back to their catalogue
-    key, the same way the style resolvers do.
+    key, the same way the style resolvers do. Param-dependent fields (unit,
+    legend classes) are evaluated for the params in the name.
     """
-    from gui.scripts.predefined_variables import (
-        PREDEFINED_CATALOGUE,
-        resolve_predefined,
-    )
+    from gui.scripts.predefined import entry_for_name
 
-    name = getattr(var, "name", "") or ""
-    cat_key, _params = resolve_predefined(name)
-    return PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
+    return entry_for_name(getattr(var, "name", "") or "")[2]
 
 
 def _is_categorical(render_kind: str, cat, var=None) -> bool:

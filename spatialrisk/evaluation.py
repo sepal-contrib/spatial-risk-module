@@ -660,6 +660,15 @@ def evaluate_prediction(project, pred, csizes=(300,), recompute_defrate=True):
     Also writes results into ``pred.metrics``.
     """
     lay = resolve_layers(project, pred)
+    if lay["time_interval"] is None:
+        # A single-period target (e.g. burned_area_sep) has no period length:
+        # fail here, before any folder is made, rather than with a TypeError
+        # deep in the rate computation.
+        raise ValueError(
+            f"Cannot evaluate '{lay['period']}': the dataset's target name has no "
+            "start and end year (e.g. 'forest_loss_2015_2020'), so the period "
+            "length is unknown."
+        )
     label, period, ti = label_for(pred), lay["period"], lay["time_interval"]
     evaluation_folder = Path(project.folders.project_folder) / "evaluation"
     period_dir = evaluation_folder / period

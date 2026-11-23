@@ -73,6 +73,36 @@ def will_compute(source: DefrateSource) -> bool:
     )
 
 
+def _no_interval_caveat(project, pred) -> Optional[str]:
+    """Why a rate table cannot be computed for *pred*'s dataset, or None.
+
+    Computing needs the period length, read from two 4-digit years in the
+    dataset target's name. A single-period target (``burned_area_sep``) has
+    none. Imports and MW/JNR runs never compute a table here, so they are
+    left to their own messages.
+    """
+    if pred is None or pred.dataset_name == IMPORT_DATASET_NAME:
+        return None
+    if _family(pred.model_key) in (_MW_FAMILY, _JNR_FAMILY):
+        return None
+    get_dataset = getattr(project, "get_dataset", None)
+    if get_dataset is None:
+        return None
+    target = getattr(get_dataset(pred.dataset_name), "target", None)
+    if target is None:
+        return None
+    from spatialrisk.evaluation import interval_from_target
+
+    if interval_from_target(target.name) is not None:
+        return None
+    return (
+        "The rate table cannot be computed: the dataset's target "
+        f"'{target.name}' has no start and end year in its name (e.g. "
+        "'forest_loss_2015_2020'), so the period length is unknown. Select a "
+        "rate table manually."
+    )
+
+
 def _resolve_layers(project, pred, forest_file=None):
     """Indirection so tests can stub the evaluation resolver."""
     from spatialrisk.evaluation import resolve_layers
@@ -254,6 +284,9 @@ def preview_defrate_source(
             _JNR_FAMILY,
         ):
             return DefrateSource(path=None, provenance="unavailable", caveat=str(exc))
+        caveat = _no_interval_caveat(project, pred)
+        if caveat:
+            return DefrateSource(path=None, provenance="unavailable", caveat=caveat)
         out = (
             Path(pred.path).parent
             / f"defrate_cat_{pred.model_key}_{pred.dataset_name}.csv"
@@ -598,6 +631,15 @@ def validate_form(project, form: AllocationForm) -> Optional[str]:
     ):
         if value and not Path(value).exists():
             return f"The selected {label} file does not exist: {value}"
+    if project is not None and form.prediction_key and not form.user_defrate_path:
+        pred = (getattr(project, "predictions", None) or {}).get(form.prediction_key)
+        caveat = _no_interval_caveat(project, pred)
+        if (
+            caveat
+            and preview_defrate_source(project, form.prediction_key).provenance
+            == "unavailable"
+        ):
+            return caveat
     if not form.forest_file and will_compute(
         preview_defrate_source(
             project, form.prediction_key, user_path=form.user_defrate_path

@@ -13,6 +13,10 @@ EXPECTED_KEYS = {
     "towns",
     "precipitation",
     "temperature_2m",
+    "dry_spell",
+    "burned_area",
+    "active_fire",
+    "fire_history",
     "subj",
 }
 
@@ -27,6 +31,10 @@ THEME_OF = {
     "forest_tmf": "forest",
     "precipitation": "climate",
     "temperature_2m": "climate",
+    "dry_spell": "climate",
+    "burned_area": "fire",
+    "active_fire": "fire",
+    "fire_history": "fire",
     "subj": "admin",
 }
 

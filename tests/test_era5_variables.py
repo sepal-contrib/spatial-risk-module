@@ -10,7 +10,7 @@ import types
 import pytest
 
 import gui.scripts.predefined_variables as pv
-from gui.scripts.predefined_variables import PREDEFINED_CATALOGUE
+from gui.scripts.predefined import resolved_entry
 
 
 class _Rec:
@@ -62,7 +62,7 @@ def test_precipitation_sums_the_year_in_mm(monkeypatch):
 
 def test_precipitation_catalogue_entry():
     """Continuous, temporal 2001-2025, native ~11 km scale, dynamic stretch."""
-    cat = PREDEFINED_CATALOGUE["precipitation"]
+    cat = resolved_entry("precipitation", {})
 
     assert cat["var_type"] == "GEEVar"
     assert cat["raster_type"] == "continuous"
@@ -70,7 +70,7 @@ def test_precipitation_catalogue_entry():
     assert cat["years"] == list(range(2001, 2026))
     assert cat["default_scale"] == 11132
     assert cat["get_image"] is pv._get_precipitation
-    assert "params" not in cat
+    assert [s["key"] for s in cat["params"]] == ["period", "source"]
     # Palette-only vis -> the AOI-dependent mm range is stretched dynamically.
     assert cat["vis_params"]["palette"]
     assert "min" not in cat["vis_params"] and "max" not in cat["vis_params"]
@@ -108,7 +108,7 @@ def test_temperature_defaults_to_median(monkeypatch):
 
 def test_temperature_catalogue_entry():
     """Continuous, temporal 2001-2025, ~11 km, one choice param."""
-    cat = PREDEFINED_CATALOGUE["temperature_2m"]
+    cat = resolved_entry("temperature_2m", {})
 
     assert cat["var_type"] == "GEEVar"
     assert cat["raster_type"] == "continuous"
@@ -119,7 +119,8 @@ def test_temperature_catalogue_entry():
     assert cat["vis_params"]["palette"]
     assert "min" not in cat["vis_params"] and "max" not in cat["vis_params"]
 
-    (spec,) = cat["params"]
+    assert [s["key"] for s in cat["params"]] == ["aggregation", "period"]
+    spec = cat["params"][0]
     assert spec["key"] == "aggregation"
     assert spec["type"] == "choice"
     assert spec["default"] == "median"

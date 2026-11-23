@@ -79,10 +79,7 @@ def resolve_variable_style(var) -> dict:
       [0, 1]; continuous -> grayscale auto-stretched.
     """
     from gui.scripts.postprocess_styles import resolve_postprocess_style
-    from gui.scripts.predefined_variables import (
-        PREDEFINED_CATALOGUE,
-        resolve_predefined,
-    )
+    from gui.scripts.predefined import entry_for_name
     from gui.scripts.variable_classes import class_colormap, visible_classes
 
     # Post-process outputs (edge/dist/loss/gain) first: they are renamed because they
@@ -124,8 +121,7 @@ def resolve_variable_style(var) -> dict:
 
     # Parameterised layers are named <key>_<suffix> (forest_gfc_tc30) — resolve
     # back to the catalogue key so they keep the palette they had as GEE layers.
-    cat_key, _params = resolve_predefined(name)
-    cat = PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
+    _key, _params, cat = entry_for_name(name)
     if cat:
         if cat.get("random_visualizer"):
             # Many arbitrary class values -> qualitative ramp (approximation of
