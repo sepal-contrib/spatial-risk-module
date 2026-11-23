@@ -36,7 +36,8 @@ def test_action_colors_are_theme_tokens_never_literal_grey():
     assert action_color("run") == "primary"
     assert action_color("retry") == "primary"
     assert action_color("rerun") is None
-    assert action_color("open") == "primary"
+    assert action_color("open") is None
+    assert action_color("open", is_on=True) == "primary"
     # An explicit per-action override still wins.
     assert action_color("delete", override="error") == "error"
 
@@ -156,7 +157,7 @@ def test_the_hourglass_is_one_grey_everywhere():
             "cells": [{"value": "a"}],
             "actions": [
                 {"kind": "run", "on_click": lambda: None, "loading": True},
-                {"kind": "open", "on_click": lambda: None},
+                {"kind": "open", "on_click": lambda: None, "is_on": True},
             ],
         }
     ]
@@ -423,7 +424,7 @@ def _all_widgets(rc):
 
 
 def _slot_boxes(rc):
-    """The four 28px action boxes of the (single) row."""
+    """The 28px action boxes of the (single) row."""
     return [
         w
         for w in _all_widgets(rc)
@@ -440,8 +441,8 @@ def _acts(*kinds):
     return [{"kind": k, "on_click": _noop} for k in kinds]
 
 
-def test_actions_render_in_fixed_slots():
-    """Scrambled actions land in their fixed slots; delete hides in the menu."""
+def test_up_to_four_actions_all_show_as_icons_in_order():
+    """Scrambled actions sort into one order; four fit, so no ⋮ menu."""
     import ipyvuetify as vw
 
     rc = _render_table(
@@ -450,21 +451,34 @@ def test_actions_render_in_fixed_slots():
     )
     try:
         boxes = _slot_boxes(rc)
-        assert len(boxes) == 4
         icons = [[_btn_icon(b) for b in _descendants(box, vw.Btn)] for box in boxes]
         assert icons == [
             ["mdi-play"],
             ["mdi-map-plus"],
             ["mdi-information-outline"],
-            ["mdi-dots-vertical", "mdi-delete-outline"],  # button, then menu item
+            ["mdi-delete-outline"],
         ]
-        # delete lives only inside the menu, never in a slot 1-3 box
-        for box in boxes[:3]:
-            assert "mdi-delete-outline" not in [
-                _btn_icon(b) for b in _descendants(box, vw.Btn)
-            ]
-        assert "mdi-delete-outline" in [
-            _btn_icon(b) for b in _descendants(boxes[3], vw.Btn)
+    finally:
+        rc.close()
+
+
+def test_more_than_four_actions_fold_the_rest_into_the_menu():
+    """Five actions: the first three are icons, the ⋮ menu holds the rest."""
+    import ipyvuetify as vw
+
+    rc = _render_table(
+        [{"type": "text", "value": "a"}],
+        actions=_acts("delete", "edit", "map_toggle", "open", "run"),
+    )
+    try:
+        boxes = _slot_boxes(rc)
+        icons = [[_btn_icon(b) for b in _descendants(box, vw.Btn)] for box in boxes]
+        assert icons == [
+            ["mdi-play"],
+            ["mdi-map-plus"],
+            ["mdi-information-outline"],
+            # button, then its menu items
+            ["mdi-dots-vertical", "mdi-pencil-outline", "mdi-delete-outline"],
         ]
     finally:
         rc.close()
@@ -489,17 +503,16 @@ def _all_btns(rc):
     return [w for w in _all_widgets(rc) if isinstance(w, vw.Btn)]
 
 
-def test_empty_slots_keep_icons_aligned():
-    """Every row has four slot boxes; the map button is always in box 2."""
+def test_missing_actions_leave_no_gap():
+    """A row without some actions gets one box per action it has, no empty ones."""
     import ipyvuetify as vw
 
-    for kinds in (("map_toggle",), ("run", "map_toggle", "open", "delete")):
+    for kinds in (("open",), ("rerun", "open", "delete")):
         rc = _render_table([{"type": "text", "value": "a"}], actions=_acts(*kinds))
         try:
             boxes = _slot_boxes(rc)
-            assert len(boxes) == 4
-            maps = [_btn_icon(b) for b in _descendants(boxes[1], vw.Btn)]
-            assert maps == ["mdi-map-plus"]
+            assert len(boxes) == len(kinds)
+            assert all(_descendants(box, vw.Btn) for box in boxes)
         finally:
             rc.close()
 
@@ -550,31 +563,28 @@ def test_explicit_label_is_the_tooltip():
         rc.close()
 
 
-def test_two_actions_in_one_single_slot_is_an_error():
-    """Two actions for one single-action slot is a programming error."""
+def test_two_lifecycle_actions_is_an_error():
+    """Two lifecycle actions on one row is a programming error."""
     import pytest
 
-    from gui.widget.product_table import _slot_actions
+    from gui.widget.product_table import _layout_actions
 
     with pytest.raises(AssertionError):
-        _slot_actions(_acts("run", "cancel"))
+        _layout_actions(_acts("run", "cancel"))
 
 
-def test_more_menu_lists_edit_duplicate_dismiss_delete_in_order():
-    """The more menu orders edit, duplicate, dismiss, delete."""
+def test_menu_takes_the_overflow_in_order():
+    """Past four, the menu holds the tail of the order, labelled per kind."""
     from gui.i18n import t
-    from gui.widget.product_table import _slot_actions, action_label
+    from gui.widget.product_table import _layout_actions, action_label
 
-    slots = _slot_actions(_acts("delete", "dismiss", "duplicate", "edit", "run"))
-    assert [a["kind"] for a in slots[4]] == [
-        "edit",
-        "duplicate",
-        "dismiss",
-        "delete",
-    ]
-    assert [action_label(a) for a in slots[4]] == [
-        t(f"widgets.product_table.action_{k}")
-        for k in ("edit", "duplicate", "dismiss", "delete")
+    inline, more = _layout_actions(
+        _acts("delete", "dismiss", "duplicate", "edit", "run")
+    )
+    assert [a["kind"] for a in inline] == ["run", "edit", "duplicate"]
+    assert [a["kind"] for a in more] == ["dismiss", "delete"]
+    assert [action_label(a) for a in more] == [
+        t(f"widgets.product_table.action_{k}") for k in ("dismiss", "delete")
     ]
 
 
@@ -582,10 +592,12 @@ def test_more_menu_renders_its_items_in_order():
     """The rendered menu shows the button then its items in order."""
     import reacton
 
-    from gui.widget.product_table import _MoreMenu, _slot_actions
+    from gui.widget.product_table import _MoreMenu
 
-    slots = _slot_actions(_acts("delete", "edit", "dismiss", "duplicate"))
-    _box, rc = reacton.render(_MoreMenu(slots[4]), handle_error=False)
+    _box, rc = reacton.render(
+        _MoreMenu(_acts("edit", "duplicate", "dismiss", "delete")),
+        handle_error=False,
+    )
     try:
         icons = [_btn_icon(b) for b in _all_btns_of(rc) if b.children]
         assert icons == [
@@ -718,13 +730,13 @@ def test_more_menu_delete_item_runs_its_callback():
     import reacton
 
     from gui.i18n import t
-    from gui.widget.product_table import _MoreMenu, _slot_actions
+    from gui.widget.product_table import _MoreMenu
 
     calls = []
-    slots = _slot_actions(
-        [{"kind": "delete", "on_click": lambda: calls.append("delete")}]
+    _box, rc = reacton.render(
+        _MoreMenu([{"kind": "delete", "on_click": lambda: calls.append("delete")}]),
+        handle_error=False,
     )
-    _box, rc = reacton.render(_MoreMenu(slots[4]), handle_error=False)
     try:
         delete = t("widgets.product_table.action_delete")
         items = [b for b in _all_btns_of(rc) if delete in _texts(b)]

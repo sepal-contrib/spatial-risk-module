@@ -131,24 +131,29 @@ _ACTION_ICONS = {
     "dismiss": "mdi-close",
 }
 
-# Fixed action slots (spec: one action layout). Slots 1-3 hold one action each;
-# slot 4 is the "more" menu and collects every action mapped to it.
-ACTION_SLOT = {
-    "run": 1,
-    "cancel": 1,
-    "retry": 1,
-    "rerun": 1,
-    "map_toggle": 2,
-    "open": 3,
-    "edit": 4,
-    "duplicate": 4,
-    "delete": 4,
-    "dismiss": 4,
-}
+# Action order, left to right (spec: one action layout): the lifecycle action,
+# the map toggle, details, then the row's management actions. The icons are
+# packed against the right edge, so a row without, say, a map toggle leaves no
+# hole between its icons.
+ACTION_ORDER = (
+    "run",
+    "cancel",
+    "retry",
+    "rerun",
+    "map_toggle",
+    "open",
+    "edit",
+    "duplicate",
+    "dismiss",
+    "delete",
+)
+#: The lifecycle actions: a row offers at most one of them.
+LIFECYCLE_KINDS = ("run", "cancel", "retry", "rerun")
+#: Icons one Actions cell holds (ACTIONS_COL_WIDTH). A row with more actions
+#: shows the first MAX_INLINE_ACTIONS - 1 and folds the rest into the ⋮ menu.
+MAX_INLINE_ACTIONS = 4
 SLOT_WIDTH = "28px"
 MORE_ICON = "mdi-dots-vertical"
-# Order of the entries inside the "more" menu.
-MORE_ORDER = ("edit", "duplicate", "dismiss", "delete")
 
 
 # Busy state, app-wide: an hourglass that flips instead of Vuetify's spinner
@@ -202,15 +207,18 @@ def action_icon(kind: str, is_on: bool = False, loading: bool = False) -> str:
 def action_color(kind: str, is_on: bool = False, override=None):
     """Vuetify colour token for an action icon (None = theme default text).
 
+    The toggles (map, info) are primary only while on: the layer is shown,
+    the row's details dialog is open.
+
     Only "on"/primary states name a colour. Everything else returns None so the
     icon inherits the theme's text colour — a literal grey looked *disabled* on
     the dark theme, which is exactly what an enabled toggle must not look like.
     """
     if override is not None:
         return override
-    if kind == "map_toggle":
+    if kind in ("map_toggle", "open"):
         return "primary" if is_on else None
-    if kind in ("run", "retry", "open"):
+    if kind in ("run", "retry"):
         return "primary"
     return None
 
@@ -375,22 +383,26 @@ def _render_action(act: dict):
     )
 
 
-def _slot_actions(actions: list) -> dict:
-    """Group a row's actions by slot; slots 1-3 take at most one each."""
-    slots: dict = {1: [], 2: [], 3: [], 4: []}
-    for act in actions:
-        slot = ACTION_SLOT[act["kind"]]
-        slots[slot].append(act)
-        assert (
-            slot == 4 or len(slots[slot]) == 1
-        ), f"two actions for slot {slot}: {[a['kind'] for a in slots[slot]]}"
-    slots[4].sort(key=lambda a: MORE_ORDER.index(a["kind"]))
-    return slots
+def _layout_actions(actions: list) -> tuple:
+    """Split a row's actions into the inline icons and the ⋮ menu's items.
+
+    Actions are sorted by ``ACTION_ORDER``. Up to ``MAX_INLINE_ACTIONS`` all
+    show as icons; past that the first ``MAX_INLINE_ACTIONS - 1`` do and the
+    rest go into the menu, which takes the last place.
+    """
+    ordered = sorted(actions, key=lambda a: ACTION_ORDER.index(a["kind"]))
+    for group in (LIFECYCLE_KINDS, ("map_toggle",), ("open",)):
+        kinds = [a["kind"] for a in ordered if a["kind"] in group]
+        assert len(kinds) <= 1, f"more than one of {group}: {kinds}"
+    if len(ordered) <= MAX_INLINE_ACTIONS:
+        return ordered, []
+    cut = MAX_INLINE_ACTIONS - 1
+    return ordered[:cut], ordered[cut:]
 
 
 @solara.component
 def _MoreMenu(actions: list):
-    """Slot 4: the vertical-dots button and its menu of text items."""
+    """The vertical-dots button and its menu of the actions that did not fit."""
     open_, set_open = solara.use_state(False)
     label = t("widgets.product_table.action_more")
     with rv.Html(tag="div", style_="display:flex;") as activator:
@@ -431,19 +443,18 @@ def _MoreMenu(actions: list):
                 )
 
 
-def _render_slots(actions: list):
-    """Exactly four fixed boxes: lifecycle, map, details, more."""
-    slots = _slot_actions(actions)
+def _render_actions(actions: list):
+    """The row's icons, one 28px box each, then the ⋮ menu when some overflow."""
+    inline, more = _layout_actions(actions)
     box = (
         f"display:flex;justify-content:center;width:{SLOT_WIDTH};flex:0 0 {SLOT_WIDTH};"
     )
-    for n in (1, 2, 3):
+    for act in inline:
         with rv.Html(tag="div", style_=box):
-            for act in slots[n]:
-                _render_action(act)
-    with rv.Html(tag="div", style_=box):
-        if slots[4]:
-            _MoreMenu(slots[4])
+            _render_action(act)
+    if more:
+        with rv.Html(tag="div", style_=box):
+            _MoreMenu(more)
 
 
 @solara.component
@@ -516,7 +527,7 @@ def _Row(row: dict, grid: str, show_actions: bool):
                 _render_cell(cell, first=i == 0)
         if show_actions:
             with rv.Html(tag="div", style_=CELL_RIGHT):
-                _render_slots(row.get("actions", []))
+                _render_actions(row.get("actions", []))
         if row.get("error"):
             _RowError(str(row["error"]))
     # rv.use_event is a hook — call it unconditionally, gate inside the handler.
