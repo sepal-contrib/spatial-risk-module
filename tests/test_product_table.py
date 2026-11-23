@@ -831,3 +831,75 @@ def test_delete_confirm_button_uses_the_verb_of_the_dialog_titles():
     ]
     assert titles, "tile layout changed; update this test"
     assert all(common["common"]["remove"] in x for x in titles)
+
+
+def test_year_and_status_columns_are_centred_under_centred_headers():
+    """The narrow fixed columns are centred, header and cell; the name is not."""
+    import reacton
+
+    from gui.i18n import t
+    from gui.widget.product_table import W_NAME, W_STATUS, W_YEAR, ProductTable
+
+    t("common.close")  # prime the catalog (first t() in a first render)
+    cells = [
+        {"type": "text", "value": "altitude"},
+        {"type": "text", "value": "2020"},
+        {"type": "status", "status": "ready"},
+    ]
+    cols = [
+        {"label": "name", "width": W_NAME},
+        {"label": "year", "width": W_YEAR},
+        {"label": "status", "width": W_STATUS},
+    ]
+    _box, rc = reacton.render(
+        ProductTable(
+            title="t",
+            columns=cols,
+            rows=[{"key": "r", "cells": cells, "actions": []}],
+            empty_text="",
+        ),
+        handle_error=False,
+    )
+    try:
+        widgets = _all_widgets(rc)
+
+        def centred(text, css="text-align:center"):
+            """Is the holder of ``text``, or the cell around it, centred?"""
+            holder = next(w for w in widgets if list(w.children or []) == [text])
+            parents = [w for w in widgets if holder in _kids(w)]
+            return any(css in (w.style_ or "") for w in [holder, *parents])
+
+        assert centred("year") and centred("status") and not centred("name")
+        assert centred("2020") and not centred("altitude")
+        # The dot and the status word sit centred in their cell.
+        assert centred(
+            t("widgets.product_table.status_ready"), "justify-content:center"
+        )
+    finally:
+        rc.close()
+
+
+def test_status_style_icon_shows_a_badge_with_the_word_as_tooltip(monkeypatch):
+    """STATUS_STYLE "icon": no status word in the row, it is the badge's title."""
+    from gui.i18n import t
+    from gui.widget import product_table
+
+    ready = t("widgets.product_table.status_ready")
+
+    def status_words(rc):
+        return [w for w in _leaf_holders(rc) if w.children == [ready]]
+
+    rc = _render_table([{"type": "status", "status": "ready"}])
+    try:
+        assert status_words(rc)  # the default: dot and word
+    finally:
+        rc.close()
+
+    monkeypatch.setattr(product_table, "STATUS_STYLE", "icon")
+    rc = _render_table([{"type": "status", "status": "ready"}])
+    try:
+        assert not status_words(rc)
+        titles = [(w.attributes or {}).get("title") for w in _all_widgets(rc)]
+        assert ready in titles
+    finally:
+        rc.close()

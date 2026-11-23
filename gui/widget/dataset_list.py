@@ -57,7 +57,7 @@ def DatasetList(
                     {"type": "text", "value": str(len(ds.features)), "muted": True},
                     {
                         "type": "text",
-                        "value": str(ds.year) if ds.year else "—",
+                        "value": str(ds.year) if ds.year else "",
                         "muted": True,
                     },
                     {"type": "status", "status": "ready"},

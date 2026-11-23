@@ -75,7 +75,24 @@ W_NAME = "minmax(0,1fr)"
 W_CHIP = "64px"
 W_YEAR = "48px"
 W_COUNT = "56px"
-W_STATUS = "96px"
+#: How the Status cell shows its state. "dot": a coloured dot and the status
+#: word. "icon": a tinted round icon alone (the word is its tooltip), in a
+#: narrower column that hands the name 40px. Switch here; restart the app.
+STATUS_STYLE = "dot"
+W_STATUS = "56px" if STATUS_STYLE == "icon" else "96px"
+# The narrow fixed columns sit centred under centred headers, in every list;
+# the name column (and chips, which fill theirs) stay left.
+CENTERED_WIDTHS = (W_YEAR, W_COUNT, W_STATUS)
+CENTER = "justify-content:center;text-align:center;"
+
+# A Vuetify tone class paints the dot and the badge tint, so both follow the
+# theme in light and dark.
+STATUS_DOT = "flex:0 0 auto;width:8px;height:8px;border-radius:50%;margin-right:2px;"
+STATUS_BADGE = (
+    "position:relative;display:flex;align-items:center;justify-content:center;"
+    "flex:0 0 auto;width:28px;height:28px;border-radius:50%;overflow:hidden;"
+)
+STATUS_BADGE_TINT = "position:absolute;inset:0;opacity:0.14;"
 
 # Every cell's text element clips to its column with an ellipsis; the full text
 # rides along as a native ``title`` (see ``cell_title``).
@@ -295,9 +312,11 @@ def _clipped(text: str, title: str, style: str = ""):
     )
 
 
-def _render_cell(cell: dict, first: bool):
+def _render_cell(cell: dict, first: bool, center: bool = False):
     ctype = cell.get("type", "text")
     wrapper = NAME_CELL if first else CELL + "overflow:hidden;"
+    if center:
+        wrapper += CENTER
 
     if ctype == "render":
         with rv.Html(tag="div", style_=wrapper):
@@ -306,13 +325,29 @@ def _render_cell(cell: dict, first: bool):
     if ctype == "status":
         status = cell.get("status", "")
         label = status_label(cell)
-        with rv.Html(tag="div", style_=CELL + "overflow:hidden;"):
-            rv.Icon(
-                children=[STATUS_ICONS.get(status, "mdi-help-circle")],
-                color=STATUS_COLORS.get(status, "grey"),
-                small=True,
-                style_="flex:0 0 auto;",
-            )
+        tone = STATUS_COLORS.get(status, "grey")
+        icon = STATUS_ICONS.get(status, "mdi-help-circle")
+        with rv.Html(tag="div", style_=CELL + "overflow:hidden;" + CENTER):
+            if STATUS_STYLE == "icon":
+                with rv.Html(
+                    tag="div",
+                    style_=STATUS_BADGE,
+                    attributes={"title": label, "aria-label": label, "role": "img"},
+                ):
+                    rv.Html(tag="div", class_=tone, style_=STATUS_BADGE_TINT)
+                    # relative: above the tint, which is positioned too
+                    rv.Icon(
+                        children=[icon],
+                        color=tone,
+                        size=16,
+                        style_="position:relative;",
+                    )
+                return
+            if "sr-hourglass" in icon:
+                # A busy row keeps the app's one busy sign instead of a dot.
+                rv.Icon(children=[icon], color=tone, size=14, style_="flex:0 0 auto;")
+            else:
+                rv.Html(tag="span", class_=tone, style_=STATUS_DOT)
             _clipped(label, label, MUTED + "font-size:0.8rem;")
         return
     if ctype == "chip":
@@ -504,7 +539,7 @@ def _RowError(message: str):
 
 
 @solara.component
-def _Row(row: dict, grid: str, show_actions: bool):
+def _Row(row: dict, grid: str, show_actions: bool, centered: tuple = ()):
     """One grid row.
 
     Its own component so the ``rv.use_event`` click hook is called exactly once
@@ -524,7 +559,7 @@ def _Row(row: dict, grid: str, show_actions: bool):
         )
         with content:
             for i, cell in enumerate(row.get("cells", [])):
-                _render_cell(cell, first=i == 0)
+                _render_cell(cell, first=i == 0, center=i in centered)
         if show_actions:
             with rv.Html(tag="div", style_=CELL_RIGHT):
                 _render_actions(row.get("actions", []))
@@ -566,6 +601,7 @@ def ProductTable(
 
     widths = [c.get("width", W_NAME) for c in columns]
     labels = [c["label"] for c in columns]
+    centered = tuple(i for i, w in enumerate(widths) if w in CENTERED_WIDTHS)
     if show_actions:
         widths.append(actions_width or ACTIONS_COL_WIDTH)
         labels.append(t("common.actions"))
@@ -613,6 +649,8 @@ def ProductTable(
                             + (
                                 "text-align:right;" + ACTIONS_HEADER_RIGHT
                                 if is_actions
+                                else "text-align:center;"
+                                if i in centered
                                 else ""
                             ),
                             children=[lbl],
@@ -623,4 +661,4 @@ def ProductTable(
                 # duplicate sibling keys. _Row is stateless, so positional
                 # reconciliation is fine.
                 for row in rows:
-                    _Row(row, grid, show_actions)
+                    _Row(row, grid, show_actions, centered)
