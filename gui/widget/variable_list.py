@@ -147,7 +147,7 @@ def SourceVariableList(
                     },
                     {
                         "type": "text",
-                        "value": str(var.year) if var.year else "—",
+                        "value": str(var.year) if var.year else "",
                         "muted": True,
                     },
                     {"type": "status", "status": row_status},
@@ -248,7 +248,7 @@ def DerivedVariableList(
                     {"type": "text", "value": r["name"], "subtitle": source_name},
                     {
                         "type": "text",
-                        "value": str(r["year"]) if r.get("year") else "—",
+                        "value": str(r["year"]) if r.get("year") else "",
                         "muted": True,
                     },
                     {"type": "status", "status": r["status"]},
@@ -306,6 +306,7 @@ def HarmonizationVariableList(
     derived_on_map=None,
     on_remove: Optional[Callable[[str], None]] = None,
     toggling_keys: frozenset = frozenset(),
+    on_open: Optional[Callable[[str], None]] = None,
 ):
     """Every harmonizable source variable with its harmonization status.
 
@@ -317,10 +318,13 @@ def HarmonizationVariableList(
 
     ``running_keys`` are the raw keys a run is currently rewriting (hourglass
     on those rows); every harmonize button is disabled while ``harmonize_disabled``.
-    Map toggle and remove act on the harmonized *output*, so they are shown
-    only once one is registered; their callbacks receive the processed key,
-    and ``toggling_keys`` (processed keys whose map toggle is running) turns
-    that row's map button into an hourglass that ignores clicks.
+    A ready row drops the harmonize action. Map toggle and remove act on the
+    harmonized *output*: live on a ready row, shown but disabled on any other
+    (a layer already on the map can still be taken off it). Their callbacks
+    receive the processed key, and ``toggling_keys`` (processed keys whose map
+    toggle is running) turns that row's map button into an hourglass that
+    ignores clicks. ``on_open`` (the raw key) puts a details action on every
+    row, whatever its state.
     """
     from spatialrisk.harmonization import is_harmonizable, output_key
 
@@ -339,32 +343,43 @@ def HarmonizationVariableList(
         out_key = output_key(var)
         output = processed.get(out_key)
 
-        actions = [
-            {
-                "kind": "run",
-                "label": t("widgets.product_table.verb_harmonize"),
-                "on_click": lambda *_, k=key: on_harmonize(k),
-                "loading": key in running,
-                "disabled": harmonize_disabled
-                or row_status not in ("pending", "not_downloaded"),
-            }
-        ]
-        if output is not None and on_toggle_map is not None and is_mappable(output):
+        # A ready row offers its output (map, delete) and no run; any other
+        # row offers the run, with map and delete shown but off: its output is
+        # missing or stale.
+        ready = row_status == "harmonized"
+        actions = []
+        if not ready:
+            actions.append(
+                {
+                    "kind": "run",
+                    "label": t("widgets.product_table.verb_harmonize"),
+                    "on_click": lambda *_, k=key: on_harmonize(k),
+                    "loading": key in running,
+                    "disabled": harmonize_disabled
+                    or row_status not in ("pending", "not_downloaded"),
+                }
+            )
+        if on_toggle_map is not None and (
+            not ready or (output is not None and is_mappable(output))
+        ):
             actions.append(
                 {
                     "kind": "map_toggle",
                     "on_click": lambda *_, k=out_key: on_toggle_map(k),
                     "is_on": out_key in on_map,
                     "loading": out_key in toggling_keys,
+                    # A layer already on the map can still come off it.
+                    "disabled": not ready and out_key not in on_map,
                 }
             )
-        if output is not None and on_remove is not None:
+        if on_open is not None:
+            actions.append({"kind": "open", "on_click": lambda *_, k=key: on_open(k)})
+        if on_remove is not None and (not ready or output is not None):
             actions.append(
                 {
                     "kind": "delete",
                     "on_click": lambda *_, k=out_key: on_remove(k),
-                    # The run is rewriting this output; deleting it now races it.
-                    "disabled": key in running,
+                    "disabled": not ready,
                 }
             )
 
@@ -392,7 +407,7 @@ def HarmonizationVariableList(
                     },
                     {
                         "type": "text",
-                        "value": str(var.year) if getattr(var, "year", None) else "—",
+                        "value": str(var.year) if getattr(var, "year", None) else "",
                         "muted": True,
                     },
                     {"type": "status", "status": row_status},

@@ -158,19 +158,19 @@ def test_lists_every_harmonizable_variable_with_its_status():
 
 
 def test_harmonize_button_is_live_only_where_there_is_work():
-    """The harmonized row's button is dimmed; pending / cloud rows can be run."""
+    """A ready row has no run; pending / cloud rows can be run, not deleted."""
     project = solara.reactive(_project())
     rc, calls = _render(project, HarmonizationStatus(pending=["roads"], current=["fc"]))
     try:
         hammer = [b for b in _buttons(rc) if b.children[0].children == ["mdi-play"]]
-        assert [b.disabled for b in hammer] == [True, False, False]
-        hammer[1].click()
+        assert [b.disabled for b in hammer] == [False, False]
+        hammer[0].click()
         assert calls == ["roads"]
-        # Only the harmonized row has an output to remove.
+        # Only the ready row's output can be removed.
         trash = [
             b for b in _buttons(rc) if b.children[0].children == ["mdi-delete-outline"]
         ]
-        assert len(trash) == 1
+        assert [b.disabled for b in trash] == [False, True, True]
         trash[0].click()
         assert calls[-1] == ("remove", "fc_2020")  # the OUTPUT key
     finally:
@@ -181,7 +181,7 @@ def test_running_row_shows_the_hourglass_and_every_button_is_frozen():
     """A run in flight shows on its row and freezes every harmonize button.
 
     The running row's button is the hourglass that ignores clicks (#38); the
-    others are plain disabled hammers.
+    other unfinished row's is a plain disabled one (a ready row has none).
     """
     project = solara.reactive(_project())
     rc, _ = _render(
@@ -193,19 +193,55 @@ def test_running_row_shows_the_hourglass_and_every_button_is_frozen():
     try:
         icons = ("mdi-play", BUSY_ICON)
         hammer = [b for b in _buttons(rc) if b.children[0].children[0] in icons]
-        assert [b.children[0].children[0] for b in hammer] == [
-            "mdi-play",
-            BUSY_ICON,
-            "mdi-play",
-        ]
-        assert [b.disabled for b in hammer] == [True, False, True]
+        assert [b.children[0].children[0] for b in hammer] == [BUSY_ICON, "mdi-play"]
+        assert [b.disabled for b in hammer] == [False, True]
         assert [bool(b.class_ and "sr-busy" in b.class_) for b in hammer] == [
-            False,
             True,
             False,
         ]
         assert not any(b.loading for b in hammer)  # no spinner
         assert t("widgets.product_table.status_running") in _status_labels(rc)
+    finally:
+        rc.close()
+
+
+def test_map_toggle_is_live_only_on_a_ready_row_or_a_layer_on_the_map():
+    """An unfinished row shows the map toggle disabled, unless it is on the map."""
+    project = solara.reactive(_project())
+    status = HarmonizationStatus(pending=["roads"], current=["fc"])
+    for on_map, expected in ((set(), [False, True, True]), ({"roads"}, [False, False])):
+        rc, _ = _render(
+            project,
+            status,
+            on_toggle_map=lambda k: None,
+            derived_on_map=solara.reactive(on_map),
+        )
+        try:
+            maps = [
+                b
+                for b in _buttons(rc)
+                if b.children[0].children[0].startswith("mdi-map")
+            ]
+            assert [b.disabled for b in maps][: len(expected)] == expected
+        finally:
+            rc.close()
+
+
+def test_every_row_offers_details_whatever_its_state():
+    """The info action is on ready, pending and running rows alike."""
+    project = solara.reactive(_project())
+    status = HarmonizationStatus(pending=["roads", "rivers"], current=["fc"])
+    opened = []
+    rc, _ = _render(project, status, running_keys={"roads"}, on_open=opened.append)
+    try:
+        info = [
+            b
+            for b in _buttons(rc)
+            if b.children[0].children == ["mdi-information-outline"]
+        ]
+        assert [b.disabled for b in info] == [False, False, False]
+        info[1].click()
+        assert opened == ["roads"]  # the raw key, not the output's
     finally:
         rc.close()
 

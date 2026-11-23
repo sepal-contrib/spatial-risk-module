@@ -88,6 +88,20 @@
       "more_strata": "+{n} outros",
       "unknown_error": "Erro desconhecido."
     },
+    "variable_details": {
+      "title": "Detalhes da camada — {name}",
+      "source_layer": "Camada de origem",
+      "target_crs": "SRC de destino",
+      "resolution": "Resolução",
+      "resampling": "Método de reamostragem",
+      "resampling_default": "{method} (padrão para {raster_type})",
+      "resampling_default_untyped": "{method} (padrão)",
+      "matches_grid": "Corresponde à grade de referência atual",
+      "grid_reason_raster_type": "Desatualizada: o tipo de raster mudou desde a harmonização",
+      "grid_reason_categories": "Desatualizada: faltam suas categorias (harmonizada por uma versão anterior)",
+      "processing_steps": "Etapas de processamento",
+      "file_path": "Caminho do arquivo"
+    },
     "variable_list": {
       "source_title": "Variáveis de origem",
       "source_empty": "Nenhuma variável adicionada ainda.",
@@ -161,7 +175,7 @@
       "status_completed": "concluído",
       "status_failed": "falhou",
       "status_cancelled": "cancelado",
-      "status_harmonized": "harmonizada",
+      "status_harmonized": "pronto",
       "status_pending": "pendente",
       "status_not_downloaded": "não baixada",
       "status_checking": "verificando…",

@@ -88,6 +88,20 @@
       "more_strata": "+{n} more",
       "unknown_error": "Unknown error."
     },
+    "variable_details": {
+      "title": "Layer details — {name}",
+      "source_layer": "Source layer",
+      "target_crs": "Target CRS",
+      "resolution": "Resolution",
+      "resampling": "Resampling method",
+      "resampling_default": "{method} (default for {raster_type})",
+      "resampling_default_untyped": "{method} (default)",
+      "matches_grid": "Matches the current reference grid",
+      "grid_reason_raster_type": "Outdated: the raster type changed since it was harmonized",
+      "grid_reason_categories": "Outdated: its categories are missing (harmonized by an older version)",
+      "processing_steps": "Processing steps",
+      "file_path": "File path"
+    },
     "variable_list": {
       "source_title": "Source variables",
       "source_empty": "No variables added yet.",
@@ -161,7 +175,7 @@
       "status_completed": "completed",
       "status_failed": "failed",
       "status_cancelled": "cancelled",
-      "status_harmonized": "harmonized",
+      "status_harmonized": "ready",
       "status_pending": "pending",
       "status_not_downloaded": "to download",
       "status_checking": "checking…",

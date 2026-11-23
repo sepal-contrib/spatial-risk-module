@@ -44,6 +44,9 @@ class LocalRasterVar(Variable):
     # add_as_processed: the New model dialog counts them to warn about slow
     # iCAR training and fit() declares them as each C() term's domain.
     categorical_levels: Optional[List[Union[int, float]]] = None
+    # The resampling method harmonization used; None on outputs written before
+    # it was recorded.
+    resampling: Optional[str] = None
     # Set when the user picked one band of a multi-band file: ``path`` is then
     # a single-band VRT over ``source_path``, which the edit dialog shows.
     band: Optional[int] = None
@@ -423,6 +426,7 @@ class LocalRasterVar(Variable):
             year=self.year,
             tags=self.tags.copy() if self.tags else [],
             vis_params=self.vis_params,  # the style picked for the layer (#55)
+            resampling=resampling,
             # Stamped from the target geobox, not from the file just written:
             # xr_reproject writes *onto* this geobox, so the two are the same
             # grid by construction, and taking it from here keeps the

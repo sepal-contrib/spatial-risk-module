@@ -88,6 +88,20 @@
       "more_strata": "+{n} autres",
       "unknown_error": "Erreur inconnue."
     },
+    "variable_details": {
+      "title": "Détails de la couche — {name}",
+      "source_layer": "Couche source",
+      "target_crs": "SCR cible",
+      "resolution": "Résolution",
+      "resampling": "Méthode de rééchantillonnage",
+      "resampling_default": "{method} (par défaut pour {raster_type})",
+      "resampling_default_untyped": "{method} (par défaut)",
+      "matches_grid": "Correspond à la grille de référence actuelle",
+      "grid_reason_raster_type": "Obsolète : le type de raster a changé depuis son harmonisation",
+      "grid_reason_categories": "Obsolète : ses catégories manquent (harmonisée par une version antérieure)",
+      "processing_steps": "Étapes de traitement",
+      "file_path": "Chemin du fichier"
+    },
     "variable_list": {
       "source_title": "Variables sources",
       "source_empty": "Aucune variable ajoutée.",
@@ -161,7 +175,7 @@
       "status_completed": "terminé",
       "status_failed": "échec",
       "status_cancelled": "annulé",
-      "status_harmonized": "harmonisée",
+      "status_harmonized": "prêt",
       "status_pending": "en attente",
       "status_not_downloaded": "non chargée",
       "status_checking": "contrôle…",
