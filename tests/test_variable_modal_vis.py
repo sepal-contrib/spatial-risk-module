@@ -351,3 +351,51 @@ def test_build_variable_passes_vis_params_through(monkeypatch):
         project,
     )
     assert local.vis_params == vis
+
+
+def test_multiband_file_shows_a_band_select_and_submits_the_pick(tmp_path):
+    """A multi-band local raster offers its bands and submits the one picked."""
+    import time
+
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    src = tmp_path / "multi.tif"
+    with rasterio.open(
+        src,
+        "w",
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 2, 1, 1),
+    ) as dst:
+        dst.write(np.zeros((3, 2, 2), dtype="uint8"))
+    added = []
+    box, _rc = reacton.render(
+        VariableModal(
+            open_=solara.reactive(True),
+            on_add=added.append,
+            initial_entry={
+                "source": "custom",
+                "type": "LocalRasterVar",
+                "name": "x",
+                "path": str(src),
+            },
+        )
+    )
+    label = t("vars.modal.band_label")
+    for _ in range(100):  # the band list is read in a thread
+        selects = [s for s in _find(box, vw.Select) if s.label == label]
+        if selects and selects[0].v_model == 1:
+            break
+        time.sleep(0.05)
+    assert [i["value"] for i in selects[0].items] == [1, 2, 3]
+
+    selects[0].v_model = 3
+    add = t("vars.modal.submit_add")
+    next(b for b in _find(box, vw.Btn) if add in str(b.children)).click()
+    assert added[0]["band"] == 3

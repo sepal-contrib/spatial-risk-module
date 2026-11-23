@@ -379,3 +379,24 @@ def test_a_rasterized_vector_keeps_its_classes(tmp_path):
     ids = [style["colormap"](i / 255) for i in (1, 2, 3, 21)]
     assert len(set(ids)) == 3 and ids[0] == ids[3]
     assert raster.raster_type == RasterType.categorical
+
+
+def test_file_probes_read_the_picked_band(tmp_path):
+    """A multi-band file's probes read the band picked in the modal."""
+    path = tmp_path / "multi.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=2,
+        width=2,
+        count=2,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 2, 1, 1),
+    ) as dst:
+        dst.write(np.array([[1, 2], [1, 2]], dtype="uint8"), 1)
+        dst.write(np.array([[5, 6], [7, 8]], dtype="uint8"), 2)
+
+    assert probes.file_classes(str(path))["values"] == [1, 2]
+    assert probes.file_classes(str(path), band=2)["values"] == [5, 6, 7, 8]

@@ -207,6 +207,21 @@ def process_forest_loss(input1_path, input2_path, output_path):
         dst.write(output, 1)
 
 
+def single_band_vrt(src: str | Path, band: int, dst: str | Path) -> Path:
+    """Write ``dst`` as a VRT exposing only ``band`` (1-based) of ``src``.
+
+    Every reader in the app takes band 1, so a multi-band source is narrowed to
+    the chosen band here once; the VRT is a few hundred bytes and copies nothing.
+    """
+    from osgeo import gdal
+
+    ds = gdal.Translate(str(dst), str(src), format="VRT", bandList=[int(band)])
+    if ds is None:
+        raise ValueError(f"Could not read band {band} of {src}")
+    ds = None  # flush the VRT to disk
+    return Path(dst)
+
+
 def raster_is_all_nodata(raster_path: str | Path, band: int = 1) -> bool:
     """True when every pixel of ``band`` equals the file's declared nodata.
 

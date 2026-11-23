@@ -44,6 +44,8 @@ class GEEVar(Variable):
     # collide with the default sentinel must set this (e.g. a categorical
     # export whose class ids can reach 255).
     export_nodata: Optional[float] = None
+    # Band picked from a multi-band asset; None exports the image as is.
+    band: Optional[str] = None
 
     @model_validator(mode="after")
     def _chk_source(self):
@@ -87,7 +89,8 @@ class GEEVar(Variable):
             if isinstance(self.path, str) and (
                 self.path.startswith("users/") or self.path.startswith("projects/")
             ):
-                self.gee_images = [ee.Image(self.path)]
+                image = ee.Image(self.path)
+                self.gee_images = [image.select([self.band]) if self.band else image]
             else:
                 raise ValueError("gee_images must be provided for download.")
         return self.gee_images

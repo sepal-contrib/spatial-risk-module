@@ -40,11 +40,14 @@ def _region(image, aoi) -> dict:
     }
 
 
-def gee_stretch(gee_interface, asset: str, aoi) -> dict:
-    """``{"span": (p2, p98)}`` of the asset's first band over the AOI, or an error."""
+def gee_stretch(gee_interface, asset: str, aoi, band=None) -> dict:
+    """``{"span": (p2, p98)}`` of the asset's ``band`` over the AOI, or an error.
+
+    ``band`` is a band name; None reads the first band.
+    """
     import ee
 
-    image = ee.Image(asset).select([0]).rename(_BAND)
+    image = ee.Image(asset).select([0 if band is None else band]).rename(_BAND)
     info = gee_interface.get_info(
         image.reduceRegion(
             reducer=ee.Reducer.percentile(list(PERCENTILES)), **_region(image, aoi)
@@ -53,8 +56,10 @@ def gee_stretch(gee_interface, asset: str, aoi) -> dict:
     return _span(info.get(f"{_BAND}_p2"), info.get(f"{_BAND}_p98"))
 
 
-def gee_classes(gee_interface, asset: str, aoi) -> dict:
-    """``{"values", "known"}`` of the asset's first band over the AOI, or ``{"error"}``.
+def gee_classes(gee_interface, asset: str, aoi, band=None) -> dict:
+    """``{"values", "known"}`` of the asset's ``band`` over the AOI, or ``{"error"}``.
+
+    ``band`` is a band name; None reads the first band.
 
     The histogram is trimmed on the server to its size and its first
     ``MAX_CLASSES + 1`` keys (a float band can hold millions). ``known`` is the
@@ -63,8 +68,9 @@ def gee_classes(gee_interface, asset: str, aoi) -> dict:
     import ee
 
     source = ee.Image(asset)
-    name = ee.String(source.bandNames().get(0))
-    image = source.select([0]).rename(_BAND)
+    picked = source.select([0 if band is None else band])
+    name = ee.String(picked.bandNames().get(0))
+    image = picked.rename(_BAND)
     found = image.reduceRegion(
         reducer=ee.Reducer.frequencyHistogram(), **_region(image, aoi)
     ).get(_BAND)
@@ -114,8 +120,8 @@ def check_values(values) -> dict:
     return {"values": ordered}
 
 
-def file_sample(path) -> np.ndarray:
-    """The valid values of the raster's first band, read nearest and decimated.
+def file_sample(path, band=1) -> np.ndarray:
+    """The valid values of the raster's ``band`` (1-based), read nearest and decimated.
 
     The longest side is at most ``FILE_PROBE_SIZE``; nodata and non-finite
     values are dropped.
@@ -126,24 +132,26 @@ def file_sample(path) -> np.ndarray:
     with rasterio.open(path) as src:
         k = min(1.0, FILE_PROBE_SIZE / max(src.width, src.height))
         shape = (max(1, round(src.height * k)), max(1, round(src.width * k)))
-        data = src.read(1, out_shape=shape, resampling=Resampling.nearest, masked=True)
+        data = src.read(
+            band, out_shape=shape, resampling=Resampling.nearest, masked=True
+        )
     values = data.compressed()
     if np.issubdtype(values.dtype, np.floating):
         values = values[np.isfinite(values)]
     return values
 
 
-def file_stretch(path) -> dict:
-    """``{"span": (p2, p98)}`` of a local raster's first band, or ``{"error"}``."""
-    values = file_sample(path)
+def file_stretch(path, band=1) -> dict:
+    """``{"span": (p2, p98)}`` of a local raster's ``band``, or ``{"error"}``."""
+    values = file_sample(path, band)
     if values.size == 0:
         return {"error": ERR_NO_STRETCH}
     return _span(*np.percentile(values, PERCENTILES))
 
 
-def file_classes(path) -> dict:
-    """``{"values", "known"}`` of a local raster's first band, or ``{"error"}``."""
-    checked = check_values(np.unique(file_sample(path)))
+def file_classes(path, band=1) -> dict:
+    """``{"values", "known"}`` of a local raster's ``band``, or ``{"error"}``."""
+    checked = check_values(np.unique(file_sample(path, band)))
     if "error" in checked:
         return checked
     return {"values": checked["values"], "known": None}
