@@ -37,6 +37,20 @@ def derived_source_key(p, var_name, fallback, year=None):
     return matches[0] if matches else fallback
 
 
+def _source_subtitle(var, is_cloud: bool) -> str:
+    """The name subtitle of a source variable: "raster · local"."""
+    # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
+    # test is true for its members too and would render the member itself —
+    # which str() spells "DataType.raster".
+    data_type_label = getattr(var.data_type, "value", var.data_type)
+    origin = t(
+        "widgets.variable_list.chip_cloud"
+        if is_cloud
+        else "widgets.variable_list.chip_local"
+    )
+    return f"{data_type_label} · {origin}"
+
+
 @solara.component
 def SourceVariableList(
     project,
@@ -65,17 +79,7 @@ def SourceVariableList(
     rows = []
     for key, var in raw_variables.items():
         is_base = is_base_raster(p, var)
-        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
-        # test is true for its members too and would render the member itself —
-        # which str() spells "DataType.raster".
-        data_type_label = getattr(var.data_type, "value", var.data_type)
         is_cloud = type(var).__name__ == "GEEVar"
-
-        origin = t(
-            "widgets.variable_list.chip_cloud"
-            if is_cloud
-            else "widgets.variable_list.chip_local"
-        )
         if key in downloading_keys:
             row_status = "running"
         else:
@@ -138,7 +142,7 @@ def SourceVariableList(
                     {
                         "type": "text",
                         "value": var.name,
-                        "subtitle": f"{data_type_label} · {origin}",
+                        "subtitle": _source_subtitle(var, is_cloud),
                         "chips": name_chips,
                     },
                     {
@@ -379,7 +383,13 @@ def HarmonizationVariableList(
             {
                 "key": key,
                 "cells": [
-                    {"type": "text", "value": var.name, "chips": name_chips},
+                    {
+                        "type": "text",
+                        "value": var.name,
+                        # The source it is made from, as in Step 2.
+                        "subtitle": _source_subtitle(var, is_cloud),
+                        "chips": name_chips,
+                    },
                     {
                         "type": "text",
                         "value": str(var.year) if getattr(var, "year", None) else "—",

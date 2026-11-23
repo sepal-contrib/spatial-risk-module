@@ -81,6 +81,7 @@ def test_harmonization_list_has_no_type_column():
     """Step 3 drops the type: every harmonized output is a raster.
 
     A column reading "raster" on every row only took width from the name.
+    The source's type sits in the name subtitle instead, as in Step 2.
     """
     _box, rc = reacton.render(
         HarmonizationVariableList(
@@ -93,6 +94,7 @@ def test_harmonization_list_has_no_type_column():
     texts = _texts(rc)
 
     assert "raster" not in texts
+    assert f"raster · {t('widgets.variable_list.chip_local')}" in texts
     assert t("widgets.variable_list.source_col_type") not in texts
     assert "DataType.raster" not in texts
 
