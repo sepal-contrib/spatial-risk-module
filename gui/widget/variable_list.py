@@ -8,7 +8,7 @@ from gui.i18n import t
 from gui.scripts.map_helpers import is_mappable
 from gui.scripts.product_rows import derived_rows
 from gui.scripts.variable_identity import is_base_raster
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_NAME, W_STATUS, W_YEAR, ProductTable
 
 
 def derived_source_key(p, var_name, fallback, year=None):
@@ -35,6 +35,20 @@ def derived_source_key(p, var_name, fallback, year=None):
             if getattr(p.raw_variables[key], "year", None) == year:
                 return key
     return matches[0] if matches else fallback
+
+
+def _source_subtitle(var, is_cloud: bool) -> str:
+    """The name subtitle of a source variable: "raster · local"."""
+    # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
+    # test is true for its members too and would render the member itself —
+    # which str() spells "DataType.raster".
+    data_type_label = getattr(var.data_type, "value", var.data_type)
+    origin = t(
+        "widgets.variable_list.chip_cloud"
+        if is_cloud
+        else "widgets.variable_list.chip_local"
+    )
+    return f"{data_type_label} · {origin}"
 
 
 @solara.component
@@ -65,27 +79,18 @@ def SourceVariableList(
     rows = []
     for key, var in raw_variables.items():
         is_base = is_base_raster(p, var)
-        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
-        # test is true for its members too and would render the member itself —
-        # which str() spells "DataType.raster".
-        data_type_label = getattr(var.data_type, "value", var.data_type)
         is_cloud = type(var).__name__ == "GEEVar"
-
-        status_chip = (
-            {
-                "value": t("widgets.variable_list.chip_cloud"),
-                "icon": "mdi-cloud-outline",
-                "color": "warning",
-            }
-            if is_cloud
-            else {"value": t("widgets.variable_list.chip_local"), "color": "success"}
-        )
+        if key in downloading_keys:
+            row_status = "running"
+        else:
+            row_status = "pending" if is_cloud else "ready"
 
         actions = []
         if on_download is not None and is_cloud:
             actions.append(
                 {
-                    "kind": "download",
+                    "kind": "run",
+                    "label": t("widgets.product_table.verb_download"),
                     "on_click": lambda *_, k=key: on_download(k),
                     "loading": key in downloading_keys,
                     "disabled": key in downloading_keys,
@@ -100,9 +105,24 @@ def SourceVariableList(
                     "loading": key in toggling_keys,
                 }
             )
+        # Edit and delete rewrite the files a running download is writing, so
+        # they freeze on that row (map and the rest stay live).
+        frozen = key in downloading_keys
         if on_edit is not None:
-            actions.append({"kind": "edit", "on_click": lambda *_, k=key: on_edit(k)})
-        actions.append({"kind": "delete", "on_click": lambda *_, k=key: on_remove(k)})
+            actions.append(
+                {
+                    "kind": "edit",
+                    "on_click": lambda *_, k=key: on_edit(k),
+                    "disabled": frozen,
+                }
+            )
+        actions.append(
+            {
+                "kind": "delete",
+                "on_click": lambda *_, k=key: on_remove(k),
+                "disabled": frozen,
+            }
+        )
 
         name_chips = (
             [
@@ -119,19 +139,18 @@ def SourceVariableList(
             {
                 "key": key,
                 "cells": [
-                    {"type": "text", "value": var.name, "chips": name_chips},
                     {
-                        "type": "chips",
-                        "items": [
-                            {"value": data_type_label, "color": "primary"},
-                            status_chip,
-                        ],
+                        "type": "text",
+                        "value": var.name,
+                        "subtitle": _source_subtitle(var, is_cloud),
+                        "chips": name_chips,
                     },
                     {
                         "type": "text",
-                        "value": str(var.year) if var.year else "—",
+                        "value": str(var.year) if var.year else "",
                         "muted": True,
                     },
+                    {"type": "status", "status": row_status},
                 ],
                 "actions": actions,
             }
@@ -140,12 +159,9 @@ def SourceVariableList(
     ProductTable(
         title=t("widgets.variable_list.source_title"),
         columns=[
-            {
-                "label": t("widgets.variable_list.source_col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            {"label": t("widgets.variable_list.source_col_type"), "width": "150px"},
-            {"label": t("widgets.variable_list.source_col_year"), "width": "44px"},
+            {"label": t("widgets.variable_list.source_col_name"), "width": W_NAME},
+            {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
+            {"label": t("widgets.product_table.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.variable_list.source_empty"),
@@ -163,6 +179,7 @@ def DerivedVariableList(
     jobs=None,
     on_dismiss: Optional[Callable[[str], None]] = None,
     toggling_keys: frozenset = frozenset(),
+    on_open: Optional[Callable[[str], None]] = None,
 ):
     """Derived (processed) variables, plus the layers still being generated.
 
@@ -178,14 +195,13 @@ def DerivedVariableList(
     derived layer is a row from the moment its form is submitted instead of
     appearing out of nowhere minutes later. A job row has no product to act on
     (and the GDAL pass behind it is not cancellable), so it carries no actions
-    until it fails, when ``on_dismiss`` lets the user clear it.
+    until it fails, when ``on_dismiss`` lets the user clear it. ``on_open``
+    (the processed key) puts a details action on every product row.
     """
     p = project.value
     if p is None:
         return
     data = derived_rows(p, jobs.value if jobs is not None else None, keys)
-    if not data:
-        return
     on_map = derived_on_map.value if derived_on_map is not None else set()
     unknown_source = t("widgets.variable_list.derived_source_unknown")
 
@@ -205,6 +221,10 @@ def DerivedVariableList(
                         "is_on": r["key"] in on_map,
                         "loading": r["key"] in toggling_keys,
                     }
+                )
+            if on_open is not None:
+                actions.append(
+                    {"kind": "open", "on_click": lambda *_, k=r["key"]: on_open(k)}
                 )
             if on_remove is not None:
                 actions.append(
@@ -231,8 +251,12 @@ def DerivedVariableList(
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["name"], "size": "0.9rem"},
-                    {"type": "chip", "value": source_name},
+                    {"type": "text", "value": r["name"], "subtitle": source_name},
+                    {
+                        "type": "text",
+                        "value": str(r["year"]) if r.get("year") else "",
+                        "muted": True,
+                    },
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -243,15 +267,12 @@ def DerivedVariableList(
     ProductTable(
         title=title or t("widgets.variable_list.derived_title"),
         columns=[
-            {
-                "label": t("widgets.variable_list.derived_col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            {"label": t("widgets.variable_list.derived_col_source"), "width": "120px"},
-            {"label": t("widgets.variable_list.derived_col_status"), "width": "90px"},
+            {"label": t("widgets.variable_list.derived_col_name"), "width": W_NAME},
+            {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
+            {"label": t("widgets.variable_list.derived_col_status"), "width": W_STATUS},
         ],
         rows=rows,
-        empty_text="",
+        empty_text=t("widgets.variable_list.derived_empty"),
     )
 
 
@@ -291,6 +312,7 @@ def HarmonizationVariableList(
     derived_on_map=None,
     on_remove: Optional[Callable[[str], None]] = None,
     toggling_keys: frozenset = frozenset(),
+    on_open: Optional[Callable[[str], None]] = None,
 ):
     """Every harmonizable source variable with its harmonization status.
 
@@ -302,10 +324,13 @@ def HarmonizationVariableList(
 
     ``running_keys`` are the raw keys a run is currently rewriting (hourglass
     on those rows); every harmonize button is disabled while ``harmonize_disabled``.
-    Map toggle and remove act on the harmonized *output*, so they are shown
-    only once one is registered; their callbacks receive the processed key,
-    and ``toggling_keys`` (processed keys whose map toggle is running) turns
-    that row's map button into an hourglass that ignores clicks.
+    A ready row drops the harmonize action. Map toggle and remove act on the
+    harmonized *output*: live on a ready row, shown but disabled on any other
+    (a layer already on the map can still be taken off it). Their callbacks
+    receive the processed key, and ``toggling_keys`` (processed keys whose map
+    toggle is running) turns that row's map button into an hourglass that
+    ignores clicks. ``on_open`` (the raw key) puts a details action on every
+    row, whatever its state.
     """
     from spatialrisk.harmonization import is_harmonizable, output_key
 
@@ -323,32 +348,45 @@ def HarmonizationVariableList(
         row_status = harmonization_row_status(key, var, status, running, is_cloud)
         out_key = output_key(var)
         output = processed.get(out_key)
-        # ``.value`` first: DataType subclasses str, so an isinstance(..., str)
-        # test is true for its members too and would render the member itself —
-        # which str() spells "DataType.raster".
-        data_type_label = getattr(var.data_type, "value", var.data_type)
 
-        actions = [
-            {
-                "kind": "harmonize",
-                "on_click": lambda *_, k=key: on_harmonize(k),
-                "loading": key in running,
-                "disabled": harmonize_disabled
-                or row_status not in ("pending", "not_downloaded"),
-            }
-        ]
-        if output is not None and on_toggle_map is not None and is_mappable(output):
+        # A ready row offers its output (map, delete) and no run; any other
+        # row offers the run, with map and delete shown but off: its output is
+        # missing or stale.
+        ready = row_status == "harmonized"
+        actions = []
+        if not ready:
+            actions.append(
+                {
+                    "kind": "run",
+                    "label": t("widgets.product_table.verb_harmonize"),
+                    "on_click": lambda *_, k=key: on_harmonize(k),
+                    "loading": key in running,
+                    "disabled": harmonize_disabled
+                    or row_status not in ("pending", "not_downloaded"),
+                }
+            )
+        if on_toggle_map is not None and (
+            not ready or (output is not None and is_mappable(output))
+        ):
             actions.append(
                 {
                     "kind": "map_toggle",
                     "on_click": lambda *_, k=out_key: on_toggle_map(k),
                     "is_on": out_key in on_map,
                     "loading": out_key in toggling_keys,
+                    # A layer already on the map can still come off it.
+                    "disabled": not ready and out_key not in on_map,
                 }
             )
-        if output is not None and on_remove is not None:
+        if on_open is not None:
+            actions.append({"kind": "open", "on_click": lambda *_, k=key: on_open(k)})
+        if on_remove is not None and (not ready or output is not None):
             actions.append(
-                {"kind": "delete", "on_click": lambda *_, k=out_key: on_remove(k)}
+                {
+                    "kind": "delete",
+                    "on_click": lambda *_, k=out_key: on_remove(k),
+                    "disabled": not ready,
+                }
             )
 
         name_chips = (
@@ -366,11 +404,16 @@ def HarmonizationVariableList(
             {
                 "key": key,
                 "cells": [
-                    {"type": "text", "value": var.name, "chips": name_chips},
-                    {"type": "chip", "value": data_type_label, "color": "primary"},
                     {
                         "type": "text",
-                        "value": str(var.year) if getattr(var, "year", None) else "—",
+                        "value": var.name,
+                        # The source it is made from, as in Step 2.
+                        "subtitle": _source_subtitle(var, is_cloud),
+                        "chips": name_chips,
+                    },
+                    {
+                        "type": "text",
+                        "value": str(var.year) if getattr(var, "year", None) else "",
                         "muted": True,
                     },
                     {"type": "status", "status": row_status},
@@ -379,21 +422,17 @@ def HarmonizationVariableList(
             }
         )
 
+    # No type column: every harmonized output is a raster (vectors are
+    # rasterized), so it said "raster" on every row while the name, the one
+    # cell that tells rows apart, was ellipsised to a few letters.
     ProductTable(
         title=t("widgets.variable_list.harmonization_title"),
         columns=[
-            {
-                "label": t("widgets.variable_list.source_col_name"),
-                "width": "minmax(0,2fr)",
-            },
-            # Lean fixed widths: the panel is ~450px wide and the Name column
-            # takes whatever is left, so every fixed px here is a truncated
-            # name (see list-grid alignment: no max-content columns).
-            {"label": t("widgets.variable_list.source_col_type"), "width": "58px"},
-            {"label": t("widgets.variable_list.source_col_year"), "width": "40px"},
+            {"label": t("widgets.variable_list.source_col_name"), "width": W_NAME},
+            {"label": t("widgets.variable_list.source_col_year"), "width": W_YEAR},
             {
                 "label": t("widgets.variable_list.harmonization_col_status"),
-                "width": "108px",
+                "width": W_STATUS,
             },
         ],
         rows=rows,

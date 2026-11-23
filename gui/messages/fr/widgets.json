@@ -75,7 +75,8 @@
       "col_name": "Nom",
       "col_target": "Cible",
       "col_feats": "Vars",
-      "col_year": "Année"
+      "col_year": "Année",
+      "subtitle": "{target} · {n} variables"
     },
     "sample_set_list": {
       "title": "Plans d'échantillonnage",
@@ -86,6 +87,23 @@
       "col_status": "Statut",
       "more_strata": "+{n} autres",
       "unknown_error": "Erreur inconnue."
+    },
+    "variable_details": {
+      "title": "Détails de la couche — {name}",
+      "source_layer": "Couche source",
+      "target_crs": "SCR cible",
+      "resolution": "Résolution",
+      "resampling": "Méthode de rééchantillonnage",
+      "resampling_default": "{method} (par défaut pour {raster_type})",
+      "resampling_default_untyped": "{method} (par défaut)",
+      "matches_grid": "Correspond à la grille de référence actuelle",
+      "grid_reason_raster_type": "Obsolète : le type de raster a changé depuis son harmonisation",
+      "grid_reason_categories": "Obsolète : ses catégories manquent (harmonisée par une version antérieure)",
+      "processing_steps": "Étapes de traitement",
+      "operation": "Opération",
+      "inputs": "Couches d'entrée",
+      "years": "Années",
+      "file_path": "Chemin du fichier"
     },
     "variable_list": {
       "source_title": "Variables sources",
@@ -104,7 +122,8 @@
       "derived_source_unknown": "inconnue",
       "derived_unknown_error": "Erreur inconnue",
       "harmonization_title": "Variables",
-      "harmonization_col_status": "Statut"
+      "harmonization_col_status": "Statut",
+      "derived_empty": "Aucune variable dérivée pour l'instant."
     },
     "summary_lists": {
       "raw_vars_title": "Variables sources",
@@ -154,15 +173,39 @@
     },
     "product_table": {
       "status_running": "en cours",
-      "status_tiling": "création des tuiles",
+      "status_tiling": "tuilage",
       "status_ready": "prêt",
       "status_completed": "terminé",
       "status_failed": "échec",
       "status_cancelled": "annulé",
-      "status_harmonized": "harmonisée",
+      "status_harmonized": "prêt",
       "status_pending": "en attente",
-      "status_not_downloaded": "non téléchargée",
-      "status_checking": "vérification…"
+      "status_not_downloaded": "non chargée",
+      "status_checking": "contrôle…",
+      "status_blocked": "requiert {input}",
+      "status_queued": "mis en file",
+      "status_outdated": "obsolète",
+      "action_run": "Lancer",
+      "action_cancel": "Annuler",
+      "action_retry": "Réessayer",
+      "action_rerun": "Relancer",
+      "action_map_on": "Afficher sur la carte",
+      "action_map_off": "Retirer de la carte",
+      "action_open": "Détails",
+      "action_edit": "Modifier",
+      "action_duplicate": "Dupliquer",
+      "action_delete": "Supprimer",
+      "action_dismiss": "Ignorer",
+      "action_more": "Plus d'actions",
+      "verb_download": "Télécharger",
+      "verb_harmonize": "Harmoniser",
+      "error_details": "détails",
+      "input_generic": "entrée",
+      "ago_now": "à l'instant",
+      "ago_minutes": "il y a {n} minutes",
+      "ago_hours": "il y a {n} heures",
+      "ago_days": "il y a {n} jours",
+      "col_status": "Statut"
     },
     "artifact_name": {
       "label": "Nom",

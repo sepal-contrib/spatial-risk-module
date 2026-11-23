@@ -32,10 +32,10 @@ from gui.scripts.evaluation_echarts import (
     pred_obs_scatter_option,
     resolve_plot_artifact,
 )
-from gui.scripts.product_rows import evaluation_tab_rows
+from gui.scripts.product_rows import evaluation_tab_rows, relative_date
 from gui.tile.evaluation_helpers import rows_for_record
 from gui.widget.echarts import EChartsChart, theme_accent
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_COUNT, W_NAME, W_STATUS, ProductTable
 from gui.widget.text_style import MUTED
 
 logger = logging.getLogger("spatial_risk")
@@ -108,14 +108,12 @@ def EvaluationResults(eval_jobs, project, on_open, on_delete, on_dismiss=None):
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["truth_tag"]},
-                    {"type": "chip", "value": str(r["n_maps"])},
                     {
                         "type": "text",
-                        "value": r["created_at"],
-                        "size": "0.78rem",
-                        "muted": True,
+                        "value": r["truth_tag"],
+                        "subtitle": relative_date(r["created_at"]),
                     },
+                    {"type": "text", "value": str(r["n_maps"]), "muted": True},
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -126,16 +124,9 @@ def EvaluationResults(eval_jobs, project, on_open, on_delete, on_dismiss=None):
     ProductTable(
         title=t("widgets.evaluation_results.evaluations_title"),
         columns=[
-            {
-                "label": t("widgets.evaluation_results.col_truth"),
-                "width": "minmax(0,2fr)",
-            },
-            {"label": t("widgets.evaluation_results.col_maps"), "width": "55px"},
-            {
-                "label": t("widgets.evaluation_results.col_created"),
-                "width": "minmax(0,1fr)",
-            },
-            {"label": t("widgets.evaluation_results.col_status"), "width": "95px"},
+            {"label": t("widgets.evaluation_results.col_truth"), "width": W_NAME},
+            {"label": t("widgets.evaluation_results.col_maps"), "width": W_COUNT},
+            {"label": t("widgets.evaluation_results.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.evaluation_results.empty"),

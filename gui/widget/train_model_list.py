@@ -6,23 +6,21 @@ import solara
 
 from gui.i18n import t
 from gui.scripts.product_rows import train_rows
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_CHIP, W_NAME, W_STATUS, ProductTable
 
 logger = logging.getLogger("spatial_risk")
 
 
 @solara.component
-def TrainModelList(
-    project, train_jobs, model_labels, on_cancel, on_dismiss, on_delete, on_open
-):
+def TrainModelList(project, train_jobs, model_labels, on_dismiss, on_delete, on_open):
     """Models table: one row per registered model plus in-flight/failed jobs.
 
     Args:
         project: solara.Reactive[Project] — source of project.models.
         train_jobs: solara.Reactive[list] — transient session job dicts.
         model_labels: dict model_type -> human label.
-        on_cancel: callback(job_id) — cancel a running job.
         on_dismiss: callback(job_id) — discard a failed/cancelled job row.
+            A running job offers no action: training cannot be interrupted.
         on_delete: callback(model_key) — delete a registered model (confirmed
             by the tile).
         on_open: callback(model_key) — open the read-only details dialog for a
@@ -39,9 +37,9 @@ def TrainModelList(
                 {"kind": "delete", "on_click": lambda *_, k=r["key"]: on_delete(k)},
             ]
         elif r["status"] == "running":
-            actions = [
-                {"kind": "cancel", "on_click": lambda *_, i=r["job_id"]: on_cancel(i)}
-            ]
+            # Training cannot be interrupted (the worker has no cancel hook), so
+            # a Cancel button only hid the row while the fit kept running.
+            actions = []
         else:
             actions = [
                 {"kind": "dismiss", "on_click": lambda *_, i=r["job_id"]: on_dismiss(i)}
@@ -54,20 +52,12 @@ def TrainModelList(
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["name"]},
+                    {
+                        "type": "text",
+                        "value": r["name"],
+                        "subtitle": f"{r['dataset_name']} · {r['sample_name']}",
+                    },
                     {"type": "chip", "value": r["model_label"], "color": "primary"},
-                    {
-                        "type": "text",
-                        "value": r["dataset_name"],
-                        "size": "0.8rem",
-                        "muted": True,
-                    },
-                    {
-                        "type": "text",
-                        "value": r["sample_name"],
-                        "size": "0.8rem",
-                        "muted": True,
-                    },
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -75,23 +65,12 @@ def TrainModelList(
             }
         )
 
-    # Six columns in a ~470px panel: every fixed width is lean (short type
-    # chips, two-icon actions) so the three minmax(0,1fr) columns — name,
-    # dataset, sample — keep real room instead of collapsing to slivers.
     ProductTable(
         title=t("widgets.train_model_list.models_title"),
         columns=[
-            {"label": t("widgets.train_model_list.col_name"), "width": "minmax(0,2fr)"},
-            {"label": t("widgets.train_model_list.col_type"), "width": "56px"},
-            {
-                "label": t("widgets.train_model_list.col_dataset"),
-                "width": "minmax(0,1fr)",
-            },
-            {
-                "label": t("widgets.train_model_list.col_sample"),
-                "width": "minmax(0,1fr)",
-            },
-            {"label": t("widgets.train_model_list.col_status"), "width": "82px"},
+            {"label": t("widgets.train_model_list.col_name"), "width": W_NAME},
+            {"label": t("widgets.train_model_list.col_type"), "width": W_CHIP},
+            {"label": t("widgets.train_model_list.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.train_model_list.empty"),

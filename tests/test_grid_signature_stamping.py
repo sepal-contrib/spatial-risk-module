@@ -112,6 +112,8 @@ def test_reproject_and_match_stamps_the_target_geobox(monkeypatch, tmp_path):
     out = var.reproject_and_match(_Geobox())
 
     assert out.grid_signature == geobox_signature(_Geobox())
+    # The method the rule picked for a continuous layer is kept on the output.
+    assert out.resampling == "bilinear"
 
 
 def test_signature_moves_when_the_target_grid_moves(monkeypatch, tmp_path):

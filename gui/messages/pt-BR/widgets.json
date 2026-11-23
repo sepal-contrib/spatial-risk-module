@@ -75,7 +75,8 @@
       "col_name": "Nome",
       "col_target": "Alvo",
       "col_feats": "Vars",
-      "col_year": "Ano"
+      "col_year": "Ano",
+      "subtitle": "{target} · {n} variáveis"
     },
     "sample_set_list": {
       "title": "Desenhos amostrais",
@@ -86,6 +87,23 @@
       "col_status": "Status",
       "more_strata": "+{n} outros",
       "unknown_error": "Erro desconhecido."
+    },
+    "variable_details": {
+      "title": "Detalhes da camada — {name}",
+      "source_layer": "Camada de origem",
+      "target_crs": "SRC de destino",
+      "resolution": "Resolução",
+      "resampling": "Método de reamostragem",
+      "resampling_default": "{method} (padrão para {raster_type})",
+      "resampling_default_untyped": "{method} (padrão)",
+      "matches_grid": "Corresponde à grade de referência atual",
+      "grid_reason_raster_type": "Desatualizada: o tipo de raster mudou desde a harmonização",
+      "grid_reason_categories": "Desatualizada: faltam suas categorias (harmonizada por uma versão anterior)",
+      "processing_steps": "Etapas de processamento",
+      "operation": "Operação",
+      "inputs": "Camadas de entrada",
+      "years": "Anos",
+      "file_path": "Caminho do arquivo"
     },
     "variable_list": {
       "source_title": "Variáveis de origem",
@@ -104,7 +122,8 @@
       "derived_source_unknown": "desconhecida",
       "derived_unknown_error": "Erro desconhecido",
       "harmonization_title": "Variáveis",
-      "harmonization_col_status": "Status"
+      "harmonization_col_status": "Status",
+      "derived_empty": "Nenhuma variável derivada ainda."
     },
     "summary_lists": {
       "raw_vars_title": "Variáveis de origem",
@@ -154,15 +173,39 @@
     },
     "product_table": {
       "status_running": "em execução",
-      "status_tiling": "gerando tiles",
+      "status_tiling": "tiles…",
       "status_ready": "pronto",
       "status_completed": "concluído",
       "status_failed": "falhou",
       "status_cancelled": "cancelado",
-      "status_harmonized": "harmonizada",
+      "status_harmonized": "pronto",
       "status_pending": "pendente",
       "status_not_downloaded": "não baixada",
-      "status_checking": "verificando…"
+      "status_checking": "verificando…",
+      "status_blocked": "requer {input}",
+      "status_queued": "na fila",
+      "status_outdated": "obsoleto",
+      "action_run": "Executar",
+      "action_cancel": "Cancelar",
+      "action_retry": "Tentar de novo",
+      "action_rerun": "Executar de novo",
+      "action_map_on": "Mostrar no mapa",
+      "action_map_off": "Remover do mapa",
+      "action_open": "Detalhes",
+      "action_edit": "Editar",
+      "action_duplicate": "Duplicar",
+      "action_delete": "Excluir",
+      "action_dismiss": "Dispensar",
+      "action_more": "Mais ações",
+      "verb_download": "Baixar",
+      "verb_harmonize": "Harmonizar",
+      "error_details": "detalhes",
+      "input_generic": "entrada",
+      "ago_now": "agora mesmo",
+      "ago_minutes": "há {n} minutos",
+      "ago_hours": "há {n} horas",
+      "ago_days": "há {n} dias",
+      "col_status": "Status"
     },
     "artifact_name": {
       "label": "Nome",

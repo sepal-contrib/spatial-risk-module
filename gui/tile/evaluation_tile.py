@@ -25,9 +25,10 @@ from gui.tile.evaluation_helpers import (
     map_items,
     variable_items,
 )
+from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.evaluation_form_dialog import EvaluationFormDialog
-from gui.widget.help import InfoButton
 from gui.widget.evaluation_results import EvaluationResults, EvaluationTableDialog
+from gui.widget.help import InfoButton
 
 logger = logging.getLogger("spatial_risk")
 
@@ -106,6 +107,7 @@ def EvaluationTile(project):
 
     dialog_open = solara.use_reactive(False)
     selected_eval, set_selected_eval = solara.use_state(None)
+    pending_delete, set_pending_delete = solara.use_state(None)
     notifications = use_notifications()
 
     def on_submit(entry):
@@ -192,8 +194,18 @@ def EvaluationTile(project):
             eval_jobs=eval_jobs,
             project=project,
             on_open=set_selected_eval,
-            on_delete=on_delete,
+            on_delete=set_pending_delete,
             on_dismiss=on_dismiss,
+        )
+        ConfirmDialog(
+            open=pending_delete is not None,
+            on_cancel=lambda: set_pending_delete(None),
+            on_confirm=lambda: (on_delete(pending_delete), set_pending_delete(None)),
+            title=t("tiles.evaluation.confirm_delete_title"),
+            message=t(
+                "tiles.evaluation.confirm_delete_message", key=pending_delete or ""
+            ),
+            confirm_label=t("common.delete"),
         )
         EvaluationTableDialog(
             project=project,

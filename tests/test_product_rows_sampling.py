@@ -23,13 +23,13 @@ def test_registered_samples_render_as_ready_rows():
     assert rows[0]["status"] == "ready"
 
 
-def test_running_job_renders_above_products():
+def test_running_job_renders_after_products():
     jobs = [{"id": "j1", "name": "random_2", "strategy": "random",
              "status": "running", "error": None,
              "n_total": None, "class_counts": None}]
     rows = sample_rows(_project(random_1=_sample()), jobs)
-    assert [r["kind"] for r in rows] == ["job", "sample"]
-    assert rows[0]["status"] == "running" and rows[0]["job_id"] == "j1"
+    assert [r["kind"] for r in rows] == ["sample", "job"]
+    assert rows[1]["status"] == "running" and rows[1]["job_id"] == "j1"
 
 
 def test_completed_job_suppressed_once_registered():

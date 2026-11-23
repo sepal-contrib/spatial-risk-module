@@ -11,7 +11,7 @@ from gui.scripts.product_rows import (
     format_sample_points,
     sample_rows,
 )
-from gui.widget.product_table import ProductTable
+from gui.widget.product_table import W_COUNT, W_NAME, W_STATUS, ProductTable
 
 logger = logging.getLogger("spatial_risk")
 
@@ -103,13 +103,12 @@ def SampleSetList(
             {
                 "key": r["key"],
                 "cells": [
-                    {"type": "text", "value": r["name"]},
                     {
                         "type": "text",
-                        "value": f"{r['strategy']}{alloc}",
-                        "size": "0.8rem",
+                        "value": r["name"],
+                        "subtitle": f"{r['strategy']}{alloc}",
                     },
-                    {"type": "text", "value": points, "size": "0.8rem", "muted": True},
+                    {"type": "text", "value": points, "muted": True},
                     {"type": "status", "status": r["status"]},
                 ],
                 "actions": actions,
@@ -120,13 +119,9 @@ def SampleSetList(
     ProductTable(
         title=t("widgets.sample_set_list.title"),
         columns=[
-            {"label": t("widgets.sample_set_list.col_name"), "width": "minmax(0,2fr)"},
-            {
-                "label": t("widgets.sample_set_list.col_strategy"),
-                "width": "minmax(0,1fr)",
-            },
-            {"label": t("widgets.sample_set_list.col_points"), "width": "70px"},
-            {"label": t("widgets.sample_set_list.col_status"), "width": "82px"},
+            {"label": t("widgets.sample_set_list.col_name"), "width": W_NAME},
+            {"label": t("widgets.sample_set_list.col_points"), "width": W_COUNT},
+            {"label": t("widgets.sample_set_list.col_status"), "width": W_STATUS},
         ],
         rows=rows,
         empty_text=t("widgets.sample_set_list.empty"),

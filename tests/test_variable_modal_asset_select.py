@@ -96,9 +96,7 @@ def _render(initial_entry, on_add=lambda entry: None):
 
 
 def _submit(box):
-    next(
-        b for b in _find(box, vw.Btn) if t("vars.modal.submit_add") in str(b.children)
-    ).click()
+    next(b for b in _find(box, vw.Btn) if t("common.add") in str(b.children)).click()
 
 
 def test_gee_layer_uses_the_asset_selector_restricted_to_images(monkeypatch):

@@ -135,7 +135,7 @@ def _render_and_submit(tmp_path, *features):
         if s.label == t("tiles.inference.mask_layer_label")
     )
     mask.v_model = NO_MASK
-    label = t("tiles.inference.run_button")
+    label = t("common.add")
     next(b for b in _find(box, vw.Btn) if label in str(b.children)).fire_event(
         "click", {}
     )

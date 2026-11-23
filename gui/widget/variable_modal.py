@@ -632,9 +632,7 @@ def VariableModal(
             _legend_preview()
 
     title = t("vars.modal.title_edit") if is_edit else t("vars.modal.title_add")
-    submit_label = (
-        t("vars.modal.submit_save") if is_edit else t("vars.modal.submit_add")
-    )
+    submit_label = t("vars.modal.submit_save") if is_edit else t("common.add")
 
     # Same dismissal contract as the shared CreationDialog frame: `persistent`
     # keeps a click aimed at an open v-select menu from taking the form with
@@ -715,7 +713,7 @@ def VariableModal(
                     )
 
                 if error:
-                    rv.Alert(type_="error", dense=True, children=[error])
+                    rv.Alert(type="error", dense=True, children=[error])
 
             with rv.CardActions(style_="justify-content: flex-end; gap: 8px;"):
                 solara.Button(

@@ -92,7 +92,7 @@ def _pick(box, model_key, dataset_key="calibration"):
 
 
 def _create(box):
-    label = t("tiles.inference.run_button")
+    label = t("common.add")
     btn = next(b for b in _find(box, vw.Btn) if label in str(b.children))
     btn.fire_event("click", {})
 

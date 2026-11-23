@@ -29,6 +29,7 @@ from gui.widget.creation_dialog import CreationDialog
 from gui.widget.help import InfoButton
 from gui.widget.product_table import BUSY_CLASSES, BUSY_ICON, HOURGLASS_CSS
 from gui.widget.text_style import MUTED
+from gui.widget.variable_details_dialog import VariableDetailsDialog
 from gui.widget.variable_list import HarmonizationVariableList
 from spatialrisk.harmonization import (
     HarmonizationStatus,
@@ -308,6 +309,8 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
     # Reset for every removal: deleting the raster is a decision about this one
     # output, never a mode left switched on by the previous removal.
     delete_files, set_delete_files = solara.use_state(False)
+    # The row whose read-only Details dialog is open.
+    details_key, set_details_key = solara.use_state(None)
     reference_open = solara.use_reactive(False)
     # Raw key the next run is restricted to (per-row harmonize button), or
     # None for a full run — the same shape as pending_download in Step 2.
@@ -718,6 +721,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # Read here so the tile subscribes: the row is an hourglass while it adds.
             toggling_keys=derived_toggle_inflight.value,
             on_remove=_ask_remove,  # opens the dialog; the tick decides the raster
+            on_open=set_details_key,
         )
 
         # Training needs each categorical layer's categories, stored when it is
@@ -827,4 +831,11 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
         on_checkbox=set_delete_files,
         details=_files.details,
         note=_files.note,
+    )
+    VariableDetailsDialog(
+        project=project,
+        key=details_key,
+        on_close=lambda: set_details_key(None),
+        # The verdict the list shows (merged with the disk check).
+        status=status,
     )

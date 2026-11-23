@@ -29,7 +29,6 @@
     "modal": {
       "title_add": "Add Variable",
       "title_edit": "Edit Variable",
-      "submit_add": "Create variable",
       "submit_save": "Save",
       "source_label": "Source",
       "source_hint": "Predefined = ready-made Earth Engine layers; User = your own raster, vector or GEE asset.",

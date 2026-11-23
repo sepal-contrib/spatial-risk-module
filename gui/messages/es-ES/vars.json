@@ -29,7 +29,6 @@
     "modal": {
       "title_add": "Añadir variable",
       "title_edit": "Editar variable",
-      "submit_add": "Crear variable",
       "submit_save": "Guardar",
       "source_label": "Fuente",
       "source_hint": "Predefinida = capas listas de Earth Engine; Usuario = tu propio ráster, vector o asset de GEE.",

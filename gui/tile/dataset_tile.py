@@ -9,6 +9,7 @@ from gui.i18n import t
 from gui.scripts.artifact_names import suggest_copy_name
 from gui.scripts.dataset_validation import instance_choice_value
 from gui.widget.confirm_dialog import ConfirmDialog
+from gui.widget.dataset_details_dialog import DatasetDetailsDialog
 from gui.widget.dataset_form_dialog import DatasetFormDialog
 from gui.widget.dataset_list import DatasetList
 from gui.widget.help import InfoButton
@@ -27,6 +28,7 @@ def DatasetTile(project):
     initial, set_initial = solara.use_state(None)
     notifications = use_notifications()
     pending_remove, set_pending_remove = solara.use_state(None)
+    details_key, set_details_key = solara.use_state(None)
 
     def on_new():
         set_editing_key(None)
@@ -131,6 +133,7 @@ def DatasetTile(project):
             on_edit=on_edit,
             on_remove=set_pending_remove,
             on_duplicate=on_duplicate,
+            on_open=set_details_key,
         )
 
         ConfirmDialog(
@@ -150,4 +153,11 @@ def DatasetTile(project):
         on_submit=on_submit,
         editing_key=editing_key,
         initial=initial,
+    )
+
+    details_ds = p.datasets.get(details_key) if p is not None and details_key else None
+    DatasetDetailsDialog(
+        dataset=details_ds,
+        open=details_ds is not None,
+        on_close=lambda: set_details_key(None),
     )

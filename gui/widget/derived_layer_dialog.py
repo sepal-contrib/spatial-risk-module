@@ -1,6 +1,6 @@
 """New Derived Layer dialog for the Post-process step."""
 
-from typing import Callable
+from typing import Callable, Optional
 
 import reacton.ipyvuetify as rv
 import solara
@@ -13,6 +13,20 @@ from spatialrisk.variables.models import PostProcessing
 
 CHANGE_OPS = ["loss", "gain"]
 OPERATIONS = CHANGE_OPS + [s.value for s in PostProcessing]
+
+
+def replaced_change_key(p, entry) -> Optional[str]:
+    """Key of the loss/gain layer ``entry`` would recompute over, or None.
+
+    A loss or gain is a training target, so recomputing an existing one asks
+    first. Edge and distance layers overwrite their own output unasked.
+    """
+    if p is None or entry["op"] not in CHANGE_OPS:
+        return None
+    output = derived_output(p, entry)
+    if output is None or output.key not in p.processed_variables:
+        return None
+    return output.key
 
 
 @solara.component
@@ -52,9 +66,7 @@ def DerivedLayerDialog(project, open_, on_submit: Callable[[dict], None]):
         return None
 
     def will_replace():
-        # generate_change_var reuses an existing layer (idempotent) and
-        # edge/dist overwrite their own derived output — no confirm step.
-        return None
+        return replaced_change_key(p, entry)
 
     def launch():
         on_submit(entry)
@@ -62,7 +74,7 @@ def DerivedLayerDialog(project, open_, on_submit: Callable[[dict], None]):
     with CreationDialog(
         open_=open_,
         title=t("tiles.postprocess.dialog_title"),
-        create_label=t("tiles.postprocess.generate_button"),
+        create_label=t("common.add"),
         validate=validate,
         will_replace=will_replace,
         launch=launch,

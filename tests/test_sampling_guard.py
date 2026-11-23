@@ -69,7 +69,7 @@ def _select(box, label):
 
 
 def _create_button(box):
-    label = t("tiles.sampling.generate_button")
+    label = t("common.add")
     # The button carries a leading icon (icon_name="mdi-plus"), so its
     # children are [Icon, label] — match on membership, not exact equality.
     return next(b for b in _find(box, vw.Btn) if label in (b.children or []))

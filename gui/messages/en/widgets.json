@@ -75,7 +75,8 @@
       "col_name": "Name",
       "col_target": "Target",
       "col_feats": "Feats",
-      "col_year": "Year"
+      "col_year": "Year",
+      "subtitle": "{target} · {n} features"
     },
     "sample_set_list": {
       "title": "Sample designs",
@@ -86,6 +87,23 @@
       "col_status": "Status",
       "more_strata": "+{n} more",
       "unknown_error": "Unknown error."
+    },
+    "variable_details": {
+      "title": "Layer details — {name}",
+      "source_layer": "Source layer",
+      "target_crs": "Target CRS",
+      "resolution": "Resolution",
+      "resampling": "Resampling method",
+      "resampling_default": "{method} (default for {raster_type})",
+      "resampling_default_untyped": "{method} (default)",
+      "matches_grid": "Matches the current reference grid",
+      "grid_reason_raster_type": "Outdated: the raster type changed since it was harmonized",
+      "grid_reason_categories": "Outdated: its categories are missing (harmonized by an older version)",
+      "processing_steps": "Processing steps",
+      "operation": "Operation",
+      "inputs": "Input layers",
+      "years": "Years",
+      "file_path": "File path"
     },
     "variable_list": {
       "source_title": "Source variables",
@@ -104,7 +122,8 @@
       "derived_source_unknown": "unknown",
       "derived_unknown_error": "Unknown error",
       "harmonization_title": "Variables",
-      "harmonization_col_status": "Status"
+      "harmonization_col_status": "Status",
+      "derived_empty": "No derived variables yet."
     },
     "summary_lists": {
       "raw_vars_title": "Source variables",
@@ -154,15 +173,39 @@
     },
     "product_table": {
       "status_running": "running",
-      "status_tiling": "building tiles",
+      "status_tiling": "tiling",
       "status_ready": "ready",
       "status_completed": "completed",
       "status_failed": "failed",
       "status_cancelled": "cancelled",
-      "status_harmonized": "harmonized",
+      "status_harmonized": "ready",
       "status_pending": "pending",
-      "status_not_downloaded": "not downloaded",
-      "status_checking": "checking…"
+      "status_not_downloaded": "to download",
+      "status_checking": "checking…",
+      "status_blocked": "needs {input}",
+      "status_queued": "queued",
+      "status_outdated": "outdated",
+      "action_run": "Run",
+      "action_cancel": "Cancel",
+      "action_retry": "Retry",
+      "action_rerun": "Run again",
+      "action_map_on": "Show on map",
+      "action_map_off": "Remove from map",
+      "action_open": "Details",
+      "action_edit": "Edit",
+      "action_duplicate": "Duplicate",
+      "action_delete": "Delete",
+      "action_dismiss": "Dismiss",
+      "action_more": "More actions",
+      "verb_download": "Download",
+      "verb_harmonize": "Harmonize",
+      "error_details": "details",
+      "input_generic": "input",
+      "ago_now": "just now",
+      "ago_minutes": "{n} minutes ago",
+      "ago_hours": "{n} hours ago",
+      "ago_days": "{n} days ago",
+      "col_status": "Status"
     },
     "artifact_name": {
       "label": "Name",

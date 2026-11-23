@@ -139,7 +139,7 @@ def test_saving_the_duplicate_adds_a_copy_and_keeps_the_original(monkeypatch):
         _duplicate_buttons(box)[0].click()
         _select(box, "Feature variables").v_model = ["altitude"]  # drop subj
 
-        next(b for b in _find(box, vw.Btn) if "Create dataset" in _texts(b)).click()
+        next(b for b in _find(box, vw.Btn) if "Add" in _texts(b)).click()
 
         datasets = project.value.datasets
         assert [f.name for f in datasets["dataset_1_copy"].features] == ["altitude"]

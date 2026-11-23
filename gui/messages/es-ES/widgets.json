@@ -75,7 +75,8 @@
       "col_name": "Nombre",
       "col_target": "Objetivo",
       "col_feats": "Vars",
-      "col_year": "Año"
+      "col_year": "Año",
+      "subtitle": "{target} · {n} variables"
     },
     "sample_set_list": {
       "title": "Diseños de muestreo",
@@ -86,6 +87,23 @@
       "col_status": "Estado",
       "more_strata": "+{n} más",
       "unknown_error": "Error desconocido."
+    },
+    "variable_details": {
+      "title": "Detalles de la capa — {name}",
+      "source_layer": "Capa de origen",
+      "target_crs": "SRC de destino",
+      "resolution": "Resolución",
+      "resampling": "Método de remuestreo",
+      "resampling_default": "{method} (por defecto para {raster_type})",
+      "resampling_default_untyped": "{method} (por defecto)",
+      "matches_grid": "Coincide con la cuadrícula de referencia actual",
+      "grid_reason_raster_type": "Desactualizada: el tipo de ráster cambió desde que se armonizó",
+      "grid_reason_categories": "Desactualizada: faltan sus categorías (armonizada con una versión anterior)",
+      "processing_steps": "Pasos de procesamiento",
+      "operation": "Operación",
+      "inputs": "Capas de entrada",
+      "years": "Años",
+      "file_path": "Ruta del archivo"
     },
     "variable_list": {
       "source_title": "Variables fuente",
@@ -104,7 +122,8 @@
       "derived_source_unknown": "desconocido",
       "derived_unknown_error": "Error desconocido",
       "harmonization_title": "Variables",
-      "harmonization_col_status": "Estado"
+      "harmonization_col_status": "Estado",
+      "derived_empty": "Aún no hay variables derivadas."
     },
     "summary_lists": {
       "raw_vars_title": "Variables fuente",
@@ -154,15 +173,39 @@
     },
     "product_table": {
       "status_running": "en ejecución",
-      "status_tiling": "generando teselas",
+      "status_tiling": "teselando",
       "status_ready": "listo",
       "status_completed": "completado",
       "status_failed": "falló",
       "status_cancelled": "cancelado",
-      "status_harmonized": "armonizada",
+      "status_harmonized": "listo",
       "status_pending": "pendiente",
-      "status_not_downloaded": "sin descargar",
-      "status_checking": "comprobando…"
+      "status_not_downloaded": "sin descarga",
+      "status_checking": "comprobando…",
+      "status_blocked": "requiere {input}",
+      "status_queued": "en cola",
+      "status_outdated": "obsoleto",
+      "action_run": "Ejecutar",
+      "action_cancel": "Cancelar",
+      "action_retry": "Reintentar",
+      "action_rerun": "Ejecutar de nuevo",
+      "action_map_on": "Mostrar en el mapa",
+      "action_map_off": "Quitar del mapa",
+      "action_open": "Detalles",
+      "action_edit": "Editar",
+      "action_duplicate": "Duplicar",
+      "action_delete": "Eliminar",
+      "action_dismiss": "Descartar",
+      "action_more": "Más acciones",
+      "verb_download": "Descargar",
+      "verb_harmonize": "Armonizar",
+      "error_details": "detalles",
+      "input_generic": "entrada",
+      "ago_now": "ahora mismo",
+      "ago_minutes": "hace {n} minutos",
+      "ago_hours": "hace {n} horas",
+      "ago_days": "hace {n} días",
+      "col_status": "Estado"
     },
     "artifact_name": {
       "label": "Nombre",

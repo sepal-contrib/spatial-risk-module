@@ -465,9 +465,10 @@ def generate_change_var(project, op: str, start_key: str, end_key: str):
     """Generate a loss/gain change layer from two aligned processed masks.
 
     Output convention: 1 = event, 0 = stable, 255 = nodata. Registers the
-    result as a static processed variable and saves the project. Idempotent:
-    an existing variable (or output file) is reused, and reuse of an existing
-    variable does NOT save the project.
+    result as a static processed variable and saves the project. Always
+    computes: an existing layer or output file is overwritten, because one
+    left by an earlier grid, earlier inputs or a run that died mid-write
+    would otherwise be handed back as the training target.
     """
     from spatialrisk.variables import LocalRasterVar
     from spatialrisk.variables.models import RasterType
@@ -493,19 +494,13 @@ def generate_change_var(project, op: str, start_key: str, end_key: str):
 
     name = change_output_name(project, op, start_key, end_key)
 
-    existing = project.processed_variables.get(name)
-    if existing is not None:
-        logger.info("Change layer '%s' already exists — reusing it.", name)
-        return existing
-
     _check_same_grid(start, end)
 
-    out_path = Path(project.folders.processed_data_folder) / f"{name}.tif"
-    if not out_path.exists():
-        from spatialrisk.processing import process_change_xarray
+    from spatialrisk.processing import process_change_xarray
 
-        logger.info("Generating %s layer '%s'…", op, name)
-        process_change_xarray(str(start.path), str(end.path), str(out_path), op=op)
+    out_path = Path(project.folders.processed_data_folder) / f"{name}.tif"
+    logger.info("Generating %s layer '%s'…", op, name)
+    process_change_xarray(str(start.path), str(end.path), str(out_path), op=op)
 
     var = LocalRasterVar(
         name=name,

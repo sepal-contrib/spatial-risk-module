@@ -15,6 +15,7 @@ from typing import Optional
 
 import reacton.ipyvuetify as rv
 import solara
+import solara.lab
 
 from gui.i18n import t
 from gui.widget.text_style import MUTED
@@ -27,9 +28,13 @@ HEADER_EXTRA = (
 )
 ROW_EXTRA = "padding:5px 8px;border-bottom:1px solid rgba(0,0,0,0.08);"
 CELL = "display:flex;align-items:center;gap:4px;min-width:0;"
-CELL_RIGHT = "display:flex;align-items:center;justify-content:flex-end;gap:0;"
+CELL_RIGHT = (
+    "display:flex;align-items:center;justify-content:flex-end;gap:0;padding-right:8px;"
+)
+# The header's "ACTIONS" label ends where the last action icon does: the cell
+# tail (CELL_RIGHT, 8px) plus the 4px inset of a 20px icon in its 28px slot.
+ACTIONS_HEADER_RIGHT = "padding-right:12px;"
 NAME_CELL = "display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;"
-NAME_TEXT = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
 # Header labels clip like data cells so a narrow column never overlaps its
 # neighbour (grid items need min-width:0 + block display for ellipsis to apply).
 HEADER_CELL = (
@@ -37,7 +42,11 @@ HEADER_CELL = (
     "text-overflow:ellipsis;white-space:nowrap;"
 )
 # Full-width line under a failed row (grid rows have no subtitle slot).
-ERROR_LINE = "grid-column:1/-1;padding:0 8px 5px;font-size:0.75rem;"
+# Two-line clamp: a long failure message ends in "details" (full text in a dialog).
+ERROR_LINE = (
+    "grid-column:1/-1;padding:0 8px 5px;font-size:0.75rem;"
+    "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;"
+)
 
 # Chips live in flexible columns, so a long label (a "Base" tag next to a long
 # variable name, a dataset's target name) squeezes the chip below its content
@@ -57,9 +66,39 @@ CHIP_NO_SHRINK = "flex:0 0 auto;max-width:none;"
 # One x-small icon button is 20px wide; 28px leaves breathing room between
 # them. The 8px tail keeps the right-aligned buttons off the panel edge and
 # gives the "ACTIONS" header label its own space.
-ACTION_BTN_WIDTH = 28
-ACTIONS_MIN_WIDTH = 56
-ACTIONS_COL_WIDTH = "112px"
+ACTIONS_COL_WIDTH = "120px"
+
+# Column width tokens shared by every list (spec: one row anatomy). The name
+# column takes the remainder; everything else is fixed so header and data grids
+# (separate containers, hence no ``max-content``) always line up.
+W_NAME = "minmax(0,1fr)"
+W_CHIP = "64px"
+W_YEAR = "48px"
+W_COUNT = "56px"
+#: How the Status cell shows its state. "dot": a coloured dot and the status
+#: word. "icon": a tinted round icon alone (the word is its tooltip), in a
+#: narrower column that hands the name 40px. Switch here; restart the app.
+STATUS_STYLE = "dot"
+W_STATUS = "56px" if STATUS_STYLE == "icon" else "96px"
+# The narrow fixed columns sit centred under centred headers, in every list;
+# the name column (and chips, which fill theirs) stay left.
+CENTERED_WIDTHS = (W_YEAR, W_COUNT, W_STATUS)
+CENTER = "justify-content:center;text-align:center;"
+
+# A Vuetify tone class paints the dot and the badge tint, so both follow the
+# theme in light and dark.
+STATUS_DOT = "flex:0 0 auto;width:8px;height:8px;border-radius:50%;margin-right:2px;"
+STATUS_BADGE = (
+    "position:relative;display:flex;align-items:center;justify-content:center;"
+    "flex:0 0 auto;width:28px;height:28px;border-radius:50%;overflow:hidden;"
+)
+STATUS_BADGE_TINT = "position:absolute;inset:0;opacity:0.14;"
+
+# Every cell's text element clips to its column with an ellipsis; the full text
+# rides along as a native ``title`` (see ``cell_title``).
+CLIP = "min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;"
+TEXT_SIZE = "font-size:0.875rem;"
+SUBTITLE = MUTED + "font-size:0.75rem;"
 
 # Vuetify theme tokens, so status chips follow the app accent in light and dark.
 # "cancelled" stays a literal grey: it is deliberately neutral, not a theme tone.
@@ -72,9 +111,13 @@ STATUS_COLORS = {
     "cancelled": "grey",
     # Step 3 per-variable harmonization states (gui/widget/variable_list.py).
     "harmonized": "success",
-    "pending": "warning",
+    "pending": "grey",
     "not_downloaded": "warning",
     "checking": "grey",
+    # List lifecycle states (create-then-run lists).
+    "blocked": "grey",
+    "queued": "grey",
+    "outdated": "warning",
 }
 STATUS_ICONS = {
     # Flip and grey ship with the table (HOURGLASS_CSS), overriding the tone.
@@ -88,18 +131,46 @@ STATUS_ICONS = {
     "pending": "mdi-clock-outline",
     "not_downloaded": "mdi-cloud-outline",
     "checking": "mdi-help-circle-outline",
+    "blocked": "mdi-link-variant-off",
+    "queued": "mdi-timer-sand",  # static: queued is waiting, not working
+    "outdated": "mdi-update",
 }
 
 _ACTION_ICONS = {
     "edit": "mdi-pencil-outline",
     "duplicate": "mdi-content-copy",
     "delete": "mdi-delete-outline",
-    "download": "mdi-cloud-download-outline",
-    "harmonize": "mdi-hammer",
+    "run": "mdi-play",
+    "retry": "mdi-refresh",
+    "rerun": "mdi-refresh",
     "cancel": "mdi-stop-circle",
     "open": "mdi-information-outline",
     "dismiss": "mdi-close",
 }
+
+# Action order, left to right (spec: one action layout): the lifecycle action,
+# the map toggle, details, then the row's management actions. The icons are
+# packed against the right edge, so a row without, say, a map toggle leaves no
+# hole between its icons.
+ACTION_ORDER = (
+    "run",
+    "cancel",
+    "retry",
+    "rerun",
+    "map_toggle",
+    "open",
+    "edit",
+    "duplicate",
+    "dismiss",
+    "delete",
+)
+#: The lifecycle actions: a row offers at most one of them.
+LIFECYCLE_KINDS = ("run", "cancel", "retry", "rerun")
+#: Icons one Actions cell holds (ACTIONS_COL_WIDTH). A row with more actions
+#: shows the first MAX_INLINE_ACTIONS - 1 and folds the rest into the ⋮ menu.
+MAX_INLINE_ACTIONS = 4
+SLOT_WIDTH = "28px"
+MORE_ICON = "mdi-dots-vertical"
 
 
 # Busy state, app-wide: an hourglass that flips instead of Vuetify's spinner
@@ -153,35 +224,47 @@ def action_icon(kind: str, is_on: bool = False, loading: bool = False) -> str:
 def action_color(kind: str, is_on: bool = False, override=None):
     """Vuetify colour token for an action icon (None = theme default text).
 
+    The toggles (map, info) are primary only while on: the layer is shown,
+    the row's details dialog is open.
+
     Only "on"/primary states name a colour. Everything else returns None so the
     icon inherits the theme's text colour — a literal grey looked *disabled* on
     the dark theme, which is exactly what an enabled toggle must not look like.
     """
     if override is not None:
         return override
-    if kind == "map_toggle":
+    if kind in ("map_toggle", "open"):
         return "primary" if is_on else None
-    if kind in ("download", "harmonize", "open"):
+    if kind in ("run", "retry"):
         return "primary"
     return None
 
 
-def actions_width_for(rows) -> str:
-    """Actions-column width that fits the busiest row and no more.
+def status_label(cell: dict) -> str:
+    """Text of a status cell: explicit label, else progress %, else the word."""
+    status = cell.get("status", "")
+    if cell.get("label"):
+        return str(cell["label"])
+    progress = cell.get("progress")
+    if status == "running" and progress is not None:
+        return f"{round(min(max(progress, 0.0), 1.0) * 100)} %"
+    if status == "blocked":
+        # No label: never show the raw "{input}" placeholder.
+        return t(
+            "widgets.product_table.status_blocked",
+            input=t("widgets.product_table.input_generic"),
+        )
+    if status in STATUS_ICONS:
+        return t(f"widgets.product_table.status_{status}")
+    return str(status)
 
-    A fixed width had to assume the maximum any table might use (four buttons),
-    so two-button tables paid ~50px of dead space right where the flexible name
-    column was being ellipsised. Both the header and the data rows read this one
-    computed value, so the columns still line up (they are separate grid
-    containers, hence no ``max-content``).
-    """
-    most = max((len(r.get("actions") or []) for r in rows), default=0)
-    return f"{max(most * ACTION_BTN_WIDTH + 8, ACTIONS_MIN_WIDTH)}px"
 
-
-def name_tooltip(cell: dict) -> dict:
-    """Native ``title`` attributes so an ellipsised name is readable on hover."""
-    if cell.get("type", "text") == "text" and cell.get("value") is not None:
+def cell_title(cell: dict) -> dict:
+    """Native ``title`` attributes so a clipped cell is readable on hover."""
+    ctype = cell.get("type", "text")
+    if ctype == "status":
+        return {"title": status_label(cell)}
+    if ctype in ("text", "chip") and cell.get("value") is not None:
         return {"title": str(cell["value"])}
     return {}
 
@@ -200,8 +283,14 @@ def _render_chip(item: dict, shrink: bool = True):
     children = []
     if item.get("icon"):
         children.append(rv.Icon(children=[item["icon"]], x_small=True, left=True))
+    value = str(item.get("value", ""))
     children.append(
-        rv.Html(tag="span", style_=CHIP_LABEL, children=[str(item.get("value", ""))])
+        rv.Html(
+            tag="span",
+            style_=CHIP_LABEL + "white-space:nowrap;",
+            attributes={"title": value},
+            children=[value],
+        )
     )
     rv.Chip(
         children=children,
@@ -213,9 +302,21 @@ def _render_chip(item: dict, shrink: bool = True):
     )
 
 
-def _render_cell(cell: dict, first: bool):
+def _clipped(text: str, title: str, style: str = ""):
+    """One ellipsised text holder carrying its full text as ``title``."""
+    rv.Html(
+        tag="span",
+        style_=CLIP + style,
+        attributes={"title": title},
+        children=[text],
+    )
+
+
+def _render_cell(cell: dict, first: bool, center: bool = False):
     ctype = cell.get("type", "text")
-    wrapper = NAME_CELL if first else CELL
+    wrapper = NAME_CELL if first else CELL + "overflow:hidden;"
+    if center:
+        wrapper += CENTER
 
     if ctype == "render":
         with rv.Html(tag="div", style_=wrapper):
@@ -223,41 +324,76 @@ def _render_cell(cell: dict, first: bool):
         return
     if ctype == "status":
         status = cell.get("status", "")
-        with rv.Html(tag="div", style_=CELL):
-            rv.Icon(
-                children=[STATUS_ICONS.get(status, "mdi-help-circle")],
-                color=STATUS_COLORS.get(status, "grey"),
-                small=True,
-            )
-            label = (
-                t(f"widgets.product_table.status_{status}")
-                if status in STATUS_ICONS
-                else str(status)
-            )
-            solara.Text(label, style=MUTED + "font-size:0.8rem;")
+        label = status_label(cell)
+        tone = STATUS_COLORS.get(status, "grey")
+        icon = STATUS_ICONS.get(status, "mdi-help-circle")
+        with rv.Html(tag="div", style_=CELL + "overflow:hidden;" + CENTER):
+            if STATUS_STYLE == "icon":
+                with rv.Html(
+                    tag="div",
+                    style_=STATUS_BADGE,
+                    attributes={"title": label, "aria-label": label, "role": "img"},
+                ):
+                    rv.Html(tag="div", class_=tone, style_=STATUS_BADGE_TINT)
+                    # relative: above the tint, which is positioned too
+                    rv.Icon(
+                        children=[icon],
+                        color=tone,
+                        size=16,
+                        style_="position:relative;",
+                    )
+                return
+            if "sr-hourglass" in icon:
+                # A busy row keeps the app's one busy sign instead of a dot.
+                rv.Icon(children=[icon], color=tone, size=14, style_="flex:0 0 auto;")
+            else:
+                rv.Html(tag="span", class_=tone, style_=STATUS_DOT)
+            _clipped(label, label, MUTED + "font-size:0.8rem;")
         return
     if ctype == "chip":
-        with rv.Html(tag="div", style_=CELL):
+        with rv.Html(tag="div", style_=CELL + "overflow:hidden;"):
             _render_chip(cell)
         return
     if ctype == "chips":
-        with rv.Html(tag="div", style_=CELL):
+        with rv.Html(tag="div", style_=CELL + "overflow:hidden;"):
             for item in cell.get("items", []):
                 _render_chip(item)
         return
 
-    # "text" (default)
-    style = NAME_TEXT if first else ""
+    # "text" (default). One size for every plain cell (a year must not render at
+    # the inherited body size); a caller's ``size`` comes after and wins.
+    style = TEXT_SIZE
     if cell.get("muted"):
         style += MUTED
     if cell.get("size"):
         style += f"font-size:{cell['size']};"
-    with rv.Html(
-        tag="div", style_=wrapper, attributes=name_tooltip(cell) if first else {}
-    ):
-        solara.Text(str(cell.get("value", "")), style=style)
+    text = str(cell.get("value", ""))
+    subtitle = cell.get("subtitle")
+    with rv.Html(tag="div", style_=wrapper):
+        if subtitle:
+            # Two-line name: the column clips each line on its own.
+            with rv.Html(
+                tag="div",
+                style_="display:flex;flex-direction:column;min-width:0;flex:1 1 auto;",
+            ):
+                _clipped(text, text, style)
+                _clipped(str(subtitle), str(subtitle), SUBTITLE)
+        else:
+            _clipped(text, text, style)
         for item in cell.get("chips", []):
             _render_chip(item, shrink=False)
+
+
+def action_label(act: dict) -> str:
+    """Tooltip / aria-label of an action: explicit label, else the kind's word."""
+    kind = act["kind"]
+    if act.get("disabled") and act.get("disabled_reason") and not act.get("loading"):
+        return str(act["disabled_reason"])
+    if act.get("label"):
+        return str(act["label"])
+    if kind == "map_toggle":
+        kind = "map_off" if act.get("is_on", False) else "map_on"
+    return t(f"widgets.product_table.action_{kind}")
 
 
 def _render_action(act: dict):
@@ -265,6 +401,7 @@ def _render_action(act: dict):
     is_on = act.get("is_on", False)
     color = action_color(kind, is_on, override=act.get("color"))
     loading = act.get("loading", False)
+    label = action_label(act)
     # A busy action is the grey hourglass that ignores clicks (BUSY_CLASSES),
     # not a disabled button, whose faded look reads as "unavailable".
     solara.Button(
@@ -277,11 +414,132 @@ def _render_action(act: dict):
         color=None if loading else color,
         disabled=act.get("disabled", False) and not loading,
         classes=BUSY_CLASSES if loading else [],
+        attributes={"title": label, "aria-label": label},
     )
 
 
+def _layout_actions(actions: list) -> tuple:
+    """Split a row's actions into the inline icons and the ⋮ menu's items.
+
+    Actions are sorted by ``ACTION_ORDER``. Up to ``MAX_INLINE_ACTIONS`` all
+    show as icons; past that the first ``MAX_INLINE_ACTIONS - 1`` do and the
+    rest go into the menu, which takes the last place.
+    """
+    ordered = sorted(actions, key=lambda a: ACTION_ORDER.index(a["kind"]))
+    for group in (LIFECYCLE_KINDS, ("map_toggle",), ("open",)):
+        kinds = [a["kind"] for a in ordered if a["kind"] in group]
+        assert len(kinds) <= 1, f"more than one of {group}: {kinds}"
+    if len(ordered) <= MAX_INLINE_ACTIONS:
+        return ordered, []
+    cut = MAX_INLINE_ACTIONS - 1
+    return ordered[:cut], ordered[cut:]
+
+
 @solara.component
-def _Row(row: dict, grid: str, show_actions: bool):
+def _MoreMenu(actions: list):
+    """The vertical-dots button and its menu of the actions that did not fit."""
+    open_, set_open = solara.use_state(False)
+    label = t("widgets.product_table.action_more")
+    with rv.Html(tag="div", style_="display:flex;") as activator:
+        solara.Button(
+            "",
+            icon_name=MORE_ICON,
+            icon=True,
+            text=True,
+            x_small=True,
+            attributes={"title": label, "aria-label": label},
+        )
+    with solara.lab.Menu(
+        activator=activator,
+        open_value=open_,
+        on_open_value=set_open,
+        close_on_content_click=True,
+    ):
+        # solara's Menu already wraps its children in a v-list.
+        with rv.Html(tag="div", style_="display:flex;flex-direction:column;"):
+            for act in actions:
+                text = action_label(act)
+
+                def _go(act=act):
+                    set_open(False)
+                    act["on_click"]()
+
+                solara.Button(
+                    text,
+                    icon_name=action_icon(
+                        act["kind"], act.get("is_on", False), act.get("loading", False)
+                    ),
+                    on_click=_go,
+                    text=True,
+                    block=True,
+                    disabled=act.get("disabled", False),
+                    style="justify-content:flex-start;",
+                    attributes={"title": text, "aria-label": text},
+                )
+
+
+def _render_actions(actions: list):
+    """The row's icons, one 28px box each, then the ⋮ menu when some overflow."""
+    inline, more = _layout_actions(actions)
+    box = (
+        f"display:flex;justify-content:center;width:{SLOT_WIDTH};flex:0 0 {SLOT_WIDTH};"
+    )
+    for act in inline:
+        with rv.Html(tag="div", style_=box):
+            _render_action(act)
+    if more:
+        with rv.Html(tag="div", style_=box):
+            _MoreMenu(more)
+
+
+@solara.component
+def _RowError(message: str):
+    """Full-width failure line: clamped to two lines, "details" opens the rest."""
+    open_, set_open = solara.use_state(False)
+    details = t("widgets.product_table.error_details")
+    close = t("common.close")
+    with rv.Html(
+        tag="div",
+        style_="grid-column:1/-1;display:flex;align-items:flex-start;min-width:0;",
+    ):
+        rv.Html(
+            tag="span",
+            class_="error--text",
+            style_=ERROR_LINE + "flex:1 1 auto;min-width:0;",
+            children=[message],
+        )
+        solara.Button(
+            details,
+            on_click=lambda: set_open(True),
+            text=True,
+            x_small=True,
+            style="flex:0 0 auto;text-transform:none;",
+            attributes={"title": details, "aria-label": details},
+        )
+    with rv.Dialog(
+        v_model=open_,
+        on_v_model=lambda v: set_open(bool(v)),
+        max_width="560px",
+    ):
+        with rv.Card():
+            with rv.CardText():
+                rv.Html(
+                    tag="pre",
+                    style_="white-space:pre-wrap;word-break:break-word;font-size:0.8rem;",
+                    children=[message],
+                )
+            with rv.CardActions(style_="justify-content:flex-end;"):
+                solara.Button(
+                    close,
+                    on_click=lambda: set_open(False),
+                    text=True,
+                    small=True,
+                    attributes={"title": close, "aria-label": close},
+                )
+
+
+@solara.component
+def _Row(row: dict, grid: str, show_actions: bool, centered: tuple = ()):
     """One grid row.
 
     Its own component so the ``rv.use_event`` click hook is called exactly once
@@ -301,18 +559,12 @@ def _Row(row: dict, grid: str, show_actions: bool):
         )
         with content:
             for i, cell in enumerate(row.get("cells", [])):
-                _render_cell(cell, first=i == 0)
+                _render_cell(cell, first=i == 0, center=i in centered)
         if show_actions:
             with rv.Html(tag="div", style_=CELL_RIGHT):
-                for act in row.get("actions", []):
-                    _render_action(act)
+                _render_actions(row.get("actions", []))
         if row.get("error"):
-            rv.Html(
-                tag="span",
-                class_="error--text",
-                style_=ERROR_LINE,
-                children=[str(row["error"])],
-            )
+            _RowError(str(row["error"]))
     # rv.use_event is a hook — call it unconditionally, gate inside the handler.
     rv.use_event(content, "click", lambda *_: on_click() if on_click else None)
 
@@ -342,15 +594,16 @@ def ProductTable(
         collapsible: show the collapse chevron (expanded by default).
         show_actions: False = read-only mode (Summary popup).
         banner: optional stats line under the header (Summary popup).
-        actions_width: Actions column width; defaults to the width the busiest
-            row actually needs so the flexible content columns keep the rest.
+        actions_width: Actions column width; defaults to ``ACTIONS_COL_WIDTH``
+            so every list's action column is the same size.
     """
     collapsed, set_collapsed = solara.use_state(False)
 
-    widths = [c.get("width", "minmax(0,1fr)") for c in columns]
+    widths = [c.get("width", W_NAME) for c in columns]
     labels = [c["label"] for c in columns]
+    centered = tuple(i for i, w in enumerate(widths) if w in CENTERED_WIDTHS)
     if show_actions:
-        widths.append(actions_width or actions_width_for(rows))
+        widths.append(actions_width or ACTIONS_COL_WIDTH)
         labels.append(t("common.actions"))
     grid = grid_style(widths)
 
@@ -393,7 +646,13 @@ def ProductTable(
                         rv.Html(
                             tag="span",
                             style_=HEADER_CELL
-                            + ("text-align:right;" if is_actions else ""),
+                            + (
+                                "text-align:right;" + ACTIONS_HEADER_RIGHT
+                                if is_actions
+                                else "text-align:center;"
+                                if i in centered
+                                else ""
+                            ),
                             children=[lbl],
                         )
                 # No .key(row["key"]) here: row keys are display identity, not
@@ -402,4 +661,4 @@ def ProductTable(
                 # duplicate sibling keys. _Row is stateless, so positional
                 # reconciliation is fine.
                 for row in rows:
-                    _Row(row, grid, show_actions)
+                    _Row(row, grid, show_actions, centered)

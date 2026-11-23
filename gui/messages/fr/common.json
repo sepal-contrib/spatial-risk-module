@@ -1,6 +1,7 @@
 {
   "common": {
     "save": "Enregistrer",
+    "add": "Ajouter",
     "load": "Charger",
     "cancel": "Annuler",
     "create": "Créer",

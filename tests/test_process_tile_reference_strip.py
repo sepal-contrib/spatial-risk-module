@@ -340,7 +340,7 @@ def _row_hammers(rc):
     return [
         b
         for b in rc.find(vw.Btn).widgets
-        if "mdi-hammer" in list(_leaves(b)) and label not in list(_leaves(b))
+        if "mdi-play" in list(_leaves(b)) and label not in list(_leaves(b))
     ]
 
 

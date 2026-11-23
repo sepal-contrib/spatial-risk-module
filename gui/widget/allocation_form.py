@@ -274,7 +274,13 @@ def AllocationFormDialog(
     with CreationDialog(
         open_=open_,
         title=t("toolbox.allocation.title"),
-        create_label=t("toolbox.allocation.run"),
+        # The list's edit action seeds the form: it saves, like every
+        # other edit dialog.
+        create_label=t(
+            "common.save"
+            if prefill is not None and prefill.value is not None
+            else "common.add"
+        ),
         validate=validate,
         # History-safe storage keys (name + run id): runs never replace each
         # other, so the overwrite branch of the Create flow never triggers.
