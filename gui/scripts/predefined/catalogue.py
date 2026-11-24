@@ -68,7 +68,6 @@ GROUP_ORDER = (
     "fire",
     "climate",
     "admin",
-    "mapbiomas",
 )
 
 
@@ -104,14 +103,21 @@ def resolved_entry(catalogue_key, params):
 
     Each ``DYNAMIC_ATTRS`` field holding a callable is replaced by its value for
     the full params (defaults overlaid with ``params``). Static fields are
-    copied as they are. Raises KeyError for an unknown key, like
+    copied as they are, except ``interval_years``, which is [] while
+    ``interval_depends_on`` is unmet. Raises KeyError for an unknown key, like
     ``PREDEFINED_CATALOGUE[key]``.
     """
+    from gui.scripts.predefined.params import _depends_active
+
     entry = dict(PREDEFINED_CATALOGUE[catalogue_key])
     full = _full_params(catalogue_key, params)
     for attr in DYNAMIC_ATTRS:
         if callable(entry.get(attr)):
             entry[attr] = entry[attr](full)
+    # An interval pair switched off by a param (logging_mapbiomas By year):
+    # not an interval target, for every consumer of ``interval_years``.
+    if not _depends_active({"depends_on": entry.get("interval_depends_on")}, full):
+        entry["interval_years"] = []
     return entry
 
 

@@ -1093,16 +1093,24 @@ def _render_predefined_fields(
         active = {s["key"] for s in active_param_specs(predefined_key, params_raw)}
         basic = basic_param_specs(predefined_key)
         # Interval layers (deforestation_gfc, ...): start and end year side by
-        # side in place of the Year select (they are non-temporal).
-        with rv.Html(tag="div", style_="display:flex;gap:8px;"):
-            for spec in basic:
-                if spec.get("type") == "year":
+        # side in place of the Year select (they are non-temporal). A param can
+        # switch the pair off (logging_mapbiomas By year); such a pair sits
+        # below the fields, after the switch that shows it.
+        pair = [s for s in basic if s.get("type") == "year" and s["key"] in active]
+        pair_below = any(s.get("depends_on") for s in pair)
+
+        def year_pair_row(show):
+            with rv.Html(tag="div", style_="display:flex;gap:8px;"):
+                for spec in pair if show else ():
                     with rv.Html(tag="div", style_="flex:1;min-width:0;"):
                         _render_param_field(spec, params_raw, set_params_raw)
+
+        year_pair_row(not pair_below)
         with rv.Html(tag="div"):
             for spec in basic:
                 if spec["key"] in active and spec.get("type") != "year":
                     _render_param_field(spec, params_raw, set_params_raw)
+        year_pair_row(pair_below)
         advanced = [
             s for s in advanced_param_specs(predefined_key) if s["key"] in active
         ]

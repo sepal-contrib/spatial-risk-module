@@ -23,7 +23,7 @@
       "mapbiomas_lulc": "Cobertura do solo MapBiomas",
       "deforestation_mapbiomas": "Desmatamento MapBiomas",
       "mapbiomas_fire": "Fogo MapBiomas",
-      "mapbiomas_degradation": "Degradação MapBiomas (Brasil)",
+      "logging_mapbiomas": "Exploração seletiva de madeira (MapBiomas Brasil)",
       "mapbiomas_water": "Água superficial MapBiomas"
     },
     "predefined_info": {
@@ -49,7 +49,7 @@
       "mapbiomas_lulc": "Cobertura do solo anual do [MapBiomas](https://mapbiomas.org) para a região escolhida: Brasil (Coleção 11, 1985-2025), Pan-Amazônia (Coleção 6, 1985-2023), Bolívia (Coleção 3, 1985-2024), Colômbia (Coleção 2, 1985-2023), Equador (Coleção 4, 1985-2025), Paraguai (Coleção 3, 1985-2025), Peru (Coleção 3, 1985-2024) ou Venezuela (Coleção 2, 1985-2023). A saída é uma máscara 0/1 dos grupos escolhidos (floresta, outra vegetação natural, agropecuária, não vegetado, água) ou uma classe por grupo. A AOI deve estar dentro da região. Dados: MapBiomas, CC-BY-SA 4.0. Temporal.",
       "deforestation_mapbiomas": "Perda de vegetação entre dois anos segundo o produto de desmatamento e vegetação secundária do MapBiomas: 1 = vegetação primária (opcionalmente também secundária) no início que foi suprimida antes do ano final, 0 = ainda em pé, sem dados = não era vegetação no início. Regiões: Brasil (Coleção 11, intervalos 1988-2026), Bolívia (Coleção 3, 1986-2025), Paraguai (Coleção 3, 1986-2026), Peru (Coleção 3, 2000-2025). A AOI deve estar dentro da região. Dados: MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_fire": "MapBiomas Fogo para Brasil (Coleção 5.1, 1985-2025), Colômbia (2000-2025), Paraguai (1999-2024) e Peru (1990-2025): área queimada de um ano ou mês, severidade do fogo (só Brasil), anos desde o último fogo ou número de anos queimados numa janela antes de 1º de janeiro. O Monitor do Fogo mensal (Brasil, desde janeiro de 2019) é uma fonte avançada para meses recentes. Dados: MapBiomas, CC-BY-SA 4.0. Temporal.",
-      "mapbiomas_degradation": "Indicadores de degradação do MapBiomas Brasil (Coleção 10.1): idade da borda (anos em que a vegetação nativa está em borda, sem dados fora das bordas, 1985-2024), idade da vegetação secundária (anos desde o início da regeneração, 0 = não é vegetação secundária, 1985-2024), extração seletiva de madeira (1 = explorado no ano, 1988-2024) e frequência de distúrbio do dossel (número de distúrbios, 1988-2024). A AOI deve estar dentro do Brasil. Dados: MapBiomas, CC-BY-SA 4.0. Temporal.",
+      "logging_mapbiomas": "Exploração seletiva de madeira do MapBiomas Brasil (degradação, Coleção 10.1, 1988-2024). Por ano: 1 = explorado no ano, 0 = não explorado. Em um período: 1 = explorado pelo menos uma vez entre 1º de janeiro do ano inicial e 1º de janeiro do ano final, 0 = não explorado; os pixels que não eram floresta nativa no início ficam de fora. A AOI deve estar dentro do Brasil. Dados: MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_water": "Água superficial do MapBiomas Água para Brasil (Coleção 5, 1985-2025), Bolívia (Coleção 4, 1985-2025) e Peru (Coleção 3, 1985-2024, só anual): 1 = água no ano ou no mês escolhido, 0 = sem água. Os mapas mensais vão de janeiro de 1985 a dezembro de 2025. A AOI deve estar dentro da região. Dados: MapBiomas, CC-BY-SA 4.0. Temporal."
     },
     "modal": {
@@ -322,12 +322,10 @@
       "param_defo_vegetation_hint": "Só vegetação primária, ou também vegetação secundária (regenerada).",
       "defo_vegetation_primary": "Vegetação primária",
       "defo_vegetation_all": "Vegetação primária e secundária",
-      "param_degradation_variable": "Indicador",
-      "param_degradation_variable_hint": "Indicador de degradação do MapBiomas a mapear.",
-      "degradation_variable_edge": "Idade da borda (anos)",
-      "degradation_variable_secondary": "Idade da vegetação secundária (anos)",
-      "degradation_variable_logging": "Extração seletiva de madeira",
-      "degradation_variable_canopy": "Frequência de distúrbio do dossel"
+      "param_logging_timing": "Período",
+      "param_logging_timing_hint": "Por ano mapeia a exploração em um ano; em um período, a exploração entre um ano inicial e um ano final.",
+      "logging_timing_yearly": "Por ano",
+      "logging_timing_period": "Em um período"
     },
     "predefined_group": {
       "terrain": "Terreno",
@@ -337,8 +335,7 @@
       "climate": "Clima",
       "admin": "Unidades administrativas",
       "fire": "Fogo",
-      "forest_change": "Mudança florestal",
-      "mapbiomas": "MapBiomas"
+      "forest_change": "Mudança florestal"
     },
     "subj_notice": {
       "wide": "{name}: {n} unidades administrativas, salvo como raster de 16 bits para que cada unidade mantenha seu próprio valor.",

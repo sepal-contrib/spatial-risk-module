@@ -34,6 +34,15 @@ def _submit(rc):
     [b for b in rc.find(vw.Btn).widgets if text in str(b.children)][0].click()
 
 
+def _select_labels_in_page_order(widget):
+    """Select labels in on-screen (tree) order; ``rc.find`` is creation order."""
+    out = [widget.label] if isinstance(widget, vw.Select) else []
+    for child in getattr(widget, "children", None) or ():
+        if not isinstance(child, str):
+            out += _select_labels_in_page_order(child)
+    return out
+
+
 def _alert_text(rc):
     return " ".join(str(a.children) for a in rc.find(vw.Alert).widgets)
 
@@ -159,3 +168,71 @@ def test_edit_round_trip_reopens_the_saved_period():
         assert _select(rc, "vars.modal.param_end_year").v_model == 2018
     finally:
         rc.close()
+
+
+# --- logging_mapbiomas: the Period switch shows the pair or the Year select -------
+
+YEAR = "vars.modal.predefined_year_label"
+START = "vars.modal.param_start_year"
+END = "vars.modal.param_end_year"
+TIMING = "vars.modal.param_logging_timing"
+
+
+def test_logging_period_switch_swaps_the_year_selects():
+    """By year: one Year select; Over a period: start/end only; and back."""
+    rc = _render(None)
+    try:
+        _select(
+            rc, "vars.modal.predefined_variable_label"
+        ).v_model = "logging_mapbiomas"
+        assert _select(rc, TIMING).v_model == "yearly"
+        assert _select(rc, YEAR).items == list(range(1988, 2025))
+        assert _select(rc, START) is None and _select(rc, END) is None
+        _select(rc, TIMING).v_model = "period"
+        assert _select(rc, YEAR) is None
+        assert _select(rc, START).items == list(range(1988, 2026))
+        assert _select(rc, END) is not None
+        # The pair sits below the Period switch that shows it.
+        labels = _select_labels_in_page_order(rc.find(vw.Dialog).widgets[0])
+        assert labels.index(t(TIMING)) < labels.index(t(START))
+        _select(rc, TIMING).v_model = "yearly"
+        assert _select(rc, YEAR) is not None
+        assert _select(rc, START) is None and _select(rc, END) is None
+    finally:
+        rc.close()
+
+
+def _submit_logging(params, year=None):
+    added = []
+    rc = _render(None, added.append)
+    try:
+        _select(
+            rc, "vars.modal.predefined_variable_label"
+        ).v_model = "logging_mapbiomas"
+        for label_key, value in params:
+            _select(rc, label_key).v_model = value
+        if year is not None:
+            _select(rc, YEAR).v_model = year
+        _submit(rc)
+    finally:
+        rc.close()
+    return added
+
+
+def test_logging_submit_by_year_keeps_the_year_out_of_the_name():
+    """By year: the name has no years; the year rides on the entry."""
+    (entry,) = _submit_logging([], year=2020)
+    assert (entry["name"], entry["year"]) == ("logging_mapbiomas_brazil", 2020)
+
+
+def test_logging_submit_over_a_period_saves_the_pair():
+    """Over a period: _period_start_end, no year."""
+    (entry,) = _submit_logging([(TIMING, "period"), (START, 2015), (END, 2020)])
+    assert entry["name"] == "logging_mapbiomas_brazil_period_2015_2020"
+    assert entry["year"] is None
+    assert entry["params"] == {
+        "region": "brazil",
+        "timing": "period",
+        "start_year": 2015,
+        "end_year": 2020,
+    }

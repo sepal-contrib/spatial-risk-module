@@ -26,8 +26,7 @@ GROUPS = ("forest", "natural", "farming", "bare", "water")
 PLACEHOLDER = re.compile(r"\{(\w+)\}")
 
 ROUND1_KEYS = (
-    ["vars.predefined_group.mapbiomas"]
-    + [
+    [
         f"vars.{section}.{key}"
         for section in ("predefined", "predefined_info")
         for key in ("mapbiomas_lulc", "deforestation_mapbiomas", "mapbiomas_fire")
@@ -81,21 +80,30 @@ ROUND2_KEYS = (
     [
         f"vars.{section}.{key}"
         for section in ("predefined", "predefined_info")
-        for key in ("mapbiomas_degradation", "mapbiomas_water")
+        for key in ("logging_mapbiomas", "mapbiomas_water")
     ]
     + [
         f"vars.modal.{key}"
         for key in (
-            "param_degradation_variable",
-            "param_degradation_variable_hint",
-            "degradation_variable_edge",
-            "degradation_variable_secondary",
-            "degradation_variable_logging",
-            "degradation_variable_canopy",
+            "param_logging_timing",
+            "param_logging_timing_hint",
+            "logging_timing_yearly",
+            "logging_timing_period",
         )
     ]
-    + ["legend.unit.days_value"]
+    + ["legend.unit.days_value", "legend.class.logged"]
 )
+
+# The four-indicator MapBiomas degradation layer was dropped for selective logging.
+REMOVED_KEYS = [
+    "vars.predefined.mapbiomas_degradation",
+    "vars.predefined_info.mapbiomas_degradation",
+    "vars.modal.param_degradation_variable",
+    "vars.modal.param_degradation_variable_hint",
+] + [
+    f"vars.modal.degradation_variable_{v}"
+    for v in ("edge", "secondary", "logging", "canopy")
+]
 
 EXPECTED_FIELDS = {
     "vars.mapbiomas.error_outside_region": {"region", "pct", "min"},
@@ -134,6 +142,12 @@ def test_key_in_every_locale_with_en_placeholders(key):
             key,
             locale,
         )
+
+
+@pytest.mark.parametrize("key", REMOVED_KEYS)
+def test_removed_keys_are_gone_from_every_locale(key):
+    """Removed keys are gone from every locale."""
+    assert all(_lookup(locale, key) is None for locale in LOCALES), key
 
 
 @pytest.mark.parametrize("key", sorted(EXPECTED_FIELDS))

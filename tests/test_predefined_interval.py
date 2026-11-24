@@ -16,6 +16,7 @@ from gui.scripts.predefined import (
     default_param_values,
     param_specs,
     resolve_predefined,
+    resolved_entry,
     spec_segments,
 )
 from spatialrisk.evaluation import interval_from_target
@@ -45,12 +46,18 @@ def _own_values(spec):
 
 
 def _all_values(key):
+    """Every own-param combination under which the pair is in use x start < end.
+
+    Combinations with the pair inactive (logging_mapbiomas By year) are covered
+    by the inactive-pair tests below.
+    """
     own = [s for s in param_specs(key) if s["type"] != "year"]
     years = PREDEFINED_CATALOGUE[key]["interval_years"]
     for combo in itertools.product(*[_own_values(s) for s in own]):
         base = {s["key"]: v for s, v in zip(own, combo)}
-        for start, end in itertools.combinations(years, 2):
-            yield {**base, "start_year": start, "end_year": end}
+        if resolved_entry(key, base).get("interval_years"):
+            for start, end in itertools.combinations(years, 2):
+                yield {**base, "start_year": start, "end_year": end}
 
 
 def test_deforestation_gfc_has_the_two_trailing_year_specs():
@@ -189,8 +196,15 @@ def test_year_specs_are_last_and_only_on_non_temporal_interval_entries():
         if not entry.get("interval_years"):
             assert "year" not in kinds, key
             continue
-        assert entry["temporal"] is False, key
-        assert "years" not in entry, key
+        controllers = entry.get("interval_depends_on")
+        if controllers:
+            # The pair is in use only under these values; there the entry is
+            # non-temporal.
+            period = {c: allowed[0] for c, allowed in controllers.items()}
+            assert resolved_entry(key, period)["temporal"] is False, key
+        else:
+            assert entry["temporal"] is False, key
+            assert "years" not in entry, key
         assert kinds[-2:] == ["year", "year"] and "year" not in kinds[:-2], key
         assert [s["key"] for s in param_specs(key)[-2:]] == ["start_year", "end_year"]
         years = entry["interval_years"]
@@ -238,3 +252,92 @@ def test_tmf_names_resolve_with_the_definition_filled_in():
         "degradation_tmf",
         {"start_year": 2015, "end_year": 2020},
     )
+
+
+# --- an interval pair that depends on a param (logging_mapbiomas) ----------------
+
+LOG = "logging_mapbiomas"
+YEARLY = {"region": "brazil", "timing": "yearly", "start_year": None, "end_year": None}
+PERIOD = {"region": "brazil", "timing": "period", "start_year": 2015, "end_year": 2020}
+
+
+def test_interval_depends_on_is_copied_onto_both_year_specs():
+    """``interval_depends_on`` becomes the pair's ``depends_on``; others get none."""
+    for spec in param_specs(LOG)[-2:]:
+        assert spec["type"] == "year"
+        assert spec["depends_on"] == {"timing": ["period"]}
+    for spec in param_specs("deforestation_gfc")[-2:]:
+        assert "depends_on" not in spec
+
+
+def test_inactive_pair_is_never_written_into_the_name():
+    """By year writes no years (no ``_None_None``), even if stale ones are passed."""
+    assert build_predefined_name(LOG, YEARLY) == "logging_mapbiomas_brazil"
+    stale = {**YEARLY, "start_year": 2015, "end_year": 2020}
+    assert build_predefined_name(LOG, stale) == "logging_mapbiomas_brazil"
+    assert resolve_predefined("logging_mapbiomas_brazil") == (LOG, YEARLY)
+
+
+def test_active_pair_round_trips():
+    """Over a period: the pair trails the timing segment."""
+    name = build_predefined_name(LOG, PERIOD)
+    assert name == "logging_mapbiomas_brazil_period_2015_2020"
+    assert resolve_predefined(name) == (LOG, PERIOD)
+    assert interval_from_target(name) == 5
+
+
+def test_coerce_skips_an_inactive_pair():
+    """By year: blank year selects neither block submit nor reach the values."""
+    raw = {"region": "brazil", "timing": "yearly", "start_year": "", "end_year": "x"}
+    assert coerce_param_values(LOG, raw) == (YEARLY, None)
+
+
+def test_coerce_still_requires_an_active_pair():
+    """Over a period: a blank start names the start select; reversed -> order."""
+    raw = {"region": "brazil", "timing": "period", "start_year": "", "end_year": "2020"}
+    values, bad = coerce_param_values(LOG, raw)
+    assert values == {} and bad["key"] == "start_year"
+    raw = {**raw, "start_year": "2020", "end_year": "2015"}
+    values, bad = coerce_param_values(LOG, raw)
+    assert bad["error_key"] == "vars.modal.error_interval_order"
+
+
+def test_resolved_entry_empties_interval_years_when_the_pair_is_inactive():
+    """Consumers asking "is this an interval target" read the resolved entry."""
+    assert resolved_entry(LOG, YEARLY)["interval_years"] == []
+    assert resolved_entry(LOG, PERIOD)["interval_years"] == list(range(1988, 2026))
+    assert (
+        resolved_entry("deforestation_gfc", {})["interval_years"]
+        == PREDEFINED_CATALOGUE["deforestation_gfc"]["interval_years"]
+    )
+
+
+def test_param_rows_hide_an_inactive_pair():
+    """Details dialog: By year lists no start/end rows."""
+    from gui.i18n import t
+    from gui.scripts.predefined import changed_advanced_count, param_rows
+
+    yearly = param_rows(LOG, YEARLY)
+    assert [label for label, _ in yearly] == [
+        t("vars.modal.param_mapbiomas_region"),
+        t("vars.modal.param_logging_timing"),
+    ]
+    assert yearly[1][1] == t("vars.modal.logging_timing_yearly")
+    assert param_rows(LOG, PERIOD)[-2:] == [
+        (t("vars.modal.param_start_year"), "2015"),
+        (t("vars.modal.param_end_year"), "2020"),
+    ]
+    assert changed_advanced_count(LOG, YEARLY) == 0
+    assert changed_advanced_count(LOG, PERIOD) == 0
+
+
+def test_interval_target_checks_follow_the_period():
+    """Inference mask and evaluation: By year is not an interval target."""
+    from types import SimpleNamespace as NS
+
+    from gui.scripts.inference_runner import _is_interval_target
+
+    assert _is_interval_target(NS(name="logging_mapbiomas_brazil")) is False
+    period = NS(name="logging_mapbiomas_brazil_period_2015_2020")
+    assert _is_interval_target(period) is True
+    assert interval_from_target("logging_mapbiomas_brazil") is None

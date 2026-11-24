@@ -46,6 +46,11 @@ def param_specs(catalogue_key):
 # spatialrisk.evaluation.interval_from_target reads (5 years): this pair is
 # the ONLY place a catalogue name may carry four-digit runs
 # (tests/test_predefined_interval.py lints it).
+#
+# ``interval_depends_on`` (optional) is copied as ``depends_on`` onto both
+# specs: logging_mapbiomas asks for the pair only "Over a period". An inactive
+# pair is never written, never parsed and never validated, and the resolved
+# entry's ``interval_years`` is then [] (catalogue.resolved_entry).
 
 INTERVAL_KEYS = ("start_year", "end_year")
 INTERVAL_ORDER_ERROR_KEY = "vars.modal.error_interval_order"
@@ -70,6 +75,8 @@ def interval_param_specs(entry):
         "advanced": False,
         "omit_default": False,
     }
+    if entry.get("interval_depends_on"):
+        common["depends_on"] = entry["interval_depends_on"]
     return [
         {
             **common,
@@ -248,10 +255,15 @@ def coerce_param_values(catalogue_key, raw):
     """
     # A hidden (inactive) param takes its default: whatever its field still
     # holds must neither block submit nor reach the name.
+    active = {s["key"] for s in active_param_specs(catalogue_key, raw)}
     raw = inactive_to_defaults(catalogue_key, raw)
     values = {}
     for spec in param_specs(catalogue_key):
         kind = _kind(spec)
+        if spec["key"] not in active:
+            # An inactive interval pair's default (None) is not a valid year.
+            values[spec["key"]] = _copy(spec["default"])
+            continue
         if kind == "multichoice":
             selected = raw.get(spec["key"])
             if not isinstance(selected, (list, tuple)):
@@ -309,8 +321,11 @@ def build_predefined_name(catalogue_key, values):
     part of the name — ``entry_key`` appends it when forming the storage key.
     """
     values = inactive_to_defaults(catalogue_key, values)
+    active = {s["key"] for s in active_param_specs(catalogue_key, values)}
     parts = [catalogue_key]
     for spec in param_specs(catalogue_key):
+        if spec["key"] not in active:
+            continue  # e.g. an inactive interval pair: no "_None_None"
         if omits_default(spec):
             value = values.get(spec["key"], spec["default"])
             if _is_default(spec, value):
@@ -381,13 +396,18 @@ def _walk(specs, segments):
 
     A cursor moves over the segments. A segment matching the current spec is
     consumed; otherwise an ``omit_default`` spec takes its default and the
-    walk moves on, and a required spec fails. Leftover segments fail. The
+    walk moves on, and a required spec fails. A spec made inactive by the
+    values parsed so far (controllers come first, see the catalogue lint)
+    takes its default without consuming a segment. Leftover segments fail. The
     catalogue lint guarantees no segment parses under two specs of one entry,
     so the greedy walk is unambiguous.
     """
     values = {}
     cursor = 0
     for spec in specs:
+        if not _depends_active(spec, values):
+            values[spec["key"]] = _copy(spec["default"])
+            continue
         if cursor < len(segments):
             matched, value = parse_segment(spec, segments[cursor])
             if matched:

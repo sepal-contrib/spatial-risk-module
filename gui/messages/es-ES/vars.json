@@ -23,7 +23,7 @@
       "mapbiomas_lulc": "Cobertura del suelo MapBiomas",
       "deforestation_mapbiomas": "Deforestación MapBiomas",
       "mapbiomas_fire": "Fuego MapBiomas",
-      "mapbiomas_degradation": "Degradación MapBiomas (Brasil)",
+      "logging_mapbiomas": "Tala selectiva (MapBiomas Brasil)",
       "mapbiomas_water": "Agua superficial MapBiomas"
     },
     "predefined_info": {
@@ -49,7 +49,7 @@
       "mapbiomas_lulc": "Cobertura del suelo anual de [MapBiomas](https://mapbiomas.org) para la región elegida: Brasil (Colección 11, 1985-2025), Panamazonía (Colección 6, 1985-2023), Bolivia (Colección 3, 1985-2024), Colombia (Colección 2, 1985-2023), Ecuador (Colección 4, 1985-2025), Paraguay (Colección 3, 1985-2025), Perú (Colección 3, 1985-2024) o Venezuela (Colección 2, 1985-2023). La salida es una máscara 0/1 de los grupos elegidos (bosque, otra vegetación natural, agropecuario, sin vegetación, agua) o una clase por grupo. El AOI debe estar dentro de la región. Datos: MapBiomas, CC-BY-SA 4.0. Temporal.",
       "deforestation_mapbiomas": "Pérdida de vegetación entre dos años según el producto de deforestación y vegetación secundaria de MapBiomas: 1 = vegetación primaria (opcionalmente también secundaria) al inicio que fue eliminada antes del año final, 0 = sigue en pie, sin datos = no era vegetación al inicio. Regiones: Brasil (Colección 11, intervalos 1988-2026), Bolivia (Colección 3, 1986-2025), Paraguay (Colección 3, 1986-2026), Perú (Colección 3, 2000-2025). El AOI debe estar dentro de la región. Datos: MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_fire": "MapBiomas Fuego para Brasil (Colección 5.1, 1985-2025), Colombia (2000-2025), Paraguay (1999-2024) y Perú (1990-2025): área quemada de un año o un mes, severidad del fuego (solo Brasil), años desde el último fuego o número de años quemados en una ventana previa al 1 de enero. El Monitor del Fuego mensual (Brasil, desde enero de 2019) es una fuente avanzada para los meses recientes. Datos: MapBiomas, CC-BY-SA 4.0. Temporal.",
-      "mapbiomas_degradation": "Indicadores de degradación de MapBiomas Brasil (Colección 10.1): edad del borde (años que la vegetación nativa lleva en un borde, sin datos fuera de los bordes, 1985-2024), edad de la vegetación secundaria (años desde que empezó la regeneración, 0 = no es vegetación secundaria, 1985-2024), tala selectiva (1 = talado en el año, 1988-2024) y frecuencia de perturbación del dosel (número de perturbaciones, 1988-2024). El AOI tiene que estar dentro de Brasil. Datos: MapBiomas, CC-BY-SA 4.0. Temporal.",
+      "logging_mapbiomas": "Tala selectiva de MapBiomas Brasil (degradación, Colección 10.1, 1988-2024). Por año: 1 = talado en el año, 0 = no talado. En un período: 1 = talado al menos una vez entre el 1 de enero del año inicial y el 1 de enero del año final, 0 = no talado; los píxeles que no eran bosque nativo al inicio quedan excluidos. El AOI tiene que estar dentro de Brasil. Datos: MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_water": "Agua superficial de MapBiomas Agua para Brasil (Colección 5, 1985-2025), Bolivia (Colección 4, 1985-2025) y Perú (Colección 3, 1985-2024, solo anual): 1 = agua en el año o en el mes elegido, 0 = sin agua. Los mapas mensuales van de enero de 1985 a diciembre de 2025. El AOI tiene que estar dentro de la región. Datos: MapBiomas, CC-BY-SA 4.0. Temporal."
     },
     "modal": {
@@ -322,12 +322,10 @@
       "param_defo_vegetation_hint": "Solo vegetación primaria, o también vegetación secundaria (regenerada).",
       "defo_vegetation_primary": "Vegetación primaria",
       "defo_vegetation_all": "Vegetación primaria y secundaria",
-      "param_degradation_variable": "Indicador",
-      "param_degradation_variable_hint": "Indicador de degradación de MapBiomas que quieres mapear.",
-      "degradation_variable_edge": "Edad del borde (años)",
-      "degradation_variable_secondary": "Edad de la vegetación secundaria (años)",
-      "degradation_variable_logging": "Tala selectiva",
-      "degradation_variable_canopy": "Frecuencia de perturbación del dosel"
+      "param_logging_timing": "Período",
+      "param_logging_timing_hint": "Por año muestra la tala de un año; en un período, la tala entre un año inicial y un año final.",
+      "logging_timing_yearly": "Por año",
+      "logging_timing_period": "En un período"
     },
     "predefined_group": {
       "terrain": "Terreno",
@@ -337,8 +335,7 @@
       "climate": "Clima",
       "admin": "Unidades administrativas",
       "fire": "Fuego",
-      "forest_change": "Cambio forestal",
-      "mapbiomas": "MapBiomas"
+      "forest_change": "Cambio forestal"
     },
     "subj_notice": {
       "wide": "{name}: {n} unidades administrativas, guardado como ráster de 16 bits para que cada unidad conserve su propio valor.",

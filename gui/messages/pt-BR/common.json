@@ -28,6 +28,7 @@
       "present": "Presente",
       "stable": "Estável",
       "loss": "Perda de floresta",
+      "logged": "Explorado",
       "gain": "Ganho de floresta",
       "non_forest": "Não floresta",
       "forest": "Floresta",

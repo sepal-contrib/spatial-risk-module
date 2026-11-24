@@ -28,6 +28,7 @@
       "present": "Present",
       "stable": "Stable",
       "loss": "Forest loss",
+      "logged": "Logged",
       "gain": "Forest gain",
       "non_forest": "Non-forest",
       "forest": "Forest",

@@ -25,7 +25,7 @@ EXPECTED_KEYS = {
     "mapbiomas_lulc",
     "deforestation_mapbiomas",
     "mapbiomas_fire",
-    "mapbiomas_degradation",
+    "logging_mapbiomas",
     "mapbiomas_water",
 }
 
@@ -52,7 +52,7 @@ THEME_OF = {
     "mapbiomas_lulc": "mapbiomas",
     "deforestation_mapbiomas": "mapbiomas",
     "mapbiomas_fire": "mapbiomas",
-    "mapbiomas_degradation": "mapbiomas",
+    "logging_mapbiomas": "mapbiomas",
     "mapbiomas_water": "mapbiomas",
 }
 

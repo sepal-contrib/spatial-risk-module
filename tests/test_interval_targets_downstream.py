@@ -209,3 +209,17 @@ def test_non_interval_target_is_still_refused():
     from gui.scripts.model_registry import interval_target_error
 
     assert interval_target_error("jnr", "burned_area") is not None
+
+
+def test_logging_by_year_is_a_mask_candidate_and_a_period_is_not():
+    """Selective logging By year is a plain 0/1 layer; Over a period a target."""
+    project = _project(
+        logging_mapbiomas_brazil_2020=_var("logging_mapbiomas_brazil", 2020),
+        logging_mapbiomas_brazil_period_2015_2020=_var(
+            "logging_mapbiomas_brazil_period_2015_2020"
+        ),
+    )
+    assert ir.mask_layer_candidates(project) == ["logging_mapbiomas_brazil_2020"]
+    period = "logging_mapbiomas_brazil_period_2015_2020"
+    assert h.parse_interval(project, period) == 5
+    assert h.parse_interval(project, "logging_mapbiomas_brazil_2020") is None

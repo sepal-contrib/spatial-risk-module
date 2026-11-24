@@ -29,7 +29,6 @@ def test_fire_group_sits_after_forest():
         "fire",
         "climate",
         "admin",
-        "mapbiomas",
     )
 
 

@@ -1,4 +1,4 @@
-"""MapBiomas predefined layers (catalogue group ``"mapbiomas"``).
+"""MapBiomas predefined layers, each placed in its theme group (forest, water...).
 
 Asset facts live in ``mapbiomas_registry``, which is pure data. This module turns
 them into Earth Engine expressions, catalogue entries, validators and the
@@ -301,7 +301,7 @@ def _lulc_class_labels(params):
 _LULC_ENTRY = {
     "label_key": "vars.predefined.mapbiomas_lulc",
     "description_key": "vars.predefined_info.mapbiomas_lulc",
-    "group": "mapbiomas",
+    "group": "forest",
     "var_type": "GEEVar",
     "raster_type": "categorical",
     "temporal": True,
@@ -403,7 +403,7 @@ def _defo_forest_at_start(params):
 _DEFO_ENTRY = {
     "label_key": "vars.predefined.deforestation_mapbiomas",
     "description_key": "vars.predefined_info.deforestation_mapbiomas",
-    "group": "mapbiomas",
+    "group": "forest_change",
     "var_type": "GEEVar",
     "raster_type": "categorical",
     "temporal": False,
@@ -622,7 +622,7 @@ def _fire_class_labels(params):
 _FIRE_ENTRY = {
     "label_key": "vars.predefined.mapbiomas_fire",
     "description_key": "vars.predefined_info.mapbiomas_fire",
-    "group": "mapbiomas",
+    "group": "fire",
     "var_type": "GEEVar",
     "raster_type": _fire_raster_type,
     "temporal": True,
@@ -647,94 +647,127 @@ _FIRE_ENTRY = {
 # --- fire (end) -------------------------------------------------------------------
 
 
-# --- degradation (Brazil) -----------------------------------------------------------
+# --- selective logging (Brazil): By year / Over a period ---------------------------
 
-DEGRADATION_VARIABLES = ("edge", "secondary", "logging", "canopy")
-
-DEGRADATION_VARIABLE_PARAM = {
-    "key": "variable",
-    "label_key": "vars.modal.param_degradation_variable",
-    "hint_key": "vars.modal.param_degradation_variable_hint",
+LOGGING_TIMING_PARAM = {
+    "key": "timing",
+    "label_key": "vars.modal.param_logging_timing",
+    "hint_key": "vars.modal.param_logging_timing_hint",
     "type": "choice",
-    "options": list(DEGRADATION_VARIABLES),
-    "default": "edge",
-    "option_label_key_prefix": "vars.modal.degradation_variable_",
+    "options": ["yearly", "period"],
+    "default": "yearly",
+    "option_label_key_prefix": "vars.modal.logging_timing_",
     "suffix_prefix": "",
     "advanced": False,
-    "omit_default": False,
+    "omit_default": True,
 }
 
-
-def _degradation_years(params):
-    return year_list(params["region"], f"degradation_{params['variable']}")
+_LULC_FOREST_CODES = [c for c in LULC_KNOWN_CODES if LULC_CODE_TO_GROUP[c] == "forest"]
 
 
-def _validate_degradation(params, year):
-    return _check_year(params["region"], year, _degradation_years(params))
+def logging_interval_years(region):
+    """Start/end years for ``region``: data first..last -> first .. last + 1.
 
-
-def _get_mapbiomas_degradation(aoi, year, region="brazil", variable="edge"):
-    """MapBiomas Brazil degradation indicators (Collection 10.1).
-
-    edge: edge age in years, left masked away from edges. secondary: the band
-    holds ``age * 100 + class``, so the age is ``floor(code / 100)``; 0 = not
-    secondary vegetation. logging: 0/1. canopy: disturbance count. The last
-    three are ``unmask(0)`` then re-masked to Brazil (nodata outside).
+    The start's baseline is LULC ``start - 1``, which every LULC record covers.
     """
-    params = {"region": region, "variable": variable}
-    _require_valid(_validate_degradation(params, year))
-    band = _band(mapbiomas_asset(region, f"degradation_{variable}"), year)
-    if variable == "edge":
-        return _finish(band.toInt16(), aoi)
-    if variable == "secondary":
-        image = _inside(band.divide(100).floor().unmask(0), region).toInt16()
-    elif variable == "logging":
-        image = _inside(band.gt(0).unmask(0), region).toByte()
-    else:
-        image = _inside(band.unmask(0), region).toInt16()
-    return _finish(image, aoi)
+    years = year_list(region, "logging")
+    return list(range(years[0], years[-1] + 2))
 
 
-def _degradation_raster_type(params):
-    return "categorical" if params["variable"] == "logging" else "continuous"
+LOGGING_INTERVAL_YEARS = sorted(
+    {y for r in regions_for("logging") for y in logging_interval_years(r)}
+)
 
 
-def _degradation_vis(params):
-    return {
-        "edge": {"palette": ["fff7bc", "fec44f", "d95f0e"], "min": 0, "max": 40},
-        "secondary": {"palette": ["edf8e9", "74c476", "006d2c"], "min": 0, "max": 40},
-        "logging": {"palette": ["ffffff", "8e24aa"], "min": 0, "max": 1},
-        "canopy": {
-            "palette": ["ffffff", "fdae6b", "e6550d", "7f2704"],
-            "min": 0,
-            "max": 10,
-        },
-    }[params["variable"]]
+def _is_yearly(params):
+    return params["timing"] == "yearly"
 
 
-def _degradation_unit_key(params):
-    return {
-        "edge": "legend.unit.years_value",
-        "secondary": "legend.unit.years_value",
-        "canopy": "legend.unit.plain_value",
-    }.get(params["variable"])
+def _logging_years(params):
+    return year_list(params["region"], "logging") if _is_yearly(params) else []
 
 
-_DEGRADATION_ENTRY = {
-    "label_key": "vars.predefined.mapbiomas_degradation",
-    "description_key": "vars.predefined_info.mapbiomas_degradation",
-    "group": "mapbiomas",
+def _logging_legend(params):
+    if _is_yearly(params):
+        return ("legend.class.absent", "legend.class.present")
+    return ("legend.class.stable", "legend.class.logged")
+
+
+def _validate_logging(params, year):
+    region = params["region"]
+    if _is_yearly(params):
+        return _check_year(region, year, year_list(region, "logging"))
+    start, end = params.get("start_year"), params.get("end_year")
+    if start is None or end is None:
+        return None  # C's coerce reports the missing year
+    years = logging_interval_years(region)
+    if int(start) in years and int(end) in years:
+        return None
+    return (
+        "vars.mapbiomas.error_interval_range",
+        {"region": region_label(region), "first": years[0], "last": years[-1]},
+    )
+
+
+def _logged(rec, year):
+    """1 = logged in ``year``, 0 = not (the band is masked where nothing was)."""
+    return _band(rec, year).gt(0).unmask(0)
+
+
+def _get_logging_mapbiomas(
+    aoi, year=None, region="brazil", timing="yearly", start_year=None, end_year=None
+):
+    """MapBiomas Brazil selective logging (Collection 10.1 degradation).
+
+    yearly: 1 = logged in ``year``, 0 = not, nodata outside the region.
+    period: 1 = logged at least once in start .. end - 1, 0 = not; masked where
+    the pixel was not LULC forest in ``start - 1`` (on 1 January of ``start``),
+    which also masks everything outside the region's LULC footprint.
+    """
+    rec = mapbiomas_asset(region, "logging")
+    if timing == "yearly":
+        _require_valid(_validate_logging({"region": region, "timing": timing}, year))
+        return _finish(_inside(_logged(rec, year), region).toByte(), aoi)
+    start_year, end_year = check_interval(
+        start_year, end_year, logging_interval_years(region)
+    )
+    codes = _LULC_FOREST_CODES
+    baseline = _band(mapbiomas_asset(region, "lulc"), start_year - 1).remap(
+        codes, [1] * len(codes), 0
+    )
+    events = ee.Image(0)
+    for y in range(start_year, end_year):
+        events = events.Or(_logged(rec, y))
+    return _finish(events.updateMask(baseline).toByte(), aoi)
+
+
+def _logging_forest_at_start(params):
+    """LULC forest, the baseline a period target is masked with."""
+    return (
+        "mapbiomas_lulc",
+        {"region": params["region"], "mode": "mask", "groups": ["forest"]},
+    )
+
+
+_LOGGING_ENTRY = {
+    "label_key": "vars.predefined.logging_mapbiomas",
+    "description_key": "vars.predefined_info.logging_mapbiomas",
+    "group": "forest_change",
     "var_type": "GEEVar",
-    "raster_type": _degradation_raster_type,
-    "temporal": True,
-    "years": _degradation_years,
+    "raster_type": "categorical",
+    # By year asks for a year; Over a period is an interval target (start/end
+    # selects, active only then: interval_depends_on).
+    "temporal": _is_yearly,
+    "years": _logging_years,
+    "interval_years": LOGGING_INTERVAL_YEARS,
+    "interval_depends_on": {"timing": ["period"]},
     "default_scale": 30,
-    "params": [region_param("degradation"), DEGRADATION_VARIABLE_PARAM],
-    "get_image": _get_mapbiomas_degradation,
-    "vis_params": _degradation_vis,
-    "unit_key": _degradation_unit_key,
-    "legend_class_keys": ("legend.class.absent", "legend.class.present"),
-    "validate": _validate_degradation,
+    "params": [region_param("logging"), LOGGING_TIMING_PARAM],
+    "get_image": _get_logging_mapbiomas,
+    "vis_params": {"palette": ["ffffff", "8e24aa"], "min": 0, "max": 1},
+    "legend_class_keys": _logging_legend,
+    "validate": _validate_logging,
+    "forest_at_start": _logging_forest_at_start,
     "prepare_download": _prepare_mapbiomas_download,
 }
 
@@ -771,7 +804,7 @@ def _get_mapbiomas_water(aoi, year, region="brazil", period="year"):
 _WATER_ENTRY = {
     "label_key": "vars.predefined.mapbiomas_water",
     "description_key": "vars.predefined_info.mapbiomas_water",
-    "group": "mapbiomas",
+    "group": "water",
     "var_type": "GEEVar",
     "raster_type": "categorical",
     "temporal": True,
@@ -786,11 +819,11 @@ _WATER_ENTRY = {
 }
 
 
-# Order = order in the layer dropdown under the "MapBiomas" header.
+# Each entry sits in its theme group; within a group they follow the other sources.
 ENTRIES = {
     "mapbiomas_lulc": _LULC_ENTRY,
     "deforestation_mapbiomas": _DEFO_ENTRY,
     "mapbiomas_fire": _FIRE_ENTRY,
-    "mapbiomas_degradation": _DEGRADATION_ENTRY,
+    "logging_mapbiomas": _LOGGING_ENTRY,
     "mapbiomas_water": _WATER_ENTRY,
 }

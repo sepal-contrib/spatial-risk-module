@@ -108,24 +108,9 @@ VERIFIED = {
         "FireMonth",
         (2019, 2026),
     ),
-    ("brazil", "degradation_edge"): (
-        "brazil/lulc/collection10_1/mapbiomas_brazil_collection10_1_degradation_edge_age_v1",
-        "age_{year}",
-        (1985, 2024),
-    ),
-    ("brazil", "degradation_secondary"): (
-        "brazil/lulc/collection10_1/mapbiomas_brazil_collection10_1_degradation_secondary_vegetation_age_v1",
-        "age_{year}",
-        (1985, 2024),
-    ),
-    ("brazil", "degradation_logging"): (
+    ("brazil", "logging"): (
         "brazil/lulc/collection10_1/mapbiomas_brazil_collection10_1_degradation_logging_v2",
         "logging_{year}",
-        (1988, 2024),
-    ),
-    ("brazil", "degradation_canopy"): (
-        "brazil/lulc/collection10_1/mapbiomas_brazil_collection10_1_degradation_canopy_disturbance_frequency_v2",
-        "canopy_disturbance_frequency_{year}",
         (1988, 2024),
     ),
     ("brazil", "water_annual"): (
@@ -211,6 +196,7 @@ def _all_products():
     return {p for family in reg.FAMILIES.values() for p in family} | {
         "lulc",
         "deforestation",
+        "logging",
     }
 
 
@@ -318,7 +304,7 @@ def test_mapbiomas_asset_unknown_raises_key_error(region, product):
         ("deforestation", ("brazil", "bolivia", "paraguay", "peru")),
         ("fire", ("brazil", "colombia", "paraguay", "peru")),
         ("fire_severity", ("brazil",)),
-        ("degradation", ("brazil",)),
+        ("logging", ("brazil",)),
         ("water", ("brazil", "bolivia", "peru")),
         ("water_monthly", ("brazil", "bolivia")),
     ],
@@ -380,7 +366,7 @@ def test_region_param_shape():
 
 
 @pytest.mark.parametrize(
-    "product", ["lulc", "deforestation", "fire", "degradation", "water"]
+    "product", ["lulc", "deforestation", "fire", "logging", "water"]
 )
 def test_region_param_default_is_first_option_and_brazil(product):
     """Region param default is first option and brazil."""

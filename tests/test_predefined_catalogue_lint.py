@@ -166,7 +166,9 @@ def test_depends_on_shape(key):
     for index, spec in enumerate(specs):
         depends_on = spec.get("depends_on") or {}
         where = f"{key}.{spec['key']}"
-        if depends_on:
+        # The interval pair stays required while active; the builder skips it
+        # while inactive (logging_mapbiomas By year).
+        if depends_on and _kind(spec) != "year":
             assert omits_default(spec), f"{where}: depends_on needs omit_default"
         earlier = {s["key"]: s for s in specs[:index]}
         for controller, allowed in depends_on.items():

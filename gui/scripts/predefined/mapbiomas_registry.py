@@ -267,12 +267,6 @@ _LULC_OBSERVED = {
 # union of its products' regions.
 FAMILIES = {
     "fire": ("fire", "fire_severity", "fire_monitor"),
-    "degradation": (
-        "degradation_edge",
-        "degradation_secondary",
-        "degradation_logging",
-        "degradation_canopy",
-    ),
     "water": ("water_annual", "water_monthly"),
 }
 
@@ -438,26 +432,9 @@ _ASSETS = {
         "int",
         "Fire Monitor",
     ),
-    # --- degradation (Brazil only) -------------------------------------------
-    ("brazil", "degradation_edge"): _bands(
-        _DEG + "edge_age_v1", "age_{year}", 1985, 2024, "Collection 10.1"
-    ),
-    ("brazil", "degradation_secondary"): _bands(
-        _DEG + "secondary_vegetation_age_v1",
-        "age_{year}",
-        1985,
-        2024,
-        "Collection 10.1",
-    ),
-    ("brazil", "degradation_logging"): _bands(
+    # --- selective logging (Brazil only; Collection 10.1 degradation) ---------
+    ("brazil", "logging"): _bands(
         _DEG + "logging_v2", "logging_{year}", 1988, 2024, "Collection 10.1"
-    ),
-    ("brazil", "degradation_canopy"): _bands(
-        _DEG + "canopy_disturbance_frequency_v2",
-        "canopy_disturbance_frequency_{year}",
-        1988,
-        2024,
-        "Collection 10.1",
     ),
     # --- surface water ---------------------------------------------------------
     ("brazil", "water_annual"): _bands(

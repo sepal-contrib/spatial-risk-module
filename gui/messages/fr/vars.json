@@ -23,7 +23,7 @@
       "mapbiomas_lulc": "Occupation du sol MapBiomas",
       "deforestation_mapbiomas": "Déforestation MapBiomas",
       "mapbiomas_fire": "Feux MapBiomas",
-      "mapbiomas_degradation": "Dégradation MapBiomas (Brésil)",
+      "logging_mapbiomas": "Exploitation forestière sélective (MapBiomas Brésil)",
       "mapbiomas_water": "Eau de surface MapBiomas"
     },
     "predefined_info": {
@@ -49,7 +49,7 @@
       "mapbiomas_lulc": "Occupation du sol annuelle de [MapBiomas](https://mapbiomas.org) pour la région choisie : Brésil (collection 11, 1985-2025), Pan-Amazonie (collection 6, 1985-2023), Bolivie (collection 3, 1985-2024), Colombie (collection 2, 1985-2023), Équateur (collection 4, 1985-2025), Paraguay (collection 3, 1985-2025), Pérou (collection 3, 1985-2024) ou Venezuela (collection 2, 1985-2023). La sortie est un masque 0/1 des groupes choisis (forêt, autre végétation naturelle, agriculture, non végétalisé, eau) ou une classe par groupe. L'AOI doit se trouver dans la région. Données : MapBiomas, CC-BY-SA 4.0. Temporel.",
       "deforestation_mapbiomas": "Perte de végétation entre deux années selon le produit déforestation et végétation secondaire de MapBiomas : 1 = végétation primaire (éventuellement aussi secondaire) au début, supprimée avant l'année de fin, 0 = toujours en place, sans donnée = pas de végétation au début. Régions : Brésil (collection 11, intervalles 1988-2026), Bolivie (collection 3, 1986-2025), Paraguay (collection 3, 1986-2026), Pérou (collection 3, 2000-2025). L'AOI doit se trouver dans la région. Données : MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_fire": "MapBiomas Feu pour le Brésil (collection 5.1, 1985-2025), la Colombie (2000-2025), le Paraguay (1999-2024) et le Pérou (1990-2025) : surface brûlée sur une année ou un mois, sévérité (Brésil uniquement), années depuis le dernier feu ou nombre d'années brûlées dans une fenêtre avant le 1er janvier. Le Moniteur des feux mensuel (Brésil, depuis janvier 2019) est une source avancée pour les mois récents. Données : MapBiomas, CC-BY-SA 4.0. Temporel.",
-      "mapbiomas_degradation": "Indicateurs de dégradation de MapBiomas Brésil (Collection 10.1) : âge de la lisière (années passées par la végétation native en lisière, sans données ailleurs, 1985-2024), âge de la végétation secondaire (années depuis le début de la repousse, 0 = pas de végétation secondaire, 1985-2024), exploitation sélective (1 = exploité dans l'année, 1988-2024) et fréquence de perturbation de la canopée (nombre de perturbations, 1988-2024). L'AOI doit se trouver au Brésil. Données : MapBiomas, CC-BY-SA 4.0. Temporel.",
+      "logging_mapbiomas": "Exploitation forestière sélective de MapBiomas Brésil (dégradation, collection 10.1, 1988-2024). Par année : 1 = exploité dans l'année, 0 = non exploité. Sur une période : 1 = exploité au moins une fois entre le 1er janvier de l'année de début et le 1er janvier de l'année de fin, 0 = non exploité ; les pixels qui n'étaient pas de la forêt native au début sont exclus. L'AOI doit se trouver au Brésil. Données : MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_water": "Eau de surface de MapBiomas Eau pour le Brésil (Collection 5, 1985-2025), la Bolivie (Collection 4, 1985-2025) et le Pérou (Collection 3, 1985-2024, annuel uniquement) : 1 = eau dans l'année ou le mois choisi, 0 = pas d'eau. Les cartes mensuelles vont de janvier 1985 à décembre 2025. L'AOI doit se trouver dans la région. Données : MapBiomas, CC-BY-SA 4.0. Temporel."
     },
     "modal": {
@@ -322,12 +322,10 @@
       "param_defo_vegetation_hint": "Végétation primaire seulement, ou aussi végétation secondaire (repousse).",
       "defo_vegetation_primary": "Végétation primaire",
       "defo_vegetation_all": "Végétation primaire et secondaire",
-      "param_degradation_variable": "Indicateur",
-      "param_degradation_variable_hint": "Indicateur de dégradation MapBiomas à cartographier.",
-      "degradation_variable_edge": "Âge de la lisière (années)",
-      "degradation_variable_secondary": "Âge de la végétation secondaire (années)",
-      "degradation_variable_logging": "Exploitation forestière sélective",
-      "degradation_variable_canopy": "Fréquence de perturbation de la canopée"
+      "param_logging_timing": "Période",
+      "param_logging_timing_hint": "Par année cartographie l'exploitation d'une année ; sur une période, l'exploitation entre une année de début et une année de fin.",
+      "logging_timing_yearly": "Par année",
+      "logging_timing_period": "Sur une période"
     },
     "predefined_group": {
       "terrain": "Relief",
@@ -337,8 +335,7 @@
       "climate": "Climat",
       "admin": "Unités administratives",
       "fire": "Feu",
-      "forest_change": "Changement forestier",
-      "mapbiomas": "MapBiomas"
+      "forest_change": "Changement forestier"
     },
     "subj_notice": {
       "wide": "{name} : {n} unités administratives, enregistré en raster 16 bits pour que chaque unité garde sa propre valeur.",

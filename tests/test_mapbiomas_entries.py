@@ -26,9 +26,16 @@ from gui.scripts.predefined.mapbiomas_registry import (
 )
 from gui.scripts.predefined.params import inactive_to_defaults, param_specs
 
-MAPBIOMAS_KEYS = [
-    k for k, e in PREDEFINED_CATALOGUE.items() if e.get("group") == "mapbiomas"
-]
+MAPBIOMAS_KEYS = list(mapbiomas.ENTRIES)
+
+# Each MapBiomas layer sits in the theme group of what it maps.
+THEME_GROUP = {
+    "mapbiomas_lulc": "forest",
+    "deforestation_mapbiomas": "forest_change",
+    "mapbiomas_fire": "fire",
+    "logging_mapbiomas": "forest_change",
+    "mapbiomas_water": "water",
+}
 LULC_PERU = ROOT + "peru/collection3/mapbiomas_peru_collection3_integration_v1"
 
 
@@ -69,7 +76,10 @@ def _combos(key):
     seen = set()
     for combo in itertools.product(*[_space(s) for s in specs]):
         values = inactive_to_defaults(key, {s["key"]: v for s, v in zip(specs, combo)})
-        if "start_year" in values and values["start_year"] >= values["end_year"]:
+        if (
+            values.get("start_year") is not None
+            and values["start_year"] >= values["end_year"]
+        ):
             continue
         marker = repr(sorted(values.items()))
         if marker not in seen:
@@ -84,7 +94,7 @@ def _combos(key):
 def test_every_mapbiomas_entry_is_wired(key):
     """Every mapbiomas entry is wired."""
     entry = PREDEFINED_CATALOGUE[key]
-    assert entry["group"] == "mapbiomas"
+    assert entry["group"] == THEME_GROUP[key]
     assert entry["prepare_download"] is mapbiomas._prepare_mapbiomas_download
     assert callable(entry["validate"])
     assert entry["get_image"].__module__ == mapbiomas.__name__
@@ -92,10 +102,10 @@ def test_every_mapbiomas_entry_is_wired(key):
     assert region["key"] == "region" and region["omit_default"] is False
 
 
-def test_mapbiomas_group_is_last_and_holds_the_module_entries():
-    """Mapbiomas group is last and holds the module entries."""
-    assert GROUP_ORDER[-1] == "mapbiomas"
-    assert MAPBIOMAS_KEYS == list(mapbiomas.ENTRIES)
+def test_mapbiomas_has_no_group_of_its_own():
+    """MapBiomas layers live in the theme groups, not a "MapBiomas" header."""
+    assert "mapbiomas" not in GROUP_ORDER
+    assert set(MAPBIOMAS_KEYS) == set(THEME_GROUP)
 
 
 @pytest.mark.parametrize("key", MAPBIOMAS_KEYS)
@@ -107,7 +117,7 @@ def test_every_combination_round_trips(key):
         assert re.fullmatch(r"[a-z0-9_]+", name), name
         assert name.startswith(f"{key}_{values['region']}"), name
         digits = re.findall(r"[0-9]{4,}", name)
-        if "start_year" in values:
+        if values.get("start_year") is not None:
             assert name.endswith(f"_{values['start_year']}_{values['end_year']}"), name
             assert digits == [str(values["start_year"]), str(values["end_year"])], name
         else:
@@ -124,9 +134,9 @@ def test_offered_years_validate(key):
     A combination the region does not offer at all (severity outside Brazil,
     monthly water in Peru) fails for every year with error_not_available.
     """
-    if PREDEFINED_CATALOGUE[key].get("interval_years"):
-        pytest.skip("interval entry: its validate test covers the year range")
     for values in _combos(key):
+        if resolved_entry(key, values).get("interval_years"):
+            continue  # interval combination: its validate test covers the range
         years = resolved_entry(key, values)["years"]
         assert years, values
         errors = [validate_entry(key, values, year) for year in years]
@@ -144,11 +154,8 @@ def test_every_combination_builds_or_refuses(monkeypatch, key):
     for values in _combos(key):
         fake = FakeEE()
         monkeypatch.setattr(mapbiomas, "ee", fake)
-        year = (
-            None
-            if entry.get("interval_years")
-            else resolved_entry(key, values)["years"][-1]
-        )
+        resolved = resolved_entry(key, values)
+        year = None if resolved.get("interval_years") else resolved["years"][-1]
         if validate_entry(key, values, year) is not None:
             with pytest.raises(ValueError):
                 entry["get_image"]("AOI", year, **values)
@@ -731,115 +738,200 @@ def test_fire_history_display():
     assert resolved_entry("mapbiomas_fire", {})["unit_key"] is None
 
 
-# --- mapbiomas_degradation (Task 14) ------------------------------------------------
+# --- logging_mapbiomas: By year / Over a period ---------------------------------------
 
 LULC_BRAZIL = (
     ROOT + "brazil/lulc/collection11/mapbiomas_brazil_collection11_coverage_v3"
 )
-DEG = ROOT + "brazil/lulc/collection10_1/mapbiomas_brazil_collection10_1_degradation_"
+LOGGING = (
+    ROOT + "brazil/lulc/collection10_1/"
+    "mapbiomas_brazil_collection10_1_degradation_logging_v2"
+)
+PERIOD = {"timing": "period", "start_year": 2015, "end_year": 2020}
+FOREST_CODES = [c for c in LULC_KNOWN_CODES if LULC_CODE_TO_GROUP[c] == "forest"]
 
 
-@pytest.mark.parametrize("variable", ["edge", "secondary", "logging", "canopy"])
-def test_degradation_names(variable):
-    """Degradation names."""
-    full = _full("mapbiomas_degradation", region="brazil", variable=variable)
-    name = f"mapbiomas_degradation_brazil_{variable}"
-    assert build_predefined_name("mapbiomas_degradation", full) == name
-    assert resolve_predefined(name) == ("mapbiomas_degradation", full)
+@pytest.mark.parametrize(
+    "values, name",
+    [
+        ({"region": "brazil"}, "logging_mapbiomas_brazil"),
+        ({"region": "brazil", **PERIOD}, "logging_mapbiomas_brazil_period_2015_2020"),
+        (
+            {
+                "region": "brazil",
+                "timing": "period",
+                "start_year": 1988,
+                "end_year": 2025,
+            },
+            "logging_mapbiomas_brazil_period_1988_2025",
+        ),
+    ],
+)
+def test_logging_names(values, name):
+    """By year: no years in the name (the year is var.year); a period ends in them."""
+    from spatialrisk.evaluation import interval_from_target
+
+    full = _full("logging_mapbiomas", **values)
+    assert build_predefined_name("logging_mapbiomas", full) == name
+    assert resolve_predefined(name) == ("logging_mapbiomas", full)
+    expected = values.get("end_year", 0) - values.get("start_year", 0) or None
+    assert interval_from_target(name) == expected
 
 
 @pytest.mark.parametrize(
     "name",
     [
-        "mapbiomas_degradation_brazil",  # variable is always written
-        "mapbiomas_degradation_peru_edge",  # Brazil only
-        "mapbiomas_degradation_brazil_edge_sep",  # no period param
+        "logging_mapbiomas_brazil_period_2015_2010",  # reversed
+        "logging_mapbiomas_brazil_period_2015_2015",  # equal
+        "logging_mapbiomas_brazil_period",  # period without its years
+        "logging_mapbiomas_brazil_period_1987_2000",  # start before the data
+        "logging_mapbiomas_brazil_period_2015_2026",  # end after the data + 1
+        "logging_mapbiomas_brazil_yearly",  # default written out
+        "logging_mapbiomas_brazil_yearly_2015_2020",  # default + stray years
+        "logging_mapbiomas_brazil_2015_2020",  # By year with stray years
+        "logging_mapbiomas_brazil_2015",  # storage key shape
+        "logging_mapbiomas_peru",  # Brazil only
     ],
 )
-def test_degradation_rejected_names(name):
-    """Degradation rejected names."""
+def test_logging_rejected_names(name):
+    """Logging rejected names."""
     assert resolve_predefined(name) == (None, {})
 
 
-def test_degradation_edge_keeps_the_native_mask(fake_ee):
-    """Degradation edge keeps the native mask."""
-    mapbiomas._get_mapbiomas_degradation("AOI", 2020, variable="edge")
+def test_logging_by_year_is_a_byte_mask_inside_brazil(fake_ee):
+    """1 = logged in the year, 0 = not, re-masked to Brazil (nodata outside)."""
+    mapbiomas._get_logging_mapbiomas("AOI", 2020)
     assert fake_ee.calls == [
-        ("Image", (DEG + "edge_age_v1",), {}),
-        ("select", ("age_2020",), {}),
-        ("toInt16", (), {}),
-        ("clip", ("AOI",), {}),
-        ("rename", ("B1",), {}),
-    ]
-
-
-def test_degradation_secondary_decodes_the_age(fake_ee):
-    """Degradation secondary decodes the age."""
-    mapbiomas._get_mapbiomas_degradation("AOI", 2020, variable="secondary")
-    assert fake_ee.calls == [
-        ("Image", (DEG + "secondary_vegetation_age_v1",), {}),
-        ("select", ("age_2020",), {}),
-        ("divide", (100,), {}),
-        ("floor", (), {}),
-        ("unmask", (0,), {}),
-        *_region_mask_calls(LULC_BRAZIL),
-        ("updateMask", (ANY,), {}),
-        ("toInt16", (), {}),
-        ("clip", ("AOI",), {}),
-        ("rename", ("B1",), {}),
-    ]
-
-
-def test_degradation_logging_is_a_byte_mask(fake_ee):
-    """Degradation logging is a byte mask."""
-    mapbiomas._get_mapbiomas_degradation("AOI", 2020, variable="logging")
-    assert fake_ee.calls[:4] == [
-        ("Image", (DEG + "logging_v2",), {}),
+        ("Image", (LOGGING,), {}),
         ("select", ("logging_2020",), {}),
         ("gt", (0,), {}),
         ("unmask", (0,), {}),
+        *_region_mask_calls(LULC_BRAZIL),
+        ("updateMask", (ANY,), {}),
+        ("toByte", (), {}),
+        ("clip", ("AOI",), {}),
+        ("rename", ("B1",), {}),
     ]
-    assert fake_ee.names()[-3:] == ["toByte", "clip", "rename"]
 
 
-def test_degradation_canopy_counts(fake_ee):
-    """Degradation canopy counts."""
-    mapbiomas._get_mapbiomas_degradation("AOI", 2020, variable="canopy")
-    assert fake_ee.calls[1] == ("select", ("canopy_disturbance_frequency_2020",), {})
-    assert fake_ee.calls[2] == ("unmask", (0,), {})
-    assert fake_ee.names()[-3:] == ["toInt16", "clip", "rename"]
-
-
-def test_degradation_years_and_validate():
-    """Degradation years and validate."""
-    assert resolved_entry("mapbiomas_degradation", {"variable": "edge"})[
-        "years"
-    ] == list(range(1985, 2025))
-    logging = {"region": "brazil", "variable": "logging"}
-    assert resolved_entry("mapbiomas_degradation", logging)["years"] == list(
-        range(1988, 2025)
+def test_logging_period_ors_the_years_and_masks_by_forest_at_start(fake_ee):
+    """2015-2018 = logged in 2015, 2016 or 2017; masked = not forest in 2014."""
+    mapbiomas._get_logging_mapbiomas(
+        "AOI", timing="period", start_year=2015, end_year=2018
     )
-    assert validate_entry("mapbiomas_degradation", logging, 1986) == (
+    per_year = [
+        call
+        for y in (2015, 2016, 2017)
+        for call in (
+            ("Image", (LOGGING,), {}),
+            ("select", (f"logging_{y}",), {}),
+            ("gt", (0,), {}),
+            ("unmask", (0,), {}),
+            ("Or", (ANY,), {}),
+        )
+    ]
+    assert fake_ee.calls == [
+        ("Image", (LULC_BRAZIL,), {}),
+        ("select", ("classification_2014",), {}),
+        ("remap", (FOREST_CODES, [1] * len(FOREST_CODES), 0), {}),
+        ("Image", (0,), {}),
+        *per_year,
+        ("updateMask", (ANY,), {}),
+        ("toByte", (), {}),
+        ("clip", ("AOI",), {}),
+        ("rename", ("B1",), {}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"timing": "period", "start_year": 2018, "end_year": 2015},
+        {"timing": "period", "start_year": 1987, "end_year": 2000},
+        {"timing": "period", "start_year": 2015},
+    ],
+)
+def test_logging_period_refuses_a_bad_interval_before_ee(fake_ee, kwargs):
+    """Logging period refuses a bad interval before ee."""
+    with pytest.raises(ValueError):
+        mapbiomas._get_logging_mapbiomas("AOI", **kwargs)
+    assert fake_ee.calls == []
+
+
+def test_logging_by_year_refuses_a_year_without_data(fake_ee):
+    """Logging by year refuses a year without data."""
+    with pytest.raises(ValueError):
+        mapbiomas._get_logging_mapbiomas("AOI", 1987)
+    assert fake_ee.calls == []
+
+
+def test_logging_resolved_entry_follows_the_period_switch():
+    """By year is temporal over the data years; a period is an interval target."""
+    yearly = resolved_entry("logging_mapbiomas", {"region": "brazil"})
+    assert yearly["temporal"] is True
+    assert yearly["years"] == list(range(1988, 2025))
+    assert not yearly["interval_years"]
+    assert yearly["legend_class_keys"] == (
+        "legend.class.absent",
+        "legend.class.present",
+    )
+    period = resolved_entry("logging_mapbiomas", {"region": "brazil", **PERIOD})
+    assert period["temporal"] is False
+    assert not period["years"]
+    assert period["interval_years"] == list(range(1988, 2026))
+    assert period["legend_class_keys"] == ("legend.class.stable", "legend.class.logged")
+    for entry in (yearly, period):
+        assert entry["raster_type"] == "categorical"
+        assert entry["vis_params"] == {
+            "palette": ["ffffff", "8e24aa"],
+            "min": 0,
+            "max": 1,
+        }
+
+
+def test_logging_validate():
+    """By year checks the year; a period checks both ends."""
+    brazil = t("vars.mapbiomas.region_brazil")
+    yearly = {"region": "brazil"}
+    assert validate_entry("logging_mapbiomas", yearly, 1988) is None
+    assert validate_entry("logging_mapbiomas", yearly, 1987) == (
         "vars.mapbiomas.error_year",
-        {"region": t("vars.mapbiomas.region_brazil"), "first": 1988, "last": 2024},
+        {"region": brazil, "first": 1988, "last": 2024},
+    )
+    ok = {"region": "brazil", "timing": "period", "start_year": 1988, "end_year": 2025}
+    assert validate_entry("logging_mapbiomas", ok, None) is None
+    assert validate_entry("logging_mapbiomas", {**ok, "start_year": 1987}, None) == (
+        "vars.mapbiomas.error_interval_range",
+        {"region": brazil, "first": 1988, "last": 2025},
     )
 
 
-def test_degradation_display():
-    """Degradation display."""
-    edge = resolved_entry("mapbiomas_degradation", {"variable": "edge"})
-    assert edge["raster_type"] == "continuous"
-    assert edge["unit_key"] == "legend.unit.years_value"
-    logging = resolved_entry("mapbiomas_degradation", {"variable": "logging"})
-    assert logging["raster_type"] == "categorical"
-    assert logging["unit_key"] is None
-    assert logging["vis_params"] == {
-        "palette": ["ffffff", "8e24aa"],
-        "min": 0,
-        "max": 1,
-    }
-    canopy = resolved_entry("mapbiomas_degradation", {"variable": "canopy"})
-    assert canopy["unit_key"] == "legend.unit.plain_value"
+def test_logging_period_pairs_with_lulc_forest_at_start():
+    """A period target names LULC forest (Brazil) at its start; By year none."""
+    from gui.tile.evaluation_helpers import expected_forest_for_truth
+
+    assert expected_forest_for_truth("logging_mapbiomas_brazil_period_2015_2020") == (
+        "mapbiomas_lulc_brazil",
+        2015,
+    )
+    assert expected_forest_for_truth("logging_mapbiomas_brazil") is None
+
+
+def test_logging_default_display_follows_the_period():
+    """The editable default style labels the classes for each shape."""
+    from gui.scripts.predefined import default_vis
+
+    yearly = default_vis("logging_mapbiomas", {"region": "brazil"})
+    period = default_vis("logging_mapbiomas", {"region": "brazil", **PERIOD})
+    assert [c["label_key"] for c in yearly["classes"]] == [
+        "legend.class.absent",
+        "legend.class.present",
+    ]
+    assert [c["label_key"] for c in period["classes"]] == [
+        "legend.class.stable",
+        "legend.class.logged",
+    ]
+    assert [c["color"] for c in period["classes"]] == ["ffffff", "8e24aa"]
 
 
 # --- mapbiomas_water (Task 15) ------------------------------------------------------

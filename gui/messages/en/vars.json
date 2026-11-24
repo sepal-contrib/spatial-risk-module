@@ -23,7 +23,7 @@
       "mapbiomas_lulc": "MapBiomas land cover",
       "deforestation_mapbiomas": "MapBiomas deforestation",
       "mapbiomas_fire": "MapBiomas fire",
-      "mapbiomas_degradation": "MapBiomas degradation (Brazil)",
+      "logging_mapbiomas": "Selective logging (MapBiomas Brazil)",
       "mapbiomas_water": "MapBiomas surface water"
     },
     "predefined_info": {
@@ -49,7 +49,7 @@
       "mapbiomas_lulc": "Annual land cover from [MapBiomas](https://mapbiomas.org) for the chosen region: Brazil (Collection 11, 1985-2025), Pan-Amazon (Collection 6, 1985-2023), Bolivia (Collection 3, 1985-2024), Colombia (Collection 2, 1985-2023), Ecuador (Collection 4, 1985-2025), Paraguay (Collection 3, 1985-2025), Peru (Collection 3, 1985-2024) or Venezuela (Collection 2, 1985-2023). The output is a 0/1 mask of the selected groups (forest, other natural vegetation, farming, non-vegetated, water) or one class per group. The AOI must lie inside the region. Data: MapBiomas, CC-BY-SA 4.0. Temporal.",
       "deforestation_mapbiomas": "Vegetation loss between two years from the MapBiomas deforestation and secondary-vegetation product: 1 = primary vegetation (optionally also secondary) at the start that was cleared before the end year, 0 = still standing, no data = not vegetation at the start. Regions: Brazil (Collection 11, intervals 1988-2026), Bolivia (Collection 3, 1986-2025), Paraguay (Collection 3, 1986-2026), Peru (Collection 3, 2000-2025). The AOI must lie inside the region. Data: MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_fire": "MapBiomas Fire for Brazil (Collection 5.1, 1985-2025), Colombia (2000-2025), Paraguay (1999-2024) and Peru (1990-2025): burned area for a year or a month, burn severity (Brazil only), years since the last fire, or the number of burned years in a look-back window before 1 January. The monthly Fire Monitor (Brazil, from January 2019) is an advanced source for recent months. Data: MapBiomas, CC-BY-SA 4.0. Temporal.",
-      "mapbiomas_degradation": "Degradation indicators from MapBiomas Brazil (Collection 10.1): edge age (years the native vegetation has been at an edge, no data elsewhere, 1985-2024), secondary vegetation age (years since regrowth began, 0 = not secondary vegetation, 1985-2024), selective logging (1 = logged in the year, 1988-2024) and canopy disturbance frequency (number of disturbances, 1988-2024). The AOI must lie inside Brazil. Data: MapBiomas, CC-BY-SA 4.0. Temporal.",
+      "logging_mapbiomas": "Selective logging from MapBiomas Brazil (Collection 10.1 degradation, 1988-2024). By year: 1 = logged in the year, 0 = not logged. Over a period: 1 = logged at least once from 1 January of the start year to 1 January of the end year, 0 = not logged; pixels that were not native forest at the start are left out. The AOI must lie inside Brazil. Data: MapBiomas, CC-BY-SA 4.0.",
       "mapbiomas_water": "Surface water from MapBiomas Water for Brazil (Collection 5, 1985-2025), Bolivia (Collection 4, 1985-2025) and Peru (Collection 3, 1985-2024, annual only): 1 = water in the year or in the chosen month, 0 = no water. Monthly maps run from January 1985 to December 2025. The AOI must lie inside the region. Data: MapBiomas, CC-BY-SA 4.0. Temporal."
     },
     "modal": {
@@ -322,12 +322,10 @@
       "param_defo_vegetation_hint": "Primary vegetation only, or also secondary (regrown) vegetation.",
       "defo_vegetation_primary": "Primary vegetation",
       "defo_vegetation_all": "Primary and secondary vegetation",
-      "param_degradation_variable": "Indicator",
-      "param_degradation_variable_hint": "Which MapBiomas degradation indicator to map.",
-      "degradation_variable_edge": "Edge age (years)",
-      "degradation_variable_secondary": "Secondary vegetation age (years)",
-      "degradation_variable_logging": "Selective logging",
-      "degradation_variable_canopy": "Canopy disturbance frequency"
+      "param_logging_timing": "Period",
+      "param_logging_timing_hint": "By year maps logging in one year; over a period maps logging between a start and an end year.",
+      "logging_timing_yearly": "By year",
+      "logging_timing_period": "Over a period"
     },
     "predefined_group": {
       "terrain": "Terrain",
@@ -337,8 +335,7 @@
       "climate": "Climate",
       "admin": "Administrative units",
       "fire": "Fire",
-      "forest_change": "Forest change",
-      "mapbiomas": "MapBiomas"
+      "forest_change": "Forest change"
     },
     "subj_notice": {
       "wide": "{name}: {n} administrative units, saved as a 16-bit raster so that each unit keeps its own value.",
