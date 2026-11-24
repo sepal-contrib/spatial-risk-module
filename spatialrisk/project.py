@@ -118,6 +118,10 @@ class Project(BaseModel):
     predictions: Dict[str, Any] = Field(default_factory=dict)
     evaluations: Dict[str, Any] = Field(default_factory=dict)
     allocations: Dict[str, Any] = Field(default_factory=dict)
+    # Earth Engine layers added but not downloaded, as saved recipes (a GEEVar
+    # dump without its ee.Image). The GUI rebuilds them into raw_variables on
+    # load; one it cannot rebuild stays here so the next save keeps it.
+    cloud_variables: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     # The reference raster and the AOI, shared by every shallow copy of this
     # project. The GUI republishes the open project as a ``model_copy()`` after
     # almost every action, and a background job saves and republishes the copy
@@ -850,16 +854,24 @@ class Project(BaseModel):
         if self.years is not None:
             data["years"] = self.years
 
-        # Serialize raw variables. GEEVars are session-only: they hold live
-        # ee.Image objects (not JSON-serializable) and load() only ever
-        # reconstructs Local*Var, so a persisted GEEVar could never be read
-        # back. Skip them — they are materialized to local vars before save.
+        # Serialize raw variables. A GEEVar holds live ee.Image objects (not
+        # JSON-serializable), so it is saved as its recipe without them, under
+        # cloud_variables, for the GUI to rebuild on load. Recipes not rebuilt
+        # yet are written back as they were.
         # Registries are snapshotted with list(): background workers insert
         # into these shared dicts while a save may be walking them.
+        cloud = {
+            k: v
+            for k, v in list(self.cloud_variables.items())
+            if k not in self.raw_variables
+        }
         for var_name, var in list(self.raw_variables.items()):
             if type(var).__name__ == "GEEVar":
+                cloud[var_name] = var.model_dump(mode="json", exclude={"gee_images"})
                 continue
             data["raw_variables"][var_name] = var.model_dump(mode="json")
+        if cloud:
+            data["cloud_variables"] = cloud
 
         # Serialize processed variables
         for var_name, var in list(self.processed_variables.items()):
@@ -1017,6 +1029,9 @@ class Project(BaseModel):
             # Set project reference and add to raw_variables
             var.project = project
             project.raw_variables[var_name] = var
+
+        # Not-downloaded Earth Engine layers: recipes the GUI rebuilds.
+        project.cloud_variables.update(data.get("cloud_variables") or {})
 
         # Reconstruct processed variables
         for var_name, var_data in data.get("processed_variables", {}).items():

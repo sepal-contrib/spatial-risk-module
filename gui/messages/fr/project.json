@@ -54,7 +54,8 @@
     "rename_busy": "Une tâche en arrière-plan écrit encore dans ce projet. Attendez qu'elle se termine avant de renommer.",
     "rename_save_first": "Enregistrez le projet avant de le renommer.",
     "status_renamed": "Projet '{old}' renommé en '{name}'.",
-    "size_on_disk": "Taille sur le disque"
+    "size_on_disk": "Taille sur le disque",
+    "cloud_variables_not_restored": "Certaines couches cloud n'ont pas pu être reconstruites et ne sont pas listées : {names}. Elles restent enregistrées dans le projet ; rechargez-le quand Earth Engine est joignable."
   },
   "time": {
     "just_now": "à l'instant",

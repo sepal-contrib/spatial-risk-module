@@ -54,7 +54,8 @@
     "rename_busy": "A background task is still writing to this project. Wait for it to finish before renaming.",
     "rename_save_first": "Save the project before renaming it.",
     "status_renamed": "Project '{old}' renamed to '{name}'.",
-    "size_on_disk": "Size on disk"
+    "size_on_disk": "Size on disk",
+    "cloud_variables_not_restored": "Some cloud layers could not be rebuilt and are not listed: {names}. They stay saved in the project; reload it once Earth Engine is reachable."
   },
   "time": {
     "just_now": "just now",

@@ -567,6 +567,39 @@ def _build_variable(entry: dict, project):
     raise ValueError(f"Unknown variable type: {vtype}")
 
 
+def restore_cloud_variables(project) -> list[str]:
+    """Rebuild the saved not-downloaded Earth Engine layers into raw_variables.
+
+    Needs the project's AOI restored first. A recipe that fails to rebuild
+    (no AOI, layer gone from the catalogue, EE unreachable) stays in
+    ``project.cloud_variables``, so saving keeps it; its key is returned.
+    """
+    from gui.scripts.predefined_variables import resolve_predefined
+
+    failed = []
+    for key, recipe in list(project.cloud_variables.items()):
+        try:
+            cat_key, cat_params = resolve_predefined(recipe["name"])
+            if cat_key is not None and not recipe.get("path"):
+                var = _build_predefined(
+                    {
+                        **recipe,
+                        "predefined_key": cat_key,
+                        "params": recipe.get("params") or cat_params,
+                    },
+                    project,
+                )
+            else:  # a custom asset id
+                var = GEEVar(**{**recipe, "aoi": _current_aoi_ee()}, project=project)
+        except Exception:
+            logger.warning("Could not rebuild cloud layer %s", key, exc_info=True)
+            failed.append(key)
+            continue
+        project.raw_variables[key] = var
+        del project.cloud_variables[key]
+    return failed
+
+
 def _current_aoi_ee():
     """The selected AOI as an ee object, or raise if the AOI step is not done."""
     from gui.scripts.predefined_variables import resolve_aoi_ee

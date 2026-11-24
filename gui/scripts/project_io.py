@@ -75,7 +75,8 @@ def list_project_infos(data_dir: Path) -> list[ProjectInfo]:
             infos.append(
                 ProjectInfo(
                     name=child.name,
-                    raw_count=len(data.get("raw_variables", {})),
+                    raw_count=len(data.get("raw_variables", {}))
+                    + len(data.get("cloud_variables", {})),
                     processed_count=len(data.get("processed_variables", {})),
                     model_count=len(models),
                     modified=modified,

@@ -9,7 +9,8 @@ still-pending GEEVars and crash with::
     PydanticSerializationError: Unable to serialize unknown type:
     <class 'ee.image.Image'>
 
-save() must skip GEEVars entirely: a GEEVar in raw_variables is never persisted.
+save() keeps a GEEVar as its recipe (``cloud_variables``) without the image,
+so a layer added but not downloaded survives a reload; the GUI rebuilds it.
 """
 
 from pathlib import Path
@@ -52,6 +53,7 @@ def _project_with_mixed_raw(name: str) -> Project:
 
 
 def test_save_skips_geevars_and_persists_local(tmp_path, monkeypatch):
+    """Saving does not choke on the image; the GEEVar reloads as a recipe."""
     monkeypatch.setattr(project_module, "downloads_folder", tmp_path)
 
     project = _project_with_mixed_raw("gee_skip")
@@ -60,5 +62,17 @@ def test_save_skips_geevars_and_persists_local(tmp_path, monkeypatch):
     project.save()
 
     loaded = Project.load("gee_skip")
-    # The local var survives; the session-only GEEVar is absent.
+    # The local var survives; the GEEVar comes back as a recipe to rebuild.
     assert set(loaded.raw_variables) == {"altitude"}
+    recipe = loaded.cloud_variables["slope"]
+    assert recipe["name"] == "slope" and "gee_images" not in recipe
+
+
+def test_unrebuilt_recipe_survives_another_save(tmp_path, monkeypatch):
+    """A recipe the GUI could not rebuild is written back, not dropped."""
+    monkeypatch.setattr(project_module, "downloads_folder", tmp_path)
+    _project_with_mixed_raw("gee_keep").save()
+
+    Project.load("gee_keep").save()
+
+    assert set(Project.load("gee_keep").cloud_variables) == {"slope"}

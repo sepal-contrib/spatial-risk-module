@@ -54,7 +54,8 @@
     "rename_busy": "Uma tarefa em segundo plano ainda está gravando neste projeto. Aguarde ela terminar antes de renomear.",
     "rename_save_first": "Salve o projeto antes de renomeá-lo.",
     "status_renamed": "Projeto '{old}' renomeado para '{name}'.",
-    "size_on_disk": "Tamanho em disco"
+    "size_on_disk": "Tamanho em disco",
+    "cloud_variables_not_restored": "Algumas camadas na nuvem não puderam ser reconstruídas e não aparecem na lista: {names}. Elas continuam salvas no projeto; carregue-o de novo quando o Earth Engine estiver acessível."
   },
   "time": {
     "just_now": "agora mesmo",
