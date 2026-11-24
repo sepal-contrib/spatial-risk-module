@@ -7,9 +7,13 @@ EXPECTED_KEYS = {
     "slope",
     "protected_area",
     "rivers",
+    "surface_water",
     "roads",
     "forest_gfc",
     "forest_tmf",
+    "deforestation_gfc",
+    "deforestation_tmf",
+    "degradation_tmf",
     "towns",
     "precipitation",
     "temperature_2m",
@@ -18,6 +22,11 @@ EXPECTED_KEYS = {
     "active_fire",
     "fire_history",
     "subj",
+    "mapbiomas_lulc",
+    "deforestation_mapbiomas",
+    "mapbiomas_fire",
+    "mapbiomas_degradation",
+    "mapbiomas_water",
 }
 
 THEME_OF = {
@@ -27,8 +36,12 @@ THEME_OF = {
     "roads": "infrastructure",
     "towns": "infrastructure",
     "rivers": "water",
+    "surface_water": "water",
     "forest_gfc": "forest",
     "forest_tmf": "forest",
+    "deforestation_gfc": "forest_change",
+    "deforestation_tmf": "forest_change",
+    "degradation_tmf": "forest_change",
     "precipitation": "climate",
     "temperature_2m": "climate",
     "dry_spell": "climate",
@@ -36,6 +49,11 @@ THEME_OF = {
     "active_fire": "fire",
     "fire_history": "fire",
     "subj": "admin",
+    "mapbiomas_lulc": "mapbiomas",
+    "deforestation_mapbiomas": "mapbiomas",
+    "mapbiomas_fire": "mapbiomas",
+    "mapbiomas_degradation": "mapbiomas",
+    "mapbiomas_water": "mapbiomas",
 }
 
 

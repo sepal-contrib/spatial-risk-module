@@ -83,6 +83,8 @@ ENTRIES = {
         # release bounds this list: v1.13 carries lossyear up to 25 (2025) and
         # therefore supports years up to 2026. Bump this alongside the asset ID
         # in ``_get_forest_gfc`` whenever a new GFC version is adopted.
+        # 2001 is the first: Hansen records no loss in 2000, so a period from
+        # 2000 would count one year with no data and understate the rate.
         "years": list(range(2001, 2027)),
         # User-selectable knobs, rendered generically by the Add Variable modal
         # (same shape as MODEL_REGISTRY["params"] in gui/tile/train_tile.py).
@@ -90,13 +92,16 @@ ENTRIES = {
         # (forest_gfc_tc30) so two forest definitions coexist as separate
         # variables — see ``build_predefined_name`` / ``resolve_predefined``.
         #
-        # CONSTRAINT: a suffix value must never reach four digits. Downstream
-        # name parsing pulls years out of variable names with
+        # CONSTRAINT: a parameter segment must never contain four consecutive
+        # digits. Downstream parsing pulls years out of variable names with
         # ``re.findall(r"\d{4}")`` (spatialrisk.evaluation.interval_from_target),
-        # so four consecutive digits in a parameter suffix would be read as a
-        # year and corrupt the derived change-layer interval. ``max`` below
-        # keeps every value at three digits or fewer; keep it that way for any
-        # param added here.
+        # so a four-digit run is read as a year. The ONLY four-digit runs a
+        # catalogue name may carry are the trailing ``_{start}_{end}`` pair of an
+        # interval layer (``year`` specs synthesised from ``interval_years`` by
+        # params.interval_param_specs), e.g. deforestation_gfc_tc30_2015_2020,
+        # which interval_from_target reads as 5 years. ``max`` below keeps every
+        # int value at three digits or fewer; tests/test_predefined_interval.py
+        # lints both rules for every entry.
         "params": [
             {
                 "key": "tree_cover_threshold",

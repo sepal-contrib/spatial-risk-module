@@ -67,12 +67,14 @@ def demo(monkeypatch):
 def test_dynamic_attrs_contract():
     """Dynamic attrs contract."""
     assert DYNAMIC_ATTRS == (
+        "temporal",
         "years",
         "raster_type",
         "default_scale",
         "vis_params",
         "unit_key",
         "legend_class_keys",
+        "class_labels",
     )
 
 

@@ -261,6 +261,7 @@
       "forest_label": "Forest at period start",
       "interval_label": "Interval (years)",
       "interval_hint": "Auto-parsed from the truth variable name; editable.",
+      "forest_for_truth_hint": "This target pairs with {name} ({year}) as forest at period start: add and process it in Variables to evaluate.",
       "maps_label": "Maps to evaluate (empty = all)",
       "maps_no_data": "No predictions registered. Run inference in the Inference step.",
       "csizes_label": "Cell size(s) — coarse grid (pixels)",

@@ -9,6 +9,9 @@ Map visualization keys consumed by ``_styled_layer`` (gui/tile/variables_tile.py
     whose value range is arbitrary. Takes precedence over ``vis_params``.
   * ``legend_class_keys`` — optional (label key for value 0, label key for 1);
     categorical entries default to legend.class.absent / legend.class.present.
+  * ``class_labels`` — ``[{"value", "label_key", "color"}]``: one colour and
+    legend chip per class value (render kind ``class_palette``); values not
+    listed are transparent. Takes precedence over ``vis_params``.
   * ``unit_key`` — optional i18n key formatting a continuous value with its
     unit, e.g. "legend.unit.m_value" -> "{value} m".
 """
@@ -18,12 +21,24 @@ from gui.scripts.predefined import (
     climate,
     fire,
     forest,
+    forest_change,
     infrastructure,
+    mapbiomas,
     terrain,
     water,
 )
 
-_THEMES = (terrain, infrastructure, water, forest, fire, climate, admin)
+_THEMES = (
+    terrain,
+    infrastructure,
+    water,
+    forest,
+    forest_change,
+    fire,
+    climate,
+    admin,
+    mapbiomas,
+)
 
 
 def _merge(themes):
@@ -49,9 +64,11 @@ GROUP_ORDER = (
     "infrastructure",
     "water",
     "forest",
+    "forest_change",
     "fire",
     "climate",
     "admin",
+    "mapbiomas",
 )
 
 
@@ -59,12 +76,14 @@ GROUP_ORDER = (
 #: ``active_fire``'s raster type depends on its ``metric``. Read them through
 #: ``resolved_entry`` / ``entry_for_name``, never from the raw entry.
 DYNAMIC_ATTRS = (
+    "temporal",
     "years",
     "raster_type",
     "default_scale",
     "vis_params",
     "unit_key",
     "legend_class_keys",
+    "class_labels",
 )
 
 

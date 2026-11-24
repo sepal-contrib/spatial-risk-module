@@ -518,6 +518,8 @@ def test_unknown_source_is_rejected(source):
 def test_changed_advanced_count_ignores_hidden_types():
     """The "(n changed)" badge counts only what the user can see."""
     assert changed_advanced_count("roads", OSM_VALUES) == 0
+    # Types narrowed while hidden (source back to OSM) are not a change.
+    assert changed_advanced_count("roads", {"source": "osm", "types": ["highway"]}) == 0
     assert changed_advanced_count("roads", {"source": "grip", "types": ALL_TYPES}) == 1
     assert (
         changed_advanced_count("roads", {"source": "grip", "types": ["highway"]}) == 2
@@ -550,7 +552,7 @@ def test_details_rows_list_types_only_for_grip():
         (source_label, i18n.t("vars.modal.roads_source_grip")),
         (
             types_label,
-            ", ".join(
+            "; ".join(
                 i18n.t(f"vars.modal.road_type_{v}") for v in ("highway", "primary")
             ),
         ),

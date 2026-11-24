@@ -81,16 +81,39 @@ def _raster_variables(project):
     }
 
 
+def _is_interval_target(var):
+    """Is ``var`` an interval target (deforestation_gfc_tc30_2015_2020, ...)?
+
+    Those are 1 = event / 0 = stable / 255 = not forest at start. Used as the
+    1 = keep / 0 = suppress mask an ML run takes, they would suppress every
+    pixel of stable forest, so they are never mask candidates.
+    """
+    from gui.scripts.predefined import entry_for_name
+
+    entry = entry_for_name(getattr(var, "name", "") or "")[2]
+    return bool(entry and entry.get("interval_years"))
+
+
+def _mask_variables(project):
+    """Rasters assignable as the ML mask: every processed raster but targets."""
+    return {
+        key: var
+        for key, var in _raster_variables(project).items()
+        if not _is_interval_target(var)
+    }
+
+
 def mask_layer_candidates(project):
     """Storage keys of *project* rasters assignable as the ML mask layer.
 
-    Every processed raster in the project qualifies — the mask is a plain
+    Every processed raster qualifies except interval targets (see
+    ``_is_interval_target``) — the mask is a plain
     1=keep/0=suppress raster and is deliberately NOT restricted to the
     prediction dataset's features, so a run can mask with a layer that is not
     part of the dataset. This is the single source the Predict dialog lists
     from, so the dialog can never offer a layer the runner would reject.
     """
-    return sorted(_raster_variables(project))
+    return sorted(_mask_variables(project))
 
 
 def suggested_mask_layer(project):
@@ -123,7 +146,7 @@ def _resolve_mask(project, mask_layer):
     """
     if not mask_layer:
         return None
-    variable = _raster_variables(project).get(mask_layer)
+    variable = _mask_variables(project).get(mask_layer)
     if variable is None:
         raise ValueError(
             f"Mask layer '{mask_layer}' is not a processed raster of this "

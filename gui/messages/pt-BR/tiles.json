@@ -261,6 +261,7 @@
       "forest_label": "Floresta no início do período",
       "interval_label": "Intervalo (anos)",
       "interval_hint": "Interpretado automaticamente a partir do nome da variável de referência; editável.",
+      "forest_for_truth_hint": "Este alvo se compara com {name} ({year}) como floresta no início do período: adicione-a e processe-a em Variáveis para avaliar.",
       "maps_label": "Mapas a avaliar (vazio = todos)",
       "maps_no_data": "Nenhuma predição registrada. Execute a inferência na etapa Inferência.",
       "csizes_label": "Tamanho(s) de célula — grade grosseira (pixels)",

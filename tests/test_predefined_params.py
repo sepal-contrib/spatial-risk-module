@@ -18,6 +18,15 @@ from gui.scripts.predefined_variables import (
 )
 
 
+def _plain_layer(monkeypatch):
+    """Register a catalogue entry with no params (every real one has some)."""
+    monkeypatch.setitem(
+        PREDEFINED_CATALOGUE,
+        "plain_layer",
+        {"raster_type": "categorical", "temporal": False, "get_image": None},
+    )
+
+
 def test_forest_gfc_declares_a_tree_cover_param():
     """The catalogue is the single source of truth for the knob and its default."""
     specs = param_specs("forest_gfc")
@@ -41,10 +50,11 @@ def test_get_image_default_matches_catalogue_default():
     assert sig.parameters["tree_cover_threshold"].default == 30
 
 
-def test_layers_without_params_report_empty():
+def test_layers_without_params_report_empty(monkeypatch):
     """Unparameterised entries must stay that way."""
-    assert param_specs("altitude") == []
-    assert default_param_values("altitude") == {}
+    _plain_layer(monkeypatch)
+    assert param_specs("plain_layer") == []
+    assert default_param_values("plain_layer") == {}
     assert param_specs("not_a_layer") == []
 
 
@@ -153,9 +163,10 @@ def test_coerce_reports_missing_value():
     assert bad["key"] == "tree_cover_threshold"
 
 
-def test_coerce_on_unparameterised_layer_is_empty_and_valid():
+def test_coerce_on_unparameterised_layer_is_empty_and_valid(monkeypatch):
     """Unparameterised layers require no params, coerce succeeds."""
-    assert coerce_param_values("altitude", {}) == ({}, None)
+    _plain_layer(monkeypatch)
+    assert coerce_param_values("plain_layer", {}) == ({}, None)
 
 
 def test_threshold_reaches_the_gee_expression(monkeypatch):

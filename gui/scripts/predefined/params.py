@@ -1,5 +1,6 @@
 """Predefined-layer parameters: specs, coercion, and the name <-> params mapping."""
 
+import logging
 import re
 from itertools import combinations
 
@@ -24,9 +25,89 @@ _DIGITS = re.compile(r"\d+")
 
 
 def param_specs(catalogue_key):
-    """Parameter specs declared by a catalogue entry ([] when it has none)."""
+    """Parameter specs of a catalogue entry ([] when it has none).
+
+    Interval entries end with the synthetic start/end year specs.
+    """
     cat = PREDEFINED_CATALOGUE.get(catalogue_key or "")
-    return list(cat.get("params", [])) if cat else []
+    if not cat:
+        return []
+    return list(cat.get("params", [])) + interval_param_specs(cat)
+
+
+# ---------------------------------------------------------------------------
+# Interval layers (Part C): the trailing _{start}_{end} year pair
+# ---------------------------------------------------------------------------
+#
+# An entry declaring ``interval_years`` (deforestation_gfc, ...) gets two
+# synthetic ``year`` specs appended after its own params. Their segments are
+# bare four-digit years, always written (omit_default False) and always last,
+# so deforestation_gfc_tc30_2015_2020 keeps the shape
+# spatialrisk.evaluation.interval_from_target reads (5 years): this pair is
+# the ONLY place a catalogue name may carry four-digit runs
+# (tests/test_predefined_interval.py lints it).
+
+INTERVAL_KEYS = ("start_year", "end_year")
+INTERVAL_ORDER_ERROR_KEY = "vars.modal.error_interval_order"
+# [0-9], not \d: \d also matches non-ASCII digits.
+_YEAR_SEGMENT = re.compile(r"[0-9]{4}")
+
+
+def interval_param_specs(entry):
+    """The start/end ``year`` specs of an interval entry ([] otherwise).
+
+    ``default`` is None: the modal seeds blank selects, so a target's period
+    is always an explicit choice.
+    """
+    years = list((entry or {}).get("interval_years") or [])
+    if not years:
+        return []
+    common = {
+        "type": "year",
+        "options": years,
+        "default": None,
+        "suffix_prefix": "",
+        "advanced": False,
+        "omit_default": False,
+    }
+    return [
+        {
+            **common,
+            "key": "start_year",
+            "label_key": "vars.modal.param_start_year",
+            "hint_key": "vars.modal.param_start_year_hint",
+        },
+        {
+            **common,
+            "key": "end_year",
+            "label_key": "vars.modal.param_end_year",
+            "hint_key": "vars.modal.param_end_year_hint",
+        },
+    ]
+
+
+def match_year_segment(spec, segment):
+    """The year a segment encodes, or None (not 4 ASCII digits / not offered)."""
+    if not _YEAR_SEGMENT.fullmatch(segment or ""):
+        return None
+    year = int(segment)
+    return year if year in spec["options"] else None
+
+
+def coerce_year(spec, raw_value):
+    """A form value (int, "2015", "", None, "None") -> an offered year or None."""
+    text = "" if raw_value is None else str(raw_value).strip()
+    return match_year_segment(spec, text)
+
+
+def interval_order_error(catalogue_key, values):
+    """The end_year spec + ``error_key`` when start >= end, else None."""
+    specs = {s["key"]: s for s in param_specs(catalogue_key) if _kind(s) == "year"}
+    if not specs or values.get("start_year") is None or values.get("end_year") is None:
+        return None
+    if values["start_year"] < values["end_year"]:
+        return None
+    return {**specs["end_year"], "error_key": INTERVAL_ORDER_ERROR_KEY}
 
 
 def basic_param_specs(catalogue_key):
@@ -59,6 +140,36 @@ def _copy(value):
 def default_param_values(catalogue_key):
     """``{param key: default}`` for a catalogue entry ({} when unparameterised)."""
     return {spec["key"]: _copy(spec["default"]) for spec in param_specs(catalogue_key)}
+
+
+def aoi_param_defaults(catalogue_key, aoi_result):
+    """Param values suggested by the selected AOI, from each spec's ``aoi_default``.
+
+    ``aoi_default(aoi_result) -> value | None`` must be static: no Earth Engine
+    call, because the modal calls this from a Solara event handler. Only a value
+    among the spec's ``options`` is used. A hook that raises is logged and
+    ignored, so a bad AOI can never break layer selection.
+    """
+    out = {}
+    if not catalogue_key:
+        return out
+    for spec in param_specs(catalogue_key):
+        hook = spec.get("aoi_default")
+        if hook is None:
+            continue
+        try:
+            value = hook(aoi_result)
+        except Exception:  # a suggestion must never block the form
+            logging.getLogger(__name__).warning(
+                "aoi_default failed for %s.%s",
+                catalogue_key,
+                spec["key"],
+                exc_info=True,
+            )
+            continue
+        if value is not None and value in spec.get("options", ()):
+            out[spec["key"]] = value
+    return out
 
 
 def _depends_active(spec, current):
@@ -153,6 +264,12 @@ def coerce_param_values(catalogue_key, raw):
                 return {}, spec
             values[spec["key"]] = canonical
             continue
+        if kind == "year":
+            year = coerce_year(spec, raw.get(spec["key"]))
+            if year is None:
+                return {}, spec
+            values[spec["key"]] = year
+            continue
         text = str(raw.get(spec["key"], "")).strip()
         if kind == "choice":
             if text not in spec["options"]:
@@ -166,6 +283,9 @@ def coerce_param_values(catalogue_key, raw):
         if not (spec["min"] <= value <= spec["max"]):
             return {}, spec
         values[spec["key"]] = value
+    order_error = interval_order_error(catalogue_key, values)
+    if order_error is not None:
+        return {}, order_error
     return values, None
 
 
@@ -208,9 +328,8 @@ def parse_segment(spec, segment):
     ``(False, None)``.
 
     Multichoice bodies must list known codes once each, in declared order, and
-    hold at least ``min_selected`` codes. Int bodies are plain digits (range is
-    not checked here: the canonical rebuild in ``resolve_predefined`` and the
-    catalogue lint keep names in range).
+    hold at least ``min_selected`` codes. Int bodies are plain digits inside
+    ``[min, max]``, so a hand-edited out-of-range name never resolves.
     """
     prefix = spec["suffix_prefix"]
     if not segment.startswith(prefix):
@@ -219,6 +338,9 @@ def parse_segment(spec, segment):
     kind = _kind(spec)
     if kind == "choice":
         return (True, body) if body in spec["options"] else (False, None)
+    if kind == "year":
+        year = match_year_segment(spec, body)
+        return (False, None) if year is None else (True, year)
     if kind == "multichoice":
         codes = [o["code"] for o in spec["options"]]
         picked = [code for code in codes if code in body]
@@ -231,7 +353,10 @@ def parse_segment(spec, segment):
         return True, [o["value"] for o in spec["options"] if o["code"] in body]
     if _DIGITS.fullmatch(body) is None:
         return False, None
-    return True, int(body)
+    value = int(body)
+    if not spec.get("min", value) <= value <= spec.get("max", value):
+        return False, None
+    return True, value
 
 
 def spec_segments(spec):
@@ -246,6 +371,8 @@ def spec_segments(spec):
         for size in range(spec.get("min_selected", 1), len(codes) + 1):
             out.extend(prefix + "".join(combo) for combo in combinations(codes, size))
         return out
+    if kind == "year":
+        return [f"{prefix}{year}" for year in spec["options"]]
     return [f"{prefix}{value}" for value in range(spec["min"], spec["max"] + 1)]
 
 
@@ -314,7 +441,10 @@ def resolve_predefined(name):
         if not specs or not name.startswith(f"{key}_"):
             continue
         values = _walk(specs, name[len(key) + 1 :].split("_"))
-        if values is not None and build_predefined_name(key, values) == name:
+        if values is None or build_predefined_name(key, values) != name:
+            continue
+        # 2020_2015 / 2015_2015: not a name we ever build.
+        if interval_order_error(key, values) is None:
             return key, values
     return None, {}
 
@@ -323,19 +453,25 @@ def changed_advanced_count(catalogue_key, values):
     """How many advanced params in ``values`` differ from their defaults.
 
     Accepts typed or raw form values; keys absent from ``values`` count as
-    unchanged. Drives the "(n changed)" hint and auto-opening on edit.
+    unchanged. Params hidden by an unmet ``depends_on`` never count: they are
+    reset to their defaults on save. Drives the "(n changed)" hint and
+    auto-opening on edit.
     """
+    active = {s["key"] for s in active_param_specs(catalogue_key, values)}
     return sum(
         1
         for spec in advanced_param_specs(catalogue_key)
-        if spec["key"] in values and not _is_default(spec, values[spec["key"]])
+        if spec["key"] in values
+        and spec["key"] in active
+        and not _is_default(spec, values[spec["key"]])
     )
 
 
 def _value_text(spec, value, t):
     kind = _kind(spec)
     if kind == "multichoice":
-        return ", ".join(
+        # "; " because some option labels carry commas (the IUCN groups).
+        return "; ".join(
             t(spec["option_label_key_prefix"] + v)
             for v in _canonical_multi(spec, value)
         )

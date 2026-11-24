@@ -18,6 +18,7 @@ from gui.scripts import variable_probes as probes
 from gui.scripts.legend_data import Label, format_number, variable_spec_from_vis
 from gui.scripts.predefined import (
     active_param_specs,
+    aoi_param_defaults,
     resolved_entry,
     validate_entry,
 )
@@ -130,10 +131,11 @@ def _raw_params(values):
     """Form state for param values: lists stay lists (multichoice), the rest text.
 
     Stringifying a list would turn ``["large", "major"]`` into the text
-    ``"['large', 'major']"`` and break the multiple select.
+    ``"['large', 'major']"`` and break the multiple select. None (an unset
+    interval year) becomes blank, not the text "None".
     """
     return {
-        k: list(v) if isinstance(v, (list, tuple)) else str(v)
+        k: ("" if v is None else list(v) if isinstance(v, (list, tuple)) else str(v))
         for k, v in values.items()
     }
 
@@ -160,6 +162,22 @@ def _parse_year(year):
         return int(str(year).strip())
     except (TypeError, ValueError):
         return None
+
+
+def _aoi_seeded_defaults(key):
+    """Catalogue defaults for ``key``, overlaid with what the selected AOI suggests.
+
+    Specs with an ``aoi_default`` hook (the MapBiomas ``region``) pick the
+    collection that covers the AOI's country. The hook reads the AOI's method
+    and name and the static registry only: no Earth Engine call in this
+    event handler.
+    """
+    from gui.store.state_manager import app_state
+
+    values = default_param_values(key)
+    if key:
+        values.update(aoi_param_defaults(key, app_state.aoi_result.value))
+    return values
 
 
 @solara.component
@@ -272,11 +290,17 @@ def VariableModal(
         else None
     )
 
+    # A non-temporal predefined layer never carries a year, even if one is
+    # left in the state from a previously selected temporal layer.
+    _year = (
+        year if source != "predefined" or (cat is not None and cat["temporal"]) else ""
+    )
+
     # Static availability check (never Earth Engine): a year or month past the
     # source's last complete month, or an impossible combination (FRP from
     # FIRMS), shows inline next to the fields and blocks submit.
     _unavailable = (
-        validate_entry(predefined_key, _values, _parse_year(year))
+        validate_entry(predefined_key, _values, _parse_year(_year))
         if cat is not None and _bad_param is None
         else None
     )
@@ -294,8 +318,8 @@ def VariableModal(
     else:
         _key_name = name.strip()
     storage_key = (
-        f"{_key_name}_{year}"
-        if (_key_name and year and str(year).strip())
+        f"{_key_name}_{_year}"
+        if (_key_name and _year and str(_year).strip())
         else _key_name
     )
     key_exists = (
@@ -506,22 +530,35 @@ def VariableModal(
         The previous layer's values must not leak across.
         """
         set_predefined_key(key or "")
-        set_params_raw(_raw_params(default_param_values(key or "")))
+        defaults = _aoi_seeded_defaults(key or "")
+        set_params_raw(_raw_params(defaults))
         set_advanced_open(False)
+        if key in PREDEFINED_CATALOGUE and _parse_year(year) is not None:
+            new_cat = resolved_entry(key, defaults)
+            if new_cat["temporal"] and _parse_year(year) not in new_cat["years"]:
+                set_year("")
 
     def _submit_predefined():
         if not predefined_key:
             set_error(t("vars.modal.error_no_predefined_selected"))
             return
-        cat_entry = PREDEFINED_CATALOGUE[predefined_key]
-        yr = _parse_year(year)
+        # Resolved: whether a year is asked can depend on a param (protected
+        # areas' timing). Only temporal layers take the Year select.
+        cat_entry = cat
+        yr = _parse_year(year) if cat_entry["temporal"] else None
         if cat_entry["temporal"] and yr is None:
             set_error(t("vars.modal.error_year_required"))
             return
         values, bad_param = coerce_param_values(predefined_key, params_raw)
         if bad_param is not None:
             kind = bad_param.get("type", "int")
-            if kind == "multichoice":
+            if bad_param.get("error_key"):
+                set_error(t(bad_param["error_key"]))
+            elif kind == "year":
+                set_error(
+                    t("vars.modal.error_param_year", label=t(bad_param["label_key"]))
+                )
+            elif kind == "multichoice":
                 set_error(
                     t(
                         "vars.modal.error_param_multichoice",
@@ -548,6 +585,15 @@ def VariableModal(
             return
         # Already shown inline (availability alert); refuse without repeating it.
         if validate_entry(predefined_key, values, yr) is not None:
+            return
+        # A year left over from another layer or method is not in this list.
+        if yr is not None and yr not in resolved_entry(predefined_key, values)["years"]:
+            set_error(
+                t(
+                    "vars.modal.error_param_year",
+                    label=t("vars.modal.predefined_year_label"),
+                )
+            )
             return
         entry = {
             "source": "predefined",
@@ -899,9 +945,17 @@ def _render_predefined_fields(
         # always-present div keeps later siblings (and their click handlers)
         # in place when a field comes and goes.
         active = {s["key"] for s in active_param_specs(predefined_key, params_raw)}
+        basic = basic_param_specs(predefined_key)
+        # Interval layers (deforestation_gfc, ...): start and end year side by
+        # side in place of the Year select (they are non-temporal).
+        with rv.Html(tag="div", style_="display:flex;gap:8px;"):
+            for spec in basic:
+                if spec.get("type") == "year":
+                    with rv.Html(tag="div", style_="flex:1;min-width:0;"):
+                        _render_param_field(spec, params_raw, set_params_raw)
         with rv.Html(tag="div"):
-            for spec in basic_param_specs(predefined_key):
-                if spec["key"] in active:
+            for spec in basic:
+                if spec["key"] in active and spec.get("type") != "year":
                     _render_param_field(spec, params_raw, set_params_raw)
         advanced = [
             s for s in advanced_param_specs(predefined_key) if s["key"] in active
@@ -963,6 +1017,22 @@ def _render_param_field(spec, params_raw, set_params_raw):
     """
     pkey = spec["key"]
     kind = spec.get("type", "int")
+    if kind == "year":
+        raw = str(params_raw.get(pkey, "") or "").strip()
+        rv.Select(
+            label=t(spec["label_key"]),
+            items=list(spec["options"]),
+            # Blank (None) until picked: interval years have no default.
+            v_model=int(raw) if raw.isdigit() else None,
+            on_v_model=lambda v, k=pkey: set_params_raw(
+                lambda prev: {**prev, k: "" if v in (None, "") else str(v)}
+            ),
+            dense=True,
+            outlined=True,
+            hint=t(spec["hint_key"]),
+            persistent_hint=True,
+        )
+        return
     if kind == "multichoice":
         rv.Select(
             label=t(spec["label_key"]),

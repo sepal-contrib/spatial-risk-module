@@ -261,6 +261,7 @@
       "forest_label": "Bosque al inicio del período",
       "interval_label": "Intervalo (años)",
       "interval_hint": "Se obtiene automáticamente del nombre de la variable de verdad; editable.",
+      "forest_for_truth_hint": "Este objetivo se compara con {name} ({year}) como bosque al inicio del período: agrégalo y procésalo en Variables para evaluar.",
       "maps_label": "Mapas a evaluar (vacío = todos)",
       "maps_no_data": "No hay predicciones registradas. Ejecutá inferencia en el paso Inferencia.",
       "csizes_label": "Tamaño(s) de celda — cuadrícula gruesa (píxeles)",

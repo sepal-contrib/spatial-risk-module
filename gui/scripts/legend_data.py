@@ -262,6 +262,22 @@ def variable_spec(
             labels=tuple(Label(literal=name) for name in names),
         )
 
+    if render_kind == "class_palette":
+        # A catalogue class table (MapBiomas classes): one chip per class.
+        from gui.scripts.variable_classes import (
+            from_class_labels,
+            legend_colors_labels,
+        )
+
+        cat = _catalogue_entry(var) or {}
+        chips, keys = legend_colors_labels(from_class_labels(cat["class_labels"]))
+        return LegendSpec(
+            kind="chips",
+            title=title,
+            colors=chips,
+            labels=tuple(Label(key=key) for key in keys),
+        )
+
     if render_kind == "random_visualizer":
         # GEE assigns these colours server-side at random; there is no palette
         # to show, so the legend says so instead of inventing one.
@@ -314,7 +330,7 @@ def variable_spec(
 def variable_spec_from_style(style: dict, var, title: Label) -> LegendSpec:
     """Adapter for local rasters: build from ``resolve_variable_style``'s dict."""
     render_kind = style.get("render_kind", "continuous_fallback")
-    if render_kind in ("random_visualizer", "custom_classes"):
+    if render_kind in ("random_visualizer", "custom_classes", "class_palette"):
         colors = ()
     elif render_kind == "postprocess_change":
         # variable_spec discards `colors` for this render_kind in favour of
@@ -346,7 +362,10 @@ def variable_spec_from_vis(
 ) -> LegendSpec:
     """Adapter for GEE layers: build from the ``vis`` dict ``_styled_layer`` used."""
     palette = [_with_hash(c) for c in (vis or {}).get("palette", [])]
-    if render_kind in ("random_visualizer", "custom_classes") or not palette:
+    if (
+        render_kind in ("random_visualizer", "custom_classes", "class_palette")
+        or not palette
+    ):
         colors = tuple(palette)
     elif _is_categorical(render_kind, _catalogue_entry(var), var):
         colors = tuple(palette)

@@ -120,7 +120,12 @@ def test_two_row_downloads_both_republish(monkeypatch):
     done = []
 
     def _fake_materialize(
-        project, keys=None, on_progress=None, overwrite=False, on_wait=None
+        project,
+        keys=None,
+        on_progress=None,
+        overwrite=False,
+        on_wait=None,
+        on_notice=None,
     ):
         for k in keys:
             if k == "roads":
@@ -162,7 +167,14 @@ def test_a_row_already_downloading_is_not_started_twice(monkeypatch):
     started = threading.Event()
     calls = []
 
-    def _blocking(project, keys=None, on_progress=None, overwrite=False, on_wait=None):
+    def _blocking(
+        project,
+        keys=None,
+        on_progress=None,
+        overwrite=False,
+        on_wait=None,
+        on_notice=None,
+    ):
         calls.append(tuple(keys))
         started.set()
         gate.wait(TIMEOUT)

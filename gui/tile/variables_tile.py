@@ -190,14 +190,24 @@ def _run_download(keys, bulk, p, project_reactive, notifier, overwrite=False):
                             "notifications.task_download_queued", name=_var_name(k)
                         ),
                     )
-                    process_actions.materialize_raw_layers(
-                        p,
-                        list(keys),
-                        on_progress=on_progress,
-                        overwrite=overwrite,
-                        on_wait=on_progress.on_wait,
-                    )
-                    p.save()
+                    try:
+                        process_actions.materialize_raw_layers(
+                            p,
+                            list(keys),
+                            on_progress=on_progress,
+                            overwrite=overwrite,
+                            on_wait=on_progress.on_wait,
+                            # Download-hook notices (subj widened to 16-bit) are a
+                            # side effect, not a failure: the warning channel.
+                            on_notice=(
+                                (lambda key, kwargs: notifier.warning(t(key, **kwargs)))
+                                if notifier is not None
+                                else None
+                            ),
+                        )
+                    finally:
+                        # Layers downloaded before a failure are real: keep them.
+                        p.save()
             except Exception:
                 logger.exception("download failed")  # toast raised by tracked_job
             # Publish even after a failure: layers materialized before the
@@ -276,7 +286,8 @@ def _styled_layer(image, var, gee_interface):
     post-process outputs (post-processing runs on downloaded rasters), so its
     render_kind vocabulary is the catalogue subset: "custom_classes",
     "custom_palette",
-    "random_visualizer", "catalogue_palette", "categorical_fallback",
+    "class_palette", "random_visualizer", "catalogue_palette",
+    "categorical_fallback",
     "continuous_fallback".
     Synchronous — any GEE stretch it computes goes through the blocking
     interface, so call it from a worker thread.
@@ -301,6 +312,11 @@ def _styled_layer(image, var, gee_interface):
     # evaluated for the params baked into the name.
     _key, _params, cat = entry_for_name(getattr(var, "name", "") or "")
     if cat:
+        if cat.get("class_labels"):
+            from gui.scripts.variable_classes import from_class_labels
+
+            src, dst, vis = ee_remap(from_class_labels(cat["class_labels"]))
+            return image.remap(src, dst), vis, "class_palette"
         if cat.get("random_visualizer"):
             return image.randomVisualizer(), {}, "random_visualizer"
         vis = cat.get("vis_params")

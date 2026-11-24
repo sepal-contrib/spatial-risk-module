@@ -59,9 +59,12 @@ def test_spec_shapes(key):
     for spec in specs:
         kind = spec.get("type", "int")
         where = f"{key}.{spec['key']}"
-        assert kind in ("int", "choice", "multichoice"), where
+        assert kind in ("int", "choice", "multichoice", "year"), where
         assert PREFIX.fullmatch(spec["suffix_prefix"]), where
-        if kind == "int":
+        if kind == "year":
+            # The trailing interval pair: tests/test_predefined_interval.py.
+            assert spec["default"] is None and not omits_default(spec), where
+        elif kind == "int":
             assert spec["max"] <= 999, f"{where} allows a four-digit suffix"
             assert spec["min"] <= spec["default"] <= spec["max"], where
         elif kind == "choice":
@@ -87,6 +90,8 @@ def test_no_segment_parses_under_two_specs(key):
     """The greedy resolver is only correct if segments are unambiguous."""
     specs = param_specs(key)
     for a, b in itertools.permutations(specs, 2):
+        if _kind(a) == "year" and _kind(b) == "year":
+            continue  # positional and both required: 2015 under both is fine
         for segment in spec_segments(a):
             matched, _ = parse_segment(b, segment)
             assert not matched, (key, a["key"], b["key"], segment)
@@ -121,9 +126,18 @@ def test_param_labels_resolve(key):
             assert i18n.t(label_key) != label_key, (key, label_key)
 
 
+def _kind(spec):
+    return spec.get("type", "int")
+
+
 def _value_space(spec):
-    """Representative values: all options/subsets; int min, default, max."""
-    kind = spec.get("type", "int")
+    """Representative values: all options/subsets; int min, default, max.
+
+    Year specs: the first and last offered year.
+    """
+    kind = _kind(spec)
+    if kind == "year":
+        return [spec["options"][0], spec["options"][-1]]
     if kind == "choice":
         return list(spec["options"])
     if kind == "multichoice":
@@ -133,7 +147,13 @@ def _value_space(spec):
 
 @pytest.mark.parametrize("key", KEYS)
 def test_exhaustive_roundtrip(key):
-    """Build and resolve are inverses over the representative value space."""
+    """Build and resolve are inverses over the representative value space.
+
+    Interval entries need start < end and may carry the year pair:
+    tests/test_predefined_interval.py round-trips them exhaustively.
+    """
+    if PREDEFINED_CATALOGUE[key].get("interval_years"):
+        return
     specs = param_specs(key)
     spaces = [_value_space(spec) for spec in specs]
     for combo in itertools.product(*spaces):
@@ -195,7 +215,14 @@ YEAR_MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
 def test_only_dynamic_attrs_are_callables(key):
     """Only dynamic attrs are callables."""
     for attr, value in PREDEFINED_CATALOGUE[key].items():
-        if callable(value) and attr not in ("get_image", "validate"):
+        # forest_at_start(params) and prepare_download(var, params) are hooks like
+        # validate, not resolved fields.
+        if callable(value) and attr not in (
+            "get_image",
+            "validate",
+            "forest_at_start",
+            "prepare_download",
+        ):
             assert attr in DYNAMIC_ATTRS, (key, attr)
 
 

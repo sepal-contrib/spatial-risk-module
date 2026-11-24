@@ -118,7 +118,12 @@ def _record_downloads(monkeypatch):
     calls, done = [], threading.Event()
 
     def _fake_materialize(
-        project, keys=None, on_progress=None, overwrite=False, on_wait=None
+        project,
+        keys=None,
+        on_progress=None,
+        overwrite=False,
+        on_wait=None,
+        on_notice=None,
     ):
         calls.append({"keys": keys, "overwrite": overwrite})
         done.set()

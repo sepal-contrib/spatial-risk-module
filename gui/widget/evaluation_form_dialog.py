@@ -10,13 +10,16 @@ from gui.tile.evaluation_helpers import (
     ALL_METRICS,
     build_truth_spec,
     default_forest_key,
+    forest_key_for_truth,
     map_items,
     metric_items,
+    missing_forest_for_truth,
     parse_csizes,
     parse_interval,
     variable_items,
 )
 from gui.widget.creation_dialog import CreationDialog
+from gui.widget.text_style import MUTED
 
 
 @solara.component
@@ -49,6 +52,11 @@ def EvaluationFormDialog(project, open_, on_submit: Callable[[dict], None]):
         set_truth_key(key)
         ti = parse_interval(p, key)
         set_interval(str(ti) if ti is not None else "")
+        # An interval target names its forest-at-start layer (same threshold /
+        # definition, start year): pick it when the project has it.
+        paired = forest_key_for_truth(p, key)
+        if paired:
+            set_forest_key(paired)
 
     def reset():
         set_truth_key("")
@@ -114,6 +122,19 @@ def EvaluationFormDialog(project, open_, on_submit: Callable[[dict], None]):
             dense=True,
             outlined=True,
         )
+        # Always-present wrapper: a conditional sibling mid-dialog would drop
+        # later click handlers.
+        missing = missing_forest_for_truth(p, truth_key)
+        with rv.Html(tag="div"):
+            if missing:
+                solara.Text(
+                    t(
+                        "tiles.evaluation.forest_for_truth_hint",
+                        name=missing[0],
+                        year=missing[1],
+                    ),
+                    style=MUTED + "font-size:0.8rem;padding:0 4px 8px;",
+                )
         rv.TextField(
             label=t("tiles.evaluation.interval_label"),
             v_model=interval,

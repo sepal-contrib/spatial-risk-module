@@ -34,12 +34,14 @@
       "burned": "Burned",
       "unburned": "Not burned",
       "fire": "Fire",
-      "no_fire": "No fire"
+      "no_fire": "No fire",
+      "degraded": "Forest degradation"
     },
     "note": { "random_classes": "Categorical — colours assigned at random" },
     "unit": {
       "m_value": "{value} m",
       "deg_value": "{value}°",
+      "pct_value": "{value} %",
       "plain_value": "{value}",
       "days_value": "{value} d",
       "mw_value": "{value} MW",

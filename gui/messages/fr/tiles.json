@@ -261,6 +261,7 @@
       "forest_label": "Forêt au début de la période",
       "interval_label": "Intervalle (années)",
       "interval_hint": "Analysé automatiquement depuis le nom de la variable de référence ; modifiable.",
+      "forest_for_truth_hint": "Cette cible se compare à {name} ({year}) comme forêt au début de la période : ajoutez-la et traitez-la dans Variables pour évaluer.",
       "maps_label": "Cartes à évaluer (vide = toutes)",
       "maps_no_data": "Aucune prédiction enregistrée. Lancez l'inférence à l'étape Inférence.",
       "csizes_label": "Taille(s) de cellule — grille grossière (pixels)",

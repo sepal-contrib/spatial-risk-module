@@ -18,6 +18,7 @@ from gui.scripts.predefined.catalogue import (
 from gui.scripts.predefined.params import (
     active_param_specs,
     advanced_param_specs,
+    aoi_param_defaults,
     basic_param_specs,
     build_predefined_name,
     changed_advanced_count,
@@ -49,6 +50,7 @@ __all__ = [
     "MONTHS",
     "active_param_specs",
     "advanced_param_specs",
+    "aoi_param_defaults",
     "basic_param_specs",
     "build_predefined_name",
     "changed_advanced_count",

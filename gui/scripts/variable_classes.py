@@ -144,6 +144,18 @@ def palette_of(classes) -> Optional[str]:
     )
 
 
+def from_class_labels(class_labels) -> List[dict]:
+    """A catalogue entry's ``class_labels`` as classes, sorted by value.
+
+    Each label holds its i18n key (this module is i18n-free): the legend
+    translates it.
+    """
+    return sorted(
+        (make(c["value"], c["color"], c["label_key"]) for c in class_labels),
+        key=lambda c: c["value"],
+    )
+
+
 def visible_classes(classes) -> List[dict]:
     """The classes that are drawn, sorted by value."""
     return sorted(

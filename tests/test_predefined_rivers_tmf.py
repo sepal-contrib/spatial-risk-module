@@ -197,7 +197,7 @@ def test_describe_params_lists_changed_advanced_values():
     text = describe_params("rivers_wlmc")
     assert text == (
         f"{t('vars.modal.param_water_classes')}: "
-        f"{t('vars.modal.water_large')}, {t('vars.modal.water_major')}, "
+        f"{t('vars.modal.water_large')}; {t('vars.modal.water_major')}; "
         f"{t('vars.modal.water_canal')}"
     )
     assert describe_params("forest_tmf_degraded") == (
