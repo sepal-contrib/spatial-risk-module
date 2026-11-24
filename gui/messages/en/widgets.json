@@ -103,7 +103,10 @@
       "operation": "Operation",
       "inputs": "Input layers",
       "years": "Years",
-      "file_path": "File path"
+      "file_path": "File path",
+      "display": "Visualization parameters",
+      "display_default": "Catalogue default",
+      "display_custom": "Customised"
     },
     "variable_list": {
       "source_title": "Source variables",

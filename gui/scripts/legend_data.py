@@ -250,17 +250,16 @@ def variable_spec(
     """
     if render_kind == "custom_classes":
         # The user's own class list: one chip per visible class, in their words.
-        from gui.scripts.variable_classes import legend_colors_labels
+        from gui.scripts.variable_classes import legend_colors_labels, visible_classes
 
-        chips, names = legend_colors_labels(
-            (getattr(var, "vis_params", None) or {}).get("classes")
+        classes = (getattr(var, "vis_params", None) or {}).get("classes")
+        chips, names = legend_colors_labels(classes)
+        # A catalogue class keeps its i18n key so the legend follows the language.
+        labels = tuple(
+            Label(key=c["label_key"]) if c.get("label_key") else Label(literal=name)
+            for c, name in zip(visible_classes(classes), names)
         )
-        return LegendSpec(
-            kind="chips",
-            title=title,
-            colors=chips,
-            labels=tuple(Label(literal=name) for name in names),
-        )
+        return LegendSpec(kind="chips", title=title, colors=chips, labels=labels)
 
     if render_kind == "class_palette":
         # A catalogue class table (MapBiomas classes): one chip per class.

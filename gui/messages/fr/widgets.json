@@ -103,7 +103,10 @@
       "operation": "Opération",
       "inputs": "Couches d'entrée",
       "years": "Années",
-      "file_path": "Chemin du fichier"
+      "file_path": "Chemin du fichier",
+      "display": "Paramètres de visualisation",
+      "display_default": "Par défaut du catalogue",
+      "display_custom": "Personnalisé"
     },
     "variable_list": {
       "source_title": "Variables sources",

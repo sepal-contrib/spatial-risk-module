@@ -2,6 +2,8 @@
 
 import logging
 import threading
+from enum import Enum
+from pathlib import Path
 
 import ee
 import solara
@@ -23,6 +25,11 @@ from gui.scripts.variable_classes import outline_style
 from gui.scripts.variable_identity import is_base_raster
 from gui.scripts.variable_map import add_raster_var_on_map
 from gui.store.project_writers import writing
+from gui.tile.derived_map import (
+    derived_on_map,
+    drop_derived_from_map,
+    use_derived_map_toggle,
+)
 from gui.widget.confirm_dialog import ConfirmDialog
 from gui.widget.help import InfoButton
 from gui.widget.product_table import BUSY_CLASSES, BUSY_ICON, HOURGLASS_CSS
@@ -35,7 +42,7 @@ from spatialrisk.geo_utils import single_band_vrt
 # namespace, so removing the import would break model construction.
 from spatialrisk.project import Project  # noqa: F401
 from spatialrisk.variables.file_cleanup import FilePlan, plan_variable_files
-from spatialrisk.variables.gee_var import GEEVar
+from spatialrisk.variables.gee_var import GEEVar, download_path
 from spatialrisk.variables.local_raster_var import LocalRasterVar
 from spatialrisk.variables.local_vector_var import LocalVectorVar
 
@@ -297,14 +304,21 @@ def _styled_layer(image, var, gee_interface):
 
     # A palette the user picked in the Variables modal wins over the catalogue
     # and the raster-type fallbacks. Applied verbatim: a categorical pick is
-    # pinned to 0..1, a ramp is palette-only and GEE stretches it.
+    # pinned to 0..1, a ramp without a range is stretched to its AOI min/max.
     own = getattr(var, "vis_params", None) or {}
     if visible_classes(own.get("classes")):
         # remap masks every value it is not given: the rest is transparent.
         src, dst, vis = ee_remap(own["classes"])
         return image.remap(src, dst), vis, "custom_classes"
     if own.get("palette"):
-        return image, dict(own), "custom_palette"
+        vis = dict(own)
+        if "min" not in vis or "max" not in vis:
+            # A ramp without a range would render at GEE's 0..1 default.
+            mm = _minmax(image, var, gee_interface)
+            if mm:
+                vis.setdefault("min", mm[0])
+                vis.setdefault("max", mm[1])
+        return image, vis, "custom_palette"
 
     # The name may carry a param suffix (forest_gfc_tc30), so resolve it back to
     # the catalogue key rather than looking the raw name up.
@@ -377,16 +391,23 @@ def _variable_to_entry(key: str, var, project) -> dict:
     # (which then fails GEEVar validation on save). The name may carry a
     # parameter suffix (forest_gfc_tc30); resolve_predefined splits it back into
     # the catalogue key plus the values, which prefill the modal's param fields.
+    # A downloaded catalogue layer (LocalRasterVar) reopens the same way, so
+    # Save keeps the catalogue look instead of writing custom defaults over it.
     cat_key, cat_params = resolve_predefined(var.name)
-    if vtype == "GEEVar" and not var.path and cat_key is not None:
-        return {
+    is_cloud = vtype == "GEEVar" and not var.path
+    if cat_key is not None and (is_cloud or _is_download(var)):
+        entry = {
             "source": "predefined",
             "type": "GEEVar",
             "name": var.name,
             "predefined_key": cat_key,
-            "params": cat_params,
+            "params": getattr(var, "params", None) or cat_params,
             "year": str(var.year) if var.year else "",
         }
+        # Only a real override; None/{} follows the catalogue default.
+        if getattr(var, "vis_params", None):
+            entry["vis_params"] = dict(var.vis_params)
+        return entry
 
     entry = {
         "source": "custom",
@@ -424,6 +445,62 @@ def _variable_to_entry(key: str, var, project) -> dict:
             else str(var.rasterization_method)
         )
     return entry
+
+
+def _is_download(var) -> bool:
+    """A local raster sitting exactly where a GEE download of it writes.
+
+    A custom file the user named like a catalogue layer keeps its own path, so
+    it stays custom. No project or folders means custom too (the safe side).
+    """
+    if type(var).__name__ != "LocalRasterVar":
+        return False
+    try:
+        target = download_path(var.project.folders.data_raw_folder, var.name, var.year)
+        return Path(var.path).resolve() == target.resolve()
+    except Exception:
+        return False
+
+
+def _plain(value) -> str:
+    """Path, enum, int year and None as the text a reopened entry holds."""
+    if value is None:
+        return ""
+    return str(value.value if isinstance(value, Enum) else value)
+
+
+def _same_vis(old_entry: dict, new_entry: dict) -> bool:
+    return (old_entry.get("vis_params") or None) == (
+        new_entry.get("vis_params") or None
+    )
+
+
+def same_layer(old_entry: dict, new_entry: dict) -> bool:
+    """True when two entries name the same layer, whatever their display style.
+
+    ``old_entry`` comes from ``_variable_to_entry``, ``new_entry`` from the
+    modal, so the two differ in shape: a bare catalogue name reopens with
+    ``{}`` params while the modal sends every value, the year is text on one
+    side and an int on the other, and the modal adds fields (``data_type``)
+    the type already implies. Identity is compared on that common ground.
+    """
+    if old_entry.get("source") != new_entry.get("source"):
+        return False
+    if old_entry.get("source") == "predefined":
+        from gui.scripts.predefined import default_param_values
+
+        key = old_entry.get("predefined_key")
+        if key != new_entry.get("predefined_key"):
+            return False
+        defaults = default_param_values(key)
+        return {**defaults, **(old_entry.get("params") or {})} == {
+            **defaults,
+            **(new_entry.get("params") or {}),
+        } and _plain(old_entry.get("year")) == _plain(new_entry.get("year"))
+    return all(
+        _plain(old_entry[k]) == _plain(new_entry.get(k))
+        for k in set(old_entry) - {"vis_params"}
+    )
 
 
 def entry_key(entry: dict) -> str:
@@ -526,6 +603,8 @@ def _build_predefined(entry: dict, project):
         project=project,
         year=year,
         params=entry.get("params") or None,
+        # The user's display override; None follows the catalogue look.
+        vis_params=entry.get("vis_params") or None,
         # Export/prefill scale for sources whose native resolution is far from
         # the 30 m download fallback (e.g. ERA5-Land at ~11 km).
         default_scale=cat.get("default_scale"),
@@ -627,6 +706,11 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
                 t("tiles.variables.error_toggle_map", key=key, exc=exc),
             )
 
+    # Redraws a shown harmonized copy after a display edit (no hooks inside).
+    on_toggle_derived = use_derived_map_toggle(
+        project, map_, notifications, legend_port=legend_port
+    )
+
     pending_add, set_pending_add = solara.use_state(None)
 
     def _do_add(entry: dict):
@@ -691,11 +775,39 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
         set_editing_key(key)
         modal_open.set(True)
 
+    def _restyle(p, key: str, vis_params):
+        """Display-only save: same files and harmonized copies, new look."""
+        for k in process_actions.apply_display(p, key, vis_params):
+            # Dropped first, so the toggle re-adds the layer in its new style.
+            if k in vars_on_map.value:
+                _drop_from_map(k, map_, legend_port)
+                on_toggle_map(k)
+            if on_toggle_derived is not None and k in derived_on_map.value:
+                drop_derived_from_map(k, map_, legend_port)
+                on_toggle_derived(k)
+        set_editing_key(None)
+        try:
+            p.save()
+        finally:
+            # Published even if the save raises: the UI matches memory (toast says why).
+            project.set(p.model_copy())
+
     def on_save(old_key: str, new_entry: dict):
         p = project.value
         if p is None:
             return
         try:
+            old_var = p.raw_variables.get(old_key)
+            old_entry = (
+                None if old_var is None else _variable_to_entry(old_key, old_var, p)
+            )
+            if old_entry and same_layer(old_entry, new_entry):
+                if _same_vis(old_entry, new_entry):
+                    # Unchanged: a rebuild would swap a download for a cloud layer.
+                    set_editing_key(None)
+                else:
+                    _restyle(p, old_key, new_entry.get("vis_params") or None)
+                return
             old_var = p.raw_variables.pop(old_key, None)
             if is_base_raster(p, old_var):
                 p.base_raster = None

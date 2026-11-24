@@ -21,6 +21,14 @@ from spatialrisk.variables.variable import Variable
 logger = logging.getLogger("spatial_risk")
 
 
+def download_path(
+    folder: Path, name: str, year: Optional[int], suffix: str = ".tif"
+) -> Path:
+    """The file a download of ``name``/``year`` writes in ``folder``."""
+    filename = f"{name}_{year}" if year is not None else name
+    return (folder / filename).with_suffix(suffix)
+
+
 class GEEVar(Variable):
     """
     Google Earth Engine-backed variable.
@@ -108,9 +116,12 @@ class GEEVar(Variable):
         question, and it is the same tree the download itself would create.
         """
         extensions = {"vector": ".shp", "raster": ".tif"}
-        filename = f"{self.name}_{self.year}" if self.year is not None else self.name
-        folder = self.project.folders.data_raw_folder
-        return (folder / filename).with_suffix(extensions[self.data_type])
+        return download_path(
+            self.project.folders.data_raw_folder,
+            self.name,
+            self.year,
+            extensions[self.data_type],
+        )
 
     def _download(
         self,

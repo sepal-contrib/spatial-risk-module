@@ -131,11 +131,17 @@ def harmonized_details(project, key, status=None) -> Optional[VariableDetails]:
     # default value is omitted.
     cat_key, name_params = resolve_predefined(getattr(raw, "name", None) or "")
     if cat_key is not None:
+        # Catalogue layers also say whether they use the catalogue display.
+        display = (
+            t(_K + "display_custom")
+            if getattr(raw, "vis_params", None)
+            else t(_K + "display_default")
+        )
         rows[1:1] = param_rows(
             cat_key,
             getattr(raw, "params", None)
             or {**default_param_values(cat_key), **name_params},
-        )
+        ) + [(t(_K + "display"), display)]
     name = year_label(getattr(raw, "name", None) or key, getattr(raw, "year", None))
     return VariableDetails(name, rows)
 

@@ -15,6 +15,7 @@ from gui.scripts.predefined.catalogue import (
     resolved_entry,
     validate_entry,
 )
+from gui.scripts.predefined.display import default_vis, is_editable, vis_override
 from gui.scripts.predefined.params import (
     active_param_specs,
     advanced_param_specs,
@@ -55,11 +56,13 @@ __all__ = [
     "build_predefined_name",
     "changed_advanced_count",
     "coerce_param_values",
+    "default_vis",
     "default_param_values",
     "describe_params",
     "entry_for_name",
     "get_aoi_ee_feature",
     "inactive_to_defaults",
+    "is_editable",
     "month_index",
     "normalize_value",
     "omits_default",
@@ -74,4 +77,5 @@ __all__ = [
     "resolved_entry",
     "spec_segments",
     "validate_entry",
+    "vis_override",
 ]

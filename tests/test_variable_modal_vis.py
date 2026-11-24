@@ -399,3 +399,60 @@ def test_multiband_file_shows_a_band_select_and_submits_the_pick(tmp_path):
     add = t("common.add")
     next(b for b in _find(box, vw.Btn) if add in str(b.children)).click()
     assert added[0]["band"] == 3
+
+
+def test_typing_a_label_drops_its_key():
+    """A catalogue class stops following the language once its label is edited."""
+    from gui.scripts.variable_classes import make
+    from gui.widget.vis_style_fields import ClassList
+
+    seen = []
+    classes = [make(1, "ff0000", "x", label_key="legend.class.loss")]
+    box, _rc = reacton.render(
+        ClassList(classes=classes, on_classes=seen.append), handle_error=False
+    )
+    field = next(
+        f for f in _find(box, vw.TextField) if "sr-class-label" in (f.class_ or "")
+    )
+    field.v_model = "typed"
+    assert seen[-1] == [make(1, "ff0000", "typed")]
+    assert "label_key" not in seen[-1][0]
+
+
+def test_class_list_shows_the_translated_catalogue_label():
+    """A class with a label key shows its translated text, not the key."""
+    from gui.scripts.variable_classes import make
+    from gui.widget.vis_style_fields import ClassList
+
+    key = "legend.class.loss"
+    classes = [make(1, "ff0000", key, label_key=key)]
+    box, _rc = reacton.render(
+        ClassList(classes=classes, on_classes=lambda _: None), handle_error=False
+    )
+    field = next(
+        f for f in _find(box, vw.TextField) if "sr-class-label" in (f.class_ or "")
+    )
+    assert field.v_model == t(key) != key
+
+
+def test_ramp_select_lists_default_first():
+    """A catalogue palette is the first ramp, "Default"; custom layers have none."""
+    from gui.widget.vis_style_fields import RampSelect
+
+    def _items(**kwargs):
+        box, _rc = reacton.render(
+            RampSelect(
+                value="default" if kwargs else None,
+                on_value=lambda _: None,
+                invert=False,
+                on_invert=lambda _: None,
+                **kwargs,
+            ),
+            handle_error=False,
+        )
+        return _find(box, vw.Select)[0].items
+
+    items = _items(default_palette=["2c7bb6", "d7191c"])
+    assert items[0] == {"text": t("vars.modal.ramp_default"), "value": "default"}
+    assert [i["value"] for i in items[1:]] == list(vp.RAMPS)
+    assert "default" not in [i["value"] for i in _items()]

@@ -135,6 +135,26 @@ def test_predefined_row_lists_its_stored_params():
     )
 
 
+def test_details_show_default_display():
+    """A catalogue layer on its default display says so; a plain layer has no row."""
+    rows = dict(
+        harmonized_details(_rivers_project(vis_params=None), "rivers_wlmc").rows
+    )
+    assert rows[t(K + "display")] == t(K + "display_default")
+    plain = SimpleNamespace(
+        raw_variables={"mine": _named("LocalRasterVar", name="mine", year=None)},
+        processed_variables={},
+    )
+    assert t(K + "display") not in dict(harmonized_details(plain, "mine").rows)
+
+
+def test_details_show_custom_display():
+    """A catalogue layer with its own display says Customised."""
+    project = _rivers_project(vis_params={"min": 0, "max": 1})
+    rows = dict(harmonized_details(project, "rivers_wlmc").rows)
+    assert rows[t(K + "display")] == t(K + "display_custom")
+
+
 def test_layer_saved_without_params_reads_them_from_its_name():
     """Projects written before params were stored still show them."""
     stored = dict(
@@ -310,7 +330,8 @@ def test_dialog_renders_the_rows_and_closes():
         assert fields[t(K + "resampling")] == "bilinear"
         assert fields[t(K + "matches_grid")] == t("common.yes")
         # 7 fields + slope's 2 catalogue defaults (DEM source, slope unit)
-        assert len(fields) == 9
+        # + the display row
+        assert len(fields) == 10
         close = [b for b in rc.find(vw.Btn).widgets if t("common.close") in b.children]
         close[0].click()
         assert closed == [1]

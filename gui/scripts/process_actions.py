@@ -5,10 +5,11 @@ set a reprojected base raster, then reproject/match + rasterize, and apply
 edge/dist post-processing.
 """
 
+import copy
 import logging
 from collections import namedtuple
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from spatialrisk.harmonization import harmonization_status_from_disk
 
@@ -397,6 +398,23 @@ def remove_processed_variable(
         del project.processed_variables[key]
         drop_derived_from_map(key, map_, legend_port)
     return True
+
+
+def apply_display(project, key: str, vis_params: Optional[dict]) -> List[str]:
+    """Set a layer's display style on every year and its harmonized copies.
+
+    Every raw variable sharing ``project.raw_variables[key].name`` gets
+    ``vis_params`` (None follows the catalogue default), and so does the
+    processed copy under the same storage key. Nothing is rebuilt, downloaded
+    or re-harmonized: only the look changes. Returns the touched raw keys.
+    """
+    name = project.raw_variables[key].name
+    touched = [k for k, v in project.raw_variables.items() if v.name == name]
+    for k in touched:
+        targets = [project.raw_variables[k], project.processed_variables.get(k)]
+        for var in filter(None, targets):
+            var.vis_params = copy.deepcopy(vis_params)
+    return touched
 
 
 def change_layer_candidates(project) -> List[str]:

@@ -44,13 +44,24 @@ def _bare(value: str) -> str:
     return str(value).strip().lstrip("#").lower()
 
 
-def continuous_vis(ramp: str, invert: bool = False, span=None) -> dict:
+def ramp_keys(default_palette=None) -> List[str]:
+    """The ramp select's items in menu order: "default" first when a layer has one."""
+    return (["default"] if default_palette else []) + list(RAMPS)
+
+
+def continuous_vis(
+    ramp: str, invert: bool = False, span=None, default_palette=None
+) -> dict:
     """``vis_params`` for a continuous layer: a named ramp, optionally reversed.
 
-    ``span`` is ``(min, max)`` to pin the ramp to; None leaves the renderer to
-    stretch it to the layer's own values.
+    ``"default"`` is ``default_palette``, a catalogue layer's own palette,
+    stored bare. ``span`` is ``(min, max)`` to pin the ramp to; None leaves the
+    renderer to stretch it to the layer's own values.
     """
-    palette = list(RAMPS[ramp])
+    if ramp == "default":
+        palette = [_bare(c) for c in default_palette]
+    else:
+        palette = list(RAMPS[ramp])
     if invert:
         palette.reverse()
     vis = {"palette": palette}
@@ -59,16 +70,22 @@ def continuous_vis(ramp: str, invert: bool = False, span=None) -> dict:
     return vis
 
 
-def ramp_choice(vis: Optional[dict]) -> Tuple[Optional[str], bool]:
+def ramp_choice(
+    vis: Optional[dict], default_palette=None
+) -> Tuple[Optional[str], bool]:
     """``(ramp_key, inverted)`` for a continuous ``vis_params``, or ``(None, False)``.
 
     Inversion is stored as the reversed palette, so it is recovered by matching
-    the palette against each ramp both ways.
+    the palette against each ramp both ways. A preset wins over
+    ``default_palette`` (``"default"``) when both match.
     """
     palette = [_bare(c) for c in (vis or {}).get("palette") or []]
     if not palette:
         return None, False
-    for key, ramp in RAMPS.items():
+    ramps = dict(RAMPS)
+    if default_palette:
+        ramps["default"] = [_bare(c) for c in default_palette]
+    for key, ramp in ramps.items():
         if palette == ramp:
             return key, False
         if palette == list(reversed(ramp)):
@@ -76,22 +93,24 @@ def ramp_choice(vis: Optional[dict]) -> Tuple[Optional[str], bool]:
     return None, False
 
 
-def ramp_css(ramp: str, invert: bool = False) -> str:
+def ramp_css(ramp: str, invert: bool = False, default_palette=None) -> str:
     """A CSS ``linear-gradient`` previewing a ramp, for the modal's ramp buttons."""
-    palette = continuous_vis(ramp, invert)["palette"]
+    palette = continuous_vis(ramp, invert, default_palette=default_palette)["palette"]
     return "linear-gradient(to right, " + ", ".join(f"#{c}" for c in palette) + ")"
 
 
-def ramp_menu_css(menu_class: str, invert: bool) -> str:
+def ramp_menu_css(menu_class: str, invert: bool, default_palette=None) -> str:
     """CSS drawing each ramp's bar before the n-th item of the ramp select's menu.
 
     A widget slot cannot read the row it is drawn for, so the bars are CSS.
+    With a ``default_palette``, "default" is the first item.
     """
     return "\n".join(
         f".{menu_class} .v-list-item:nth-child({i}) .v-list-item__title::before {{"
         f"content:'';display:inline-block;width:72px;height:12px;border-radius:2px;"
-        f"margin-right:10px;vertical-align:middle;background:{ramp_css(key, invert)};}}"
-        for i, key in enumerate(RAMPS, start=1)
+        f"margin-right:10px;vertical-align:middle;"
+        f"background:{ramp_css(key, invert, default_palette)};}}"
+        for i, key in enumerate(ramp_keys(default_palette), start=1)
     )
 
 

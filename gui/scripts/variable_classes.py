@@ -27,14 +27,21 @@ ERR_LIMIT = "vars.modal.err_class_limit"
 ERR_NO_VISIBLE = "vars.modal.err_no_visible_class"
 
 
-def make(value, color, label: str = "", visible: bool = True) -> dict:
-    """One class, in its stored form."""
-    return {
+def make(value, color, label: str = "", visible: bool = True, label_key=None) -> dict:
+    """One class, in its stored form.
+
+    ``label_key`` (an i18n key) is stored only when given: a catalogue class
+    keeps showing its translated name until the user types their own.
+    """
+    out = {
         "value": int(value),
         "color": _bare(color)[:6],
         "label": str(label),
         "visible": bool(visible),
     }
+    if label_key:
+        out["label_key"] = label_key
+    return out
 
 
 def default_classes(absent: str = "0", present: str = "1") -> List[dict]:

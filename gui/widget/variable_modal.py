@@ -19,8 +19,10 @@ from gui.scripts.legend_data import Label, format_number, variable_spec_from_vis
 from gui.scripts.predefined import (
     active_param_specs,
     aoi_param_defaults,
+    default_vis,
     resolved_entry,
     validate_entry,
+    vis_override,
 )
 from gui.scripts.predefined_variables import (
     GROUP_ORDER,
@@ -75,6 +77,11 @@ _RASTER_EXTENSIONS = [".tif", ".tiff", ".vrt", ".nc"]
 # The visualization fields stack with one gap; their own details are hidden.
 _VIS_FIELDS = "display:flex;flex-direction:column;gap:10px;margin-bottom:12px;"
 _VECTOR_EXTENSIONS = [".geojson", ".gpkg", ".shp", ".json"]
+# The Advanced and Display sections: a toggle row, then an indented block.
+_TOGGLE = "justify-content:flex-start;padding:0 4px;margin:4px 0;text-transform:none;"
+_SECTION = (
+    "padding-left:8px;margin-bottom:8px;border-left:2px solid rgba(128,128,128,0.35);"
+)
 
 
 def _predefined_items():
@@ -116,9 +123,79 @@ def custom_vis(raster_type: str, classes, ramp: str, invert: bool, span=None):
     return palettes.continuous_vis(ramp, invert, span)
 
 
+def _own_palette(default):
+    """A catalogue palette offered as the "default" ramp, or None.
+
+    A palette that is a preset shows as that preset: None here.
+    """
+    palette = (default or {}).get("palette")
+    if not palette or palettes.ramp_choice({"palette": palette})[0]:
+        return None
+    return palette
+
+
+def _display_state(vis, kind, default_palette=None, default=None):
+    """The style fields' state for ``vis``, a saved or default style.
+
+    ``kind`` and ``values`` are the raster type and the class values of the
+    default (``default``, else ``vis``) the fields are seeded for: a style
+    seeded for another one is reseeded, never submitted.
+    """
+    vis = vis or {}
+    values = _class_values(default or vis)
+    classes = []
+    if kind == RasterType.categorical.value:
+        # Also reads a legacy ``["ffffff", colour]`` 0..1 mask as its classes.
+        classes = vc.from_vis(vis) or []
+        named = {c["value"]: c for c in (default or {}).get("classes") or []}
+        if not vis.get("classes") and _class_values({"classes": classes}) == values:
+            # A legacy mask has no names: the catalogue's translated ones.
+            classes = [
+                vc.make(
+                    c["value"],
+                    c["color"],
+                    named[c["value"]]["label"],
+                    c["visible"],
+                    named[c["value"]].get("label_key"),
+                )
+                for c in classes
+            ]
+    ramp, invert = palettes.ramp_choice(vis, default_palette)
+    pinned = "min" in vis and "max" in vis
+    return {
+        "kind": kind,
+        "values": values,
+        "classes": classes,
+        "ramp": ramp or ("default" if default_palette else palettes.DEFAULT_RAMP),
+        "invert": invert,
+        "vmin": _number_text(vis["min"]) if pinned else "",
+        "vmax": _number_text(vis["max"]) if pinned else "",
+    }
+
+
+def _class_values(vis):
+    return frozenset(c["value"] for c in (vis or {}).get("classes") or [])
+
+
+def _style_vis(style, categorical, default_palette=None):
+    """The ``vis_params`` the style fields show, None while they cannot be drawn."""
+    if categorical:
+        return {"classes": [dict(c) for c in style["classes"]]}
+    valid, span = probes.parse_span(style["vmin"], style["vmax"])
+    # A "default" ramp whose layer now has a preset palette waits for its reseed.
+    if not valid or style["ramp"] not in palettes.ramp_keys(default_palette):
+        return None
+    return palettes.continuous_vis(
+        style["ramp"], style["invert"], span, default_palette
+    )
+
+
 def _number_text(value) -> str:
     value = float(value)
     return str(int(value)) if value.is_integer() else str(value)
+
+
+_NO_DISPLAY = _display_state(None, None)
 
 
 def _type_display(var_type: str) -> str:
@@ -229,6 +306,11 @@ def VariableModal(
     vmax, set_vmax = solara.use_state("")
     seed = vc.default_classes(t("legend.class.absent"), t("legend.class.present"))
     classes, set_classes = solara.use_state(seed)
+    # A predefined layer's display style: the fields, seeded from the catalogue
+    # default or the saved override, and whether the user changed them since.
+    display, set_display = solara.use_state(_NO_DISPLAY)
+    display_open, set_display_open = solara.use_state(False)
+    display_touched, set_display_touched = solara.use_state(False)
 
     def _start_classes(kind, method):
         """The classes a new layer of this kind starts from."""
@@ -290,6 +372,16 @@ def VariableModal(
         else None
     )
 
+    display_kind = cat["raster_type"] if cat is not None else None
+    display_default = default_vis(predefined_key, _typed) if cat is not None else None
+    own_palette = _own_palette(display_default)
+    display_categorical = display_kind == RasterType.categorical.value
+    display_vis = (
+        _style_vis(display, display_categorical, own_palette)
+        if display_default is not None and display["kind"] == display_kind
+        else None
+    )
+
     # A non-temporal predefined layer never carries a year, even if one is
     # left in the state from a previously selected temporal layer.
     _year = (
@@ -347,6 +439,9 @@ def VariableModal(
         set_vmin("")
         set_vmax("")
         set_classes(seed)
+        set_display(_NO_DISPLAY)
+        set_display_open(False)
+        set_display_touched(False)
         _clear_probes()
         probed.current = None
         set_error(None)
@@ -402,12 +497,53 @@ def VariableModal(
         pinned = continuous and "min" in vis and "max" in vis
         set_vmin(_number_text(vis["min"]) if pinned else "")
         set_vmax(_number_text(vis["max"]) if pinned else "")
+        # A predefined layer stores only an override: one opens the section.
+        override = bool(vis) and initial_key in PREDEFINED_CATALOGUE
+        if initial_key in PREDEFINED_CATALOGUE:
+            default = default_vis(initial_key, initial_params)
+            set_display(
+                _display_state(
+                    vis or default,
+                    resolved_entry(initial_key, initial_params)["raster_type"],
+                    _own_palette(default),
+                    default,
+                )
+            )
+        set_display_open(override)
+        set_display_touched(override)
         _clear_probes()
         saved_ref = initial_entry.get("asset_id") or initial_entry.get("path")
         probed.current = (saved_ref, initial_entry.get("band")) if saved_ref else None
         set_error(None)
 
     solara.use_effect(prefill_from_initial, [open_.value])
+
+    def _reseed_display():
+        # Another layer or params: the fields follow the new default unless
+        # the user changed them. A raster type flip always reseeds, as class
+        # colours cannot style a continuous layer (Design 6), and so do new
+        # class values (their colours would be stale) and a "default" ramp
+        # whose layer now has a preset palette.
+        if cat is None:
+            return
+        moved = display["values"] != _class_values(display_default)
+        stale = moved or (display["ramp"] == "default" and own_palette is None)
+        if display_touched and display["kind"] == display_kind and not stale:
+            return
+        set_display(_display_state(display_default, display_kind, own_palette))
+        set_display_touched(False)
+
+    solara.use_effect(
+        _reseed_display, [predefined_key, display_kind, repr(display_default)]
+    )
+
+    def _on_display(field, value):
+        set_display(lambda prev: {**prev, field: value})
+        set_display_touched(True)
+
+    def _reset_display():
+        set_display(_display_state(display_default, display_kind, own_palette))
+        set_display_touched(False)
 
     # ---- value probes (gui.scripts.variable_probes) ----
     is_gee = var_type == "GEEVar"
@@ -533,6 +669,8 @@ def VariableModal(
         defaults = _aoi_seeded_defaults(key or "")
         set_params_raw(_raw_params(defaults))
         set_advanced_open(False)
+        set_display_open(False)
+        set_display_touched(False)
         if key in PREDEFINED_CATALOGUE and _parse_year(year) is not None:
             new_cat = resolved_entry(key, defaults)
             if new_cat["temporal"] and _parse_year(year) not in new_cat["years"]:
@@ -595,6 +733,21 @@ def VariableModal(
                 )
             )
             return
+        resolved = resolved_entry(predefined_key, values)
+        default = default_vis(predefined_key, values)
+        vis_params = None
+        # Fields seeded for the other raster type are dropped (Design 6).
+        if default is not None and display["kind"] == resolved["raster_type"]:
+            as_classes = resolved["raster_type"] == RasterType.categorical.value
+            class_error = as_classes and vc.validate(display["classes"])
+            if class_error:
+                set_error(t(class_error))
+                return
+            current = _style_vis(display, as_classes, _own_palette(default))
+            if current is None:
+                set_error(t("vars.modal.err_range"))
+                return
+            vis_params = vis_override(default, current)
         entry = {
             "source": "predefined",
             "type": "GEEVar",
@@ -605,11 +758,11 @@ def VariableModal(
             "data_type": DataType.raster,
             # Resolved: e.g. active_fire is categorical for "any" detection but
             # continuous for fire days.
-            "raster_type": RasterType(
-                resolved_entry(predefined_key, values)["raster_type"]
-            ),
+            "raster_type": RasterType(resolved["raster_type"]),
             "predefined_key": predefined_key,
             "params": values,
+            # Only what differs from the catalogue default; None follows it.
+            "vis_params": vis_params,
         }
         reset()
         open_.set(False)
@@ -701,86 +854,73 @@ def VariableModal(
         if probe_error:
             solara.Text(probe_error, classes=["error--text"])
 
-    def _legend_preview():
-        # The legend the map will show, built the way the map builds it.
-        mid = None
-        if categorical:
-            if not vc.visible_classes(classes):
-                return
-            vis, kind = {"classes": classes}, "custom_classes"
-        else:
-            valid, span = probes.parse_span(vmin, vmax)
-            if not valid:
-                return
-            vis, kind = palettes.continuous_vis(ramp, invert, span), "custom_palette"
-            if span:
-                mid = format_number((span[0] + span[1]) / 2)
-        var = SimpleNamespace(name=name, raster_type=raster_type, vis_params=vis)
-        spec = variable_spec_from_vis(vis, kind, var, Label(literal=name))
-        LegendPreview(spec=spec, mid=mid)
+    def _find_probe():
+        if not is_vector or unique:  # a vector mask is always 0 and 1
+            _probe_button(
+                "vars.modal.find_classes",
+                "vars.modal.find_features_hint"
+                if is_vector
+                else "vars.modal.find_classes_hint",
+                "mdi-magnify",
+                classes_task,
+                set_classes_error,
+                classes_error,
+            )
+        if zero_one:
+            solara.Text(
+                t("vars.modal.zero_one_note"), style=MUTED + "font-size:0.8rem;"
+            )
 
     def _vis_fields():
         """A custom layer's visualization, under its raster type or method."""
-        with rv.Html(tag="div", style_=_VIS_FIELDS):
-            if categorical:
-                if not is_vector or unique:  # a vector mask is always 0 and 1
-                    _probe_button(
-                        "vars.modal.find_classes",
-                        "vars.modal.find_features_hint"
-                        if is_vector
-                        else "vars.modal.find_classes_hint",
-                        "mdi-magnify",
-                        classes_task,
-                        set_classes_error,
-                        classes_error,
-                    )
-                if zero_one:
-                    solara.Text(
-                        t("vars.modal.zero_one_note"), style=MUTED + "font-size:0.8rem;"
-                    )
-                # Keyed on the raster: a clear also empties "Add a value".
-                ClassList(classes=classes, on_classes=set_classes, disabled=busy).key(
-                    f"classes|{ref}"
-                )
-                with rv.Html(tag="div"):
-                    PaletteMenu(
-                        value=vc.palette_of(classes),
-                        on_value=lambda key: set_classes(vc.recolor(classes, key)),
-                        disabled=busy or not classes,
-                    )
-            else:
-                RampSelect(
-                    value=ramp,
-                    on_value=set_ramp,
-                    invert=invert,
-                    on_invert=set_invert,
-                    disabled=busy,
-                )
-                with rv.Html(tag="div", style_="display:flex;gap:12px;"):
-                    for label_key, value, setter in (
-                        ("vars.modal.range_min", vmin, set_vmin),
-                        ("vars.modal.range_max", vmax, set_vmax),
-                    ):
-                        rv.TextField(
-                            label=t(label_key),
-                            v_model=value,
-                            on_v_model=setter,
-                            type="number",
-                            dense=True,
-                            outlined=True,
-                            hide_details=True,
-                            disabled=busy,
-                            style_="flex:1;min-width:0;",
-                        )
-                _probe_button(
-                    "vars.modal.stretch",
-                    "vars.modal.stretch_hint",
-                    "mdi-arrow-expand-horizontal",
-                    stretch_task,
-                    set_stretch_error,
-                    stretch_error,
-                )
-            _legend_preview()
+        setters = {
+            "classes": set_classes,
+            "ramp": set_ramp,
+            "invert": set_invert,
+            "vmin": set_vmin,
+            "vmax": set_vmax,
+        }
+        _style_fields(
+            {
+                "classes": classes,
+                "ramp": ramp,
+                "invert": invert,
+                "vmin": vmin,
+                "vmax": vmax,
+            },
+            lambda field, value: setters[field](value),
+            categorical,
+            disabled=busy,
+            list_key=ref,
+            raster_type=raster_type,
+            name=name,
+            find_probe=_find_probe,
+            stretch_probe=lambda: _probe_button(
+                "vars.modal.stretch",
+                "vars.modal.stretch_hint",
+                "mdi-arrow-expand-horizontal",
+                stretch_task,
+                set_stretch_error,
+                stretch_error,
+            ),
+        )
+
+    def _display_section():
+        _render_display_section(
+            display_default is not None,
+            vis_override(display_default, display_vis) is not None,
+            display_open,
+            set_display_open,
+            lambda: _style_fields(
+                display,
+                _on_display,
+                display_categorical,
+                default_palette=own_palette,
+                list_key=predefined_key,
+                raster_type=display_kind,
+            ),
+            _reset_display,
+        )
 
     title = t("vars.modal.title_edit") if is_edit else t("vars.modal.title_add")
     submit_label = t("vars.modal.submit_save") if is_edit else t("common.add")
@@ -838,6 +978,7 @@ def VariableModal(
                         advanced_open,
                         set_advanced_open,
                         availability_error=availability_error,
+                        display_section=_display_section,
                     )
                 else:
                     _render_custom_fields(
@@ -905,8 +1046,13 @@ def _render_predefined_fields(
     advanced_open,
     set_advanced_open,
     availability_error=None,
+    display_section=lambda: None,
 ):
-    """Fields shown when source == 'predefined'."""
+    """Fields shown when source == 'predefined'.
+
+    ``display_section`` draws the layer's Display section (the modal owns its
+    state).
+    """
     rv.Select(
         label=t("vars.modal.predefined_variable_label"),
         items=_predefined_items(),
@@ -960,15 +1106,19 @@ def _render_predefined_fields(
         advanced = [
             s for s in advanced_param_specs(predefined_key) if s["key"] in active
         ]
-        if advanced:
-            _render_advanced_section(
-                predefined_key,
-                advanced,
-                params_raw,
-                set_params_raw,
-                advanced_open,
-                set_advanced_open,
-            )
+        # Always-present boxes: opening a section must not shift the next.
+        with rv.Html(tag="div"):
+            if advanced:
+                _render_advanced_section(
+                    predefined_key,
+                    advanced,
+                    params_raw,
+                    set_params_raw,
+                    advanced_open,
+                    set_advanced_open,
+                )
+        with rv.Html(tag="div"):
+            display_section()
 
         with rv.Html(tag="div"):
             if availability_error:
@@ -1104,16 +1254,12 @@ def _render_advanced_section(
         on_click=lambda: set_advanced_open(not advanced_open),
         text=True,
         small=True,
-        style="justify-content:flex-start;padding:0 4px;margin:4px 0;"
-        "text-transform:none;",
+        style=_TOGGLE,
     )
     if not advanced_open:
         return
     defaults = _raw_params({s["key"]: s["default"] for s in specs})
-    with solara.Div(
-        style="padding-left:8px;margin-bottom:8px;"
-        "border-left:2px solid rgba(128,128,128,0.35);"
-    ):
+    with solara.Div(style=_SECTION):
         with rv.Html(tag="div"):
             for spec in specs:
                 _render_param_field(spec, params_raw, set_params_raw)
@@ -1124,6 +1270,124 @@ def _render_advanced_section(
             text=True,
             x_small=True,
         )
+
+
+def _render_display_section(editable, changed, is_open, set_open, fields, on_reset):
+    """Collapsed "Display" block: a toggle row, then the style fields.
+
+    Built like the Advanced section. "(changed)" marks a style that differs
+    from the catalogue default. A layer with random colours shows a note.
+    """
+    label = t("vars.modal.display_toggle")
+    if changed:
+        label = f"{label} {t('vars.modal.display_changed')}"
+    solara.Button(
+        label,
+        icon_name="mdi-chevron-up" if is_open else "mdi-chevron-down",
+        on_click=lambda: set_open(not is_open),
+        text=True,
+        small=True,
+        style=_TOGGLE,
+    )
+    if not is_open:
+        return
+    with solara.Div(style=_SECTION):
+        if not editable:
+            solara.Text(
+                t("vars.modal.display_random_note"), style=MUTED + "font-size:0.8rem;"
+            )
+            return
+        fields()
+        solara.Button(
+            t("vars.modal.display_reset"),
+            icon_name="mdi-restore",
+            on_click=on_reset,
+            text=True,
+            x_small=True,
+        )
+
+
+def _style_fields(
+    style,
+    on_field,
+    categorical,
+    *,
+    disabled=False,
+    default_palette=None,
+    list_key="",
+    raster_type="",
+    name="",
+    find_probe=None,
+    stretch_probe=None,
+):
+    """Class list and palette menu, or ramp and Min/Max; then the legend preview.
+
+    ``style`` has ``_display_state``'s fields and ``on_field(field, value)``
+    sets one. The probe callables (custom layers) draw the find and stretch
+    buttons.
+    """
+    classes = style["classes"]
+    with rv.Html(tag="div", style_=_VIS_FIELDS):
+        if categorical:
+            if find_probe:
+                find_probe()
+            # Keyed on the raster: a clear also empties "Add a value".
+            ClassList(
+                classes=classes,
+                on_classes=lambda value: on_field("classes", value),
+                disabled=disabled,
+            ).key(f"classes|{list_key}")
+            with rv.Html(tag="div"):
+                PaletteMenu(
+                    value=vc.palette_of(classes),
+                    on_value=lambda key: on_field("classes", vc.recolor(classes, key)),
+                    disabled=disabled or not classes,
+                )
+        else:
+            ramp = style["ramp"]
+            RampSelect(
+                value=ramp if ramp in palettes.ramp_keys(default_palette) else None,
+                on_value=lambda value: on_field("ramp", value),
+                invert=style["invert"],
+                on_invert=lambda value: on_field("invert", value),
+                disabled=disabled,
+                default_palette=default_palette,
+            )
+            with rv.Html(tag="div", style_="display:flex;gap:12px;"):
+                for label_key, field in (
+                    ("vars.modal.range_min", "vmin"),
+                    ("vars.modal.range_max", "vmax"),
+                ):
+                    rv.TextField(
+                        label=t(label_key),
+                        v_model=style[field],
+                        on_v_model=lambda value, f=field: on_field(f, value),
+                        type="number",
+                        dense=True,
+                        outlined=True,
+                        hide_details=True,
+                        disabled=disabled,
+                        style_="flex:1;min-width:0;",
+                    )
+            if stretch_probe:
+                stretch_probe()
+        _legend_preview(
+            _style_vis(style, categorical, default_palette),
+            categorical,
+            raster_type,
+            name,
+        )
+
+
+def _legend_preview(vis, categorical, raster_type, name=""):
+    """The legend the map will show for ``vis``, built the way the map builds it."""
+    if vis is None or (categorical and not vc.visible_classes(vis["classes"])):
+        return
+    kind = "custom_classes" if categorical else "custom_palette"
+    mid = format_number((vis["min"] + vis["max"]) / 2) if "min" in vis else None
+    var = SimpleNamespace(name=name, raster_type=raster_type, vis_params=vis)
+    spec = variable_spec_from_vis(vis, kind, var, Label(literal=name))
+    LegendPreview(spec=spec, mid=mid)
 
 
 def _render_custom_fields(

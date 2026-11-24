@@ -10,6 +10,7 @@ import itertools
 import re
 
 import pytest
+from _catalogue_checks import _combos, _kind, _value_space
 from _ee_fake import install
 
 from gui import i18n
@@ -126,25 +127,6 @@ def test_param_labels_resolve(key):
             assert i18n.t(label_key) != label_key, (key, label_key)
 
 
-def _kind(spec):
-    return spec.get("type", "int")
-
-
-def _value_space(spec):
-    """Representative values: all options/subsets; int min, default, max.
-
-    Year specs: the first and last offered year.
-    """
-    kind = _kind(spec)
-    if kind == "year":
-        return [spec["options"][0], spec["options"][-1]]
-    if kind == "choice":
-        return list(spec["options"])
-    if kind == "multichoice":
-        return [parse_segment(spec, seg)[1] for seg in spec_segments(spec)]
-    return sorted({spec["min"], spec["default"], spec["max"]})
-
-
 @pytest.mark.parametrize("key", KEYS)
 def test_exhaustive_roundtrip(key):
     """Build and resolve are inverses over the representative value space.
@@ -193,19 +175,6 @@ def test_depends_on_shape(key):
             assert ctrl.get("type", "int") == "choice", where
             assert allowed, where
             assert set(allowed) <= set(ctrl["options"]), where
-
-
-def _combos(key):
-    """Every distinct full value combination (inactive params at default)."""
-    specs = param_specs(key)
-    seen = []
-    for combo in itertools.product(*[_value_space(spec) for spec in specs]):
-        values = inactive_to_defaults(
-            key, {spec["key"]: value for spec, value in zip(specs, combo)}
-        )
-        if values not in seen:
-            seen.append(values)
-    return seen or [{}]
 
 
 YEAR_MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")

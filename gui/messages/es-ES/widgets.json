@@ -103,7 +103,10 @@
       "operation": "Operación",
       "inputs": "Capas de entrada",
       "years": "Años",
-      "file_path": "Ruta del archivo"
+      "file_path": "Ruta del archivo",
+      "display": "Parámetros de visualización",
+      "display_default": "Predeterminado del catálogo",
+      "display_custom": "Personalizado"
     },
     "variable_list": {
       "source_title": "Variables fuente",
