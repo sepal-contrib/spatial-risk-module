@@ -69,7 +69,7 @@ def test_interval_layer_shows_start_and_end_selects_not_year():
         assert _select(rc, "vars.modal.param_start_year").v_model == 2015
         end = _select(rc, "vars.modal.param_end_year")
         assert end.v_model == 2020
-        assert end.items == list(range(2001, 2027))
+        assert end.items == list(range(2026, 2000, -1))  # newest first (#35)
         assert _select(rc, "vars.modal.predefined_year_label") is None
     finally:
         rc.close()
@@ -186,11 +186,11 @@ def test_logging_period_switch_swaps_the_year_selects():
             rc, "vars.modal.predefined_variable_label"
         ).v_model = "logging_mapbiomas"
         assert _select(rc, TIMING).v_model == "yearly"
-        assert _select(rc, YEAR).items == list(range(1988, 2025))
+        assert _select(rc, YEAR).items == list(range(2024, 1987, -1))
         assert _select(rc, START) is None and _select(rc, END) is None
         _select(rc, TIMING).v_model = "period"
         assert _select(rc, YEAR) is None
-        assert _select(rc, START).items == list(range(1988, 2026))
+        assert _select(rc, START).items == list(range(2025, 1987, -1))
         assert _select(rc, END) is not None
         # The pair sits below the Period switch that shows it.
         labels = _select_labels_in_page_order(rc.find(vw.Dialog).widgets[0])

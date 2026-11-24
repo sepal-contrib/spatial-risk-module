@@ -170,9 +170,9 @@ def test_modal_year_list_and_raster_type_follow_the_params():
         handle_error=False,
     )
     try:
-        assert list(_select(rc, YEAR).items) == [2010, 2011, 2012]
+        assert list(_select(rc, YEAR).items) == [2012, 2011, 2010]  # newest first (#35)
         _select(rc, MODE).v_model = "mask"
-        assert list(_select(rc, YEAR).items) == [2001, 2002]
+        assert list(_select(rc, YEAR).items) == [2002, 2001]
         _select(rc, YEAR).v_model = 2002
         submit = t("common.add")
         [b for b in rc.find(vw.Btn).widgets if submit in str(b.children)][0].click()

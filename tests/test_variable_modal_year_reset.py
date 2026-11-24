@@ -46,17 +46,53 @@ def _sections(rc, text):
     ]
 
 
-def test_switching_layer_clears_a_year_the_new_layer_lacks():
-    """1985 picked on another layer is cleared on forest_gfc (from 2001)."""
-    added = []
-    rc = _render(added)
+def test_switching_layer_replaces_a_year_the_new_layer_lacks():
+    """1985 picked on another layer becomes forest_gfc's newest year (#35)."""
+    rc = _render([])
     try:
         _select(rc, LAYER).v_model = "precipitation"
         _select(rc, YEAR).v_model = 1985
         _select(rc, LAYER).v_model = "forest_gfc"
-        assert _select(rc, YEAR).v_model is None
-        _submit(rc)
-        assert added == []
+        assert _select(rc, YEAR).v_model == max(_select(rc, YEAR).items)
+    finally:
+        rc.close()
+
+
+def test_year_selects_list_newest_first_and_default_to_the_newest():
+    """#35: the most recent data is at the top and picked by default."""
+    rc = _render([])
+    try:
+        _select(rc, LAYER).v_model = "forest_gfc"
+        year = _select(rc, YEAR)
+        assert year.items == sorted(year.items, reverse=True)
+        assert year.v_model == year.items[0] == 2026
+        # 2026 is a 1 January state, not a year of data the source lacks.
+        assert year.hint == t("vars.modal.year_hint_forest", year=2026, previous=2025)
+        _select(rc, LAYER).v_model = "deforestation_gfc"
+        start = _select(rc, "vars.modal.param_start_year")
+        assert start.items == sorted(start.items, reverse=True)
+        assert start.v_model is None  # a period is always an explicit choice
+    finally:
+        rc.close()
+
+
+def _custom_year(rc):
+    label = t("vars.modal.custom_year_label")
+    return [f for f in rc.find(vw.TextField).widgets if f.label == label][0]
+
+
+def test_the_predefined_year_never_lands_in_the_custom_year_field():
+    """Each source keeps its own year."""
+    rc = _render([])
+    try:
+        _select(rc, LAYER).v_model = "forest_gfc"
+        _select(rc, "vars.modal.source_label").v_model = "custom"
+        assert _custom_year(rc).v_model == ""
+        _custom_year(rc).v_model = "2015"
+        _select(rc, "vars.modal.source_label").v_model = "predefined"
+        assert _select(rc, YEAR).v_model == 2026
+        _select(rc, "vars.modal.source_label").v_model = "custom"
+        assert _custom_year(rc).v_model == "2015"
     finally:
         rc.close()
 

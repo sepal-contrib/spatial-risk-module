@@ -82,9 +82,10 @@ def test_years_follow_the_period():
     """Years follow the period."""
     _box, rc = _render(_entry("burned_area", None))
     try:
-        assert list(_select(rc, YEAR).items) == list(range(2001, 2026))
+        # Newest first (#35).
+        assert list(_select(rc, YEAR).items) == list(range(2025, 2000, -1))
         _select(rc, PERIOD).v_model = "jul"
-        assert list(_select(rc, YEAR).items)[-1] == 2026
+        assert list(_select(rc, YEAR).items)[0] == 2026
     finally:
         rc.close()
 

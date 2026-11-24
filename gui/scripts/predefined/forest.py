@@ -86,6 +86,9 @@ ENTRIES = {
         # 2001 is the first: Hansen records no loss in 2000, so a period from
         # 2000 would count one year with no data and understate the rate.
         "years": list(range(2001, 2027)),
+        # A year is a 1 January state (2026 = forest after the 2025 loss), so
+        # the year select spells out the date it stands for (#35).
+        "year_hint_key": "vars.modal.year_hint_forest",
         # User-selectable knobs, rendered generically by the Add Variable modal
         # (same shape as MODEL_REGISTRY["params"] in gui/tile/train_tile.py).
         # ``suffix_prefix`` makes the value part of the variable name
@@ -129,6 +132,7 @@ ENTRIES = {
         # v1_2024 carries Dec1990..Dec2024, so years run to 2025. Bump this
         # alongside the asset ID in ``_get_forest_tmf``.
         "years": list(range(2001, 2026)),
+        "year_hint_key": "vars.modal.year_hint_forest",
         "params": [tmf_definition_param()],
         "get_image": _get_forest_tmf,
         "vis_params": {"palette": ["ffffff", "2e7d32"], "min": 0, "max": 1},

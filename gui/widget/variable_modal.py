@@ -277,6 +277,10 @@ def VariableModal(
     var_type, set_var_type = solara.use_state(VAR_TYPES[0])
     name, set_name = solara.use_state("")
     year, set_year = solara.use_state("")
+    # The year each source last held: the two share the year field, so a
+    # predefined layer's default year never lands in the custom Year field and
+    # a typed one survives a look at the other source.
+    year_by_source = solara.use_ref({})
     # Raw (string) values for the selected predefined layer's declared params,
     # keyed by param key. Coerced to ints on submit.
     params_raw, set_params_raw = solara.use_state({})
@@ -424,6 +428,7 @@ def VariableModal(
         set_var_type(VAR_TYPES[0])
         set_name("")
         set_year("")
+        year_by_source.current = {}
         set_file_path("")
         set_asset_id("")
         set_scale("")
@@ -464,6 +469,7 @@ def VariableModal(
         set_var_type(initial_entry.get("type", VAR_TYPES[0]))
         set_name(initial_entry.get("name", ""))
         set_year(str(initial_entry.get("year") or ""))
+        year_by_source.current = {}
         set_file_path(initial_entry.get("path", ""))
         set_asset_id(initial_entry.get("asset_id", ""))
         set_scale(initial_entry.get("scale", ""))
@@ -659,7 +665,8 @@ def VariableModal(
     def on_select_predefined(key):
         """Select a predefined layer and seed its params with catalogue defaults.
 
-        The previous layer's values must not leak across.
+        The previous layer's values must not leak across. The year stays when
+        the new layer offers it, else it becomes the layer's newest year.
         """
         set_predefined_key(key or "")
         defaults = _aoi_seeded_defaults(key or "")
@@ -667,10 +674,18 @@ def VariableModal(
         set_advanced_open(False)
         set_display_open(False)
         set_display_touched(False)
-        if key in PREDEFINED_CATALOGUE and _parse_year(year) is not None:
+        if key in PREDEFINED_CATALOGUE:
             new_cat = resolved_entry(key, defaults)
             if new_cat["temporal"] and _parse_year(year) not in new_cat["years"]:
-                set_year("")
+                set_year(str(max(new_cat["years"])) if new_cat["years"] else "")
+
+    def on_select_source(value):
+        """Switch source; each source gets back the year it last held."""
+        if value == source:
+            return
+        year_by_source.current[source] = year
+        set_source(value)
+        set_year(year_by_source.current.get(value, ""))
 
     def _submit_predefined():
         if not predefined_key:
@@ -954,7 +969,7 @@ def VariableModal(
                     label=t("vars.modal.source_label"),
                     items=_source_items(),
                     v_model=source,
-                    on_v_model=set_source,
+                    on_v_model=on_select_source,
                     dense=True,
                     outlined=True,
                     hint=t("vars.modal.source_hint"),
@@ -1070,14 +1085,21 @@ def _render_predefined_fields(
 
         # Year — selectable list for temporal variables
         if cat["temporal"]:
-            available_years = cat.get("years", [])
+            picked = _parse_year(year)
+            hint_key = cat.get("year_hint_key")
             rv.Select(
                 label=t("vars.modal.predefined_year_label"),
-                items=available_years,
-                v_model=int(year) if year and str(year).strip() else None,
+                items=sorted(cat.get("years", []), reverse=True),  # newest first
+                v_model=picked,
                 on_v_model=lambda v: set_year(str(v) if v else ""),
                 dense=True,
                 outlined=True,
+                hint=(
+                    t(hint_key, year=picked, previous=picked - 1)
+                    if hint_key and picked
+                    else ""
+                ),
+                persistent_hint=bool(hint_key and picked),
             )
 
         # Layer-specific knobs declared by the catalogue, rendered generically
@@ -1176,7 +1198,7 @@ def _render_param_field(spec, params_raw, set_params_raw):
         raw = str(params_raw.get(pkey, "") or "").strip()
         rv.Select(
             label=t(spec["label_key"]),
-            items=list(spec["options"]),
+            items=sorted(spec["options"], reverse=True),  # newest first
             # Blank (None) until picked: interval years have no default.
             v_model=int(raw) if raw.isdigit() else None,
             on_v_model=lambda v, k=pkey: set_params_raw(
