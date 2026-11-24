@@ -78,8 +78,13 @@ def test_legacy_roads_opens_collapsed():
     """A plain ``roads`` layer shows no advanced fields until the user asks."""
     rc = _render(None)
     try:
-        assert _source(rc) is None
-        assert _types(rc) is None
+        panel = [
+            p
+            for p in rc.find(vw.ExpansionPanels).widgets
+            if t("vars.modal.advanced_toggle")
+            in str(p.children[0].children[0].children)
+        ]
+        assert panel[0].v_model is None
     finally:
         rc.close()
 

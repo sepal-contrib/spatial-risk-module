@@ -42,6 +42,7 @@ from gui.widget.band_select import (
     bands_block_save,
     use_band_list,
 )
+from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS
 from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
 from gui.widget.enter_key import ENTER_DEFAULT
 from gui.widget.text_style import MUTED
@@ -77,11 +78,6 @@ _RASTER_EXTENSIONS = [".tif", ".tiff", ".vrt", ".nc"]
 # The visualization fields stack with one gap; their own details are hidden.
 _VIS_FIELDS = "display:flex;flex-direction:column;gap:10px;margin-bottom:12px;"
 _VECTOR_EXTENSIONS = [".geojson", ".gpkg", ".shp", ".json"]
-# The Advanced and Display sections: a toggle row, then an indented block.
-_TOGGLE = "justify-content:flex-start;padding:0 4px;margin:4px 0;text-transform:none;"
-_SECTION = (
-    "padding-left:8px;margin-bottom:8px;border-left:2px solid rgba(128,128,128,0.35);"
-)
 
 
 def _predefined_items():
@@ -948,6 +944,7 @@ def VariableModal(
     with dialog:
         with rv.Card():
             solara.Style(NUDGE_CSS)
+            solara.Style(_ADVANCED_PANEL_CSS)
             with rv.CardTitle():
                 solara.Text(title)
 
@@ -1246,28 +1243,18 @@ def _render_param_field(spec, params_raw, set_params_raw):
 def _render_advanced_section(
     predefined_key, specs, params_raw, set_params_raw, advanced_open, set_advanced_open
 ):
-    """Collapsed "Advanced parameters" block: a toggle row, then the specs.
+    """Collapsed "Advanced parameters" panel holding the specs.
 
-    The toggle is a ``solara.Button`` — ``rv.Btn(on_click=)`` drops clicks.
-    The label carries "(n changed)" so a collapsed section still shows that
+    The header carries "(n changed)" so a collapsed panel still shows that
     non-default values are in play.
     """
     n_changed = changed_advanced_count(predefined_key, params_raw)
     label = t("vars.modal.advanced_toggle")
     if n_changed:
         label = f"{label} {t('vars.modal.advanced_changed', n=n_changed)}"
-    solara.Button(
-        label,
-        icon_name="mdi-chevron-up" if advanced_open else "mdi-chevron-down",
-        on_click=lambda: set_advanced_open(not advanced_open),
-        text=True,
-        small=True,
-        style=_TOGGLE,
-    )
-    if not advanced_open:
-        return
     defaults = _raw_params({s["key"]: s["default"] for s in specs})
-    with solara.Div(style=_SECTION):
+
+    def body():
         with rv.Html(tag="div"):
             for spec in specs:
                 _render_param_field(spec, params_raw, set_params_raw)
@@ -1279,27 +1266,39 @@ def _render_advanced_section(
             x_small=True,
         )
 
+    _panel(label, advanced_open, set_advanced_open, body)
+
+
+def _panel(label, is_open, set_open, body):
+    """A collapsed section in the Train/Inference "Advanced parameters" style.
+
+    ``body`` is built while closed too, so opening is a client-side expand
+    that does not wait for the server to send the fields.
+    """
+    with rv.ExpansionPanels(
+        flat=True,
+        class_="advanced-params",
+        v_model=0 if is_open else None,
+        on_v_model=lambda value: set_open(value == 0),
+        style_="margin-bottom:8px;",
+    ):
+        with rv.ExpansionPanel():
+            rv.ExpansionPanelHeader(children=[label])
+            with rv.ExpansionPanelContent():
+                body()
+
 
 def _render_display_section(editable, changed, is_open, set_open, fields, on_reset):
-    """Collapsed "Display" block: a toggle row, then the style fields.
+    """Collapsed "Visualization parameters" panel holding the style fields.
 
-    Built like the Advanced section. "(changed)" marks a style that differs
+    Built like the Advanced panel. "(changed)" marks a style that differs
     from the catalogue default. A layer with random colours shows a note.
     """
     label = t("vars.modal.display_toggle")
     if changed:
         label = f"{label} {t('vars.modal.display_changed')}"
-    solara.Button(
-        label,
-        icon_name="mdi-chevron-up" if is_open else "mdi-chevron-down",
-        on_click=lambda: set_open(not is_open),
-        text=True,
-        small=True,
-        style=_TOGGLE,
-    )
-    if not is_open:
-        return
-    with solara.Div(style=_SECTION):
+
+    def body():
         if not editable:
             solara.Text(
                 t("vars.modal.display_random_note"), style=MUTED + "font-size:0.8rem;"
@@ -1313,6 +1312,8 @@ def _render_display_section(editable, changed, is_open, set_open, fields, on_res
             text=True,
             x_small=True,
         )
+
+    _panel(label, is_open, set_open, body)
 
 
 def _style_fields(

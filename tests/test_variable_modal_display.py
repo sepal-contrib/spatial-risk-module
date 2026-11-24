@@ -39,6 +39,15 @@ def _buttons(rc, text):
     return [b for b in rc.find(vw.Btn).widgets if text in str(b.children)]
 
 
+def _sections(rc, text):
+    """The collapsible panels whose header contains ``text``."""
+    return [
+        p
+        for p in rc.find(vw.ExpansionPanels).widgets
+        if text in str(p.children[0].children[0].children)
+    ]
+
+
 def _select(rc, label_key):
     label = t(label_key)
     matches = [s for s in rc.find(vw.Select).widgets if s.label == label]
@@ -51,11 +60,15 @@ def _swatches(rc):
 
 def _changed(rc):
     label = f"{t(TOGGLE)} {t('vars.modal.display_changed')}"
-    return bool(_buttons(rc, label))
+    return bool(_sections(rc, label))
+
+
+def _is_open(rc):
+    return _sections(rc, t(TOGGLE))[0].v_model == 0
 
 
 def _open_display(rc):
-    _buttons(rc, t(TOGGLE))[0].click()
+    _sections(rc, t(TOGGLE))[0].v_model = 0
 
 
 def _recolour_last_class(rc, color="#123456"):
@@ -71,7 +84,7 @@ def test_display_opens_seeded_with_the_catalogue_default():
     rc = _render()
     try:
         _select(rc, LAYER).v_model = "deforestation_gfc"
-        assert _swatches(rc) == []  # collapsed
+        assert not _is_open(rc)
         _open_display(rc)
         colors = [s.style_ for s in _swatches(rc)]
         assert len(colors) == 2
@@ -112,7 +125,7 @@ def test_untouched_display_submits_no_override():
     saved = []
     rc = _render(_predefined("rivers", {}), saved=saved, editing_key="rivers")
     try:
-        assert _swatches(rc) == []  # no saved style: collapsed
+        assert not _is_open(rc)  # no saved style: collapsed
         _buttons(rc, t("vars.modal.submit_save"))[0].click()
         assert saved and saved[0]["vis_params"] is None
     finally:
@@ -152,8 +165,9 @@ def test_reset_to_default_clears_the_override():
     )
     try:
         swatches = _swatches(rc)
-        assert swatches and "123456" in swatches[1].style_  # opened on the saved style
-        _buttons(rc, t("vars.modal.display_reset"))[0].click()
+        assert _is_open(rc) and "123456" in swatches[1].style_  # the saved style
+        # [-1]: Advanced's "Reset to defaults", above, also matches.
+        _buttons(rc, t("vars.modal.display_reset"))[-1].click()
         assert not _changed(rc)
         _buttons(rc, t("vars.modal.submit_save"))[0].click()
         assert saved and saved[0]["vis_params"] is None

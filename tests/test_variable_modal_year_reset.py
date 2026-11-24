@@ -37,6 +37,15 @@ def _submit(rc):
     [b for b in rc.find(vw.Btn).widgets if text in str(b.children)][0].click()
 
 
+def _sections(rc, text):
+    """The collapsible panels whose header contains ``text``."""
+    return [
+        p
+        for p in rc.find(vw.ExpansionPanels).widgets
+        if text in str(p.children[0].children[0].children)
+    ]
+
+
 def test_switching_layer_clears_a_year_the_new_layer_lacks():
     """1985 picked on another layer is cleared on forest_gfc (from 2001)."""
     added = []
@@ -70,8 +79,7 @@ def test_a_year_the_method_does_not_offer_is_refused():
     rc = _render(added)
     try:
         _select(rc, LAYER).v_model = "towns"
-        toggle = t("vars.modal.advanced_toggle")
-        [b for b in rc.find(vw.Btn).widgets if toggle in str(b.children)][0].click()
+        _sections(rc, t("vars.modal.advanced_toggle"))[0].v_model = 0
         _select(rc, "vars.modal.param_towns_method").v_model = "smod"
         _select(rc, YEAR).v_model = 2025
         _select(rc, "vars.modal.param_towns_method").v_model = "ghsl"

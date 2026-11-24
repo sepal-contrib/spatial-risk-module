@@ -29,12 +29,25 @@ def _buttons(rc, text):
     return [b for b in rc.find(vw.Btn).widgets if text in str(b.children)]
 
 
+def _sections(rc, text):
+    """The collapsible panels whose header contains ``text``."""
+    return [
+        p
+        for p in rc.find(vw.ExpansionPanels).widgets
+        if text in str(p.children[0].children[0].children)
+    ]
+
+
 def _select(rc, label):
     matches = [s for s in rc.find(vw.Select).widgets if s.label == label]
     return matches[0] if matches else None
 
 
 WATER = "vars.modal.param_water_classes"
+
+
+def _is_open(rc):
+    return _sections(rc, t("vars.modal.advanced_toggle"))[0].v_model == 0
 
 
 def _rivers_entry(params):
@@ -45,8 +58,8 @@ def test_advanced_section_is_collapsed_by_default():
     """A fresh layer shows the toggle but hides the advanced fields."""
     _box, rc = _render(_rivers_entry(None))
     try:
-        assert _buttons(rc, t("vars.modal.advanced_toggle"))
-        assert _select(rc, t(WATER)) is None
+        assert _sections(rc, t("vars.modal.advanced_toggle"))
+        assert not _is_open(rc)
     finally:
         rc.close()
 
@@ -55,7 +68,7 @@ def test_toggle_opens_a_multiple_select_seeded_with_defaults():
     """Opening the section shows a multiple select holding the defaults."""
     _box, rc = _render(_rivers_entry(None))
     try:
-        _buttons(rc, t("vars.modal.advanced_toggle"))[0].click()
+        _sections(rc, t("vars.modal.advanced_toggle"))[0].v_model = 0
         sel = _select(rc, t(WATER))
         assert sel is not None and sel.multiple is True
         assert sel.v_model == ["large", "major", "canal", "stream"]
@@ -78,9 +91,9 @@ def test_edit_with_non_default_values_opens_and_counts_changes():
     )
     try:
         sel = _select(rc, t(WATER))
-        assert sel is not None, "advanced section should auto-open"
+        assert _is_open(rc), "advanced section should auto-open"
         assert sel.v_model == ["large", "major", "canal"]  # a list, not "['large', …]"
-        assert _buttons(rc, t("vars.modal.advanced_changed", n=1))
+        assert _sections(rc, t("vars.modal.advanced_changed", n=1))
         assert "rivers_wlmc" in " ".join(
             str(w.children) for w in rc.find(vw.Html).widgets
         )
@@ -97,7 +110,7 @@ def test_edit_legacy_bare_name_opens_collapsed_with_defaults():
         on_save=lambda key, entry: saved.append((key, entry)),
     )
     try:
-        assert _select(rc, t(WATER)) is None
+        assert not _is_open(rc)
         _buttons(rc, t("vars.modal.submit_save"))[0].click()
         assert saved and saved[0][0] == "rivers"
         assert saved[0][1]["name"] == "rivers"
@@ -116,8 +129,8 @@ def test_edit_partial_params_seeds_missing_defaults_collapsed():
     """
     _box, rc = _render(_rivers_entry({"stale_knob": 1}), editing_key="rivers")
     try:
-        assert _select(rc, t(WATER)) is None, "defaults only: stay collapsed"
-        _buttons(rc, t("vars.modal.advanced_toggle"))[0].click()
+        assert not _is_open(rc), "defaults only: stay collapsed"
+        _sections(rc, t("vars.modal.advanced_toggle"))[0].v_model = 0
         sel = _select(rc, t(WATER))
         assert sel is not None
         assert sel.v_model == ["large", "major", "canal", "stream"]
@@ -169,10 +182,10 @@ def test_switching_layer_resets_advanced_state():
         layer = _select(rc, t("vars.modal.predefined_variable_label"))
         layer.v_model = "forest_tmf"
         assert _select(rc, t(WATER)) is None
-        assert _select(rc, t("vars.modal.param_tmf_definition")) is None  # collapsed
+        assert not _is_open(rc)
         layer.v_model = "rivers"
-        assert _select(rc, t(WATER)) is None  # collapsed again, defaults re-seeded
-        _buttons(rc, t("vars.modal.advanced_toggle"))[0].click()
+        assert not _is_open(rc)  # collapsed again, defaults re-seeded
+        _sections(rc, t("vars.modal.advanced_toggle"))[0].v_model = 0
         assert _select(rc, t(WATER)).v_model == ["large", "major", "canal", "stream"]
     finally:
         rc.close()
@@ -184,7 +197,7 @@ def test_layers_without_advanced_params_show_no_toggle():
         {"source": "predefined", "predefined_key": "forest_gfc", "params": None}
     )
     try:
-        assert not _buttons(rc, t("vars.modal.advanced_toggle"))
+        assert not _sections(rc, t("vars.modal.advanced_toggle"))
     finally:
         rc.close()
 

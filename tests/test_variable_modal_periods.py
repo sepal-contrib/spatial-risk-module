@@ -61,6 +61,15 @@ def _click(rc, label_key):
     [b for b in rc.find(vw.Btn).widgets if text in str(b.children)][0].click()
 
 
+def _sections(rc, text):
+    """The collapsible panels whose header contains ``text``."""
+    return [
+        p
+        for p in rc.find(vw.ExpansionPanels).widgets
+        if text in str(p.children[0].children[0].children)
+    ]
+
+
 def _availability_alerts(rc):
     return [
         a
@@ -126,7 +135,7 @@ def test_dry_spell_threshold_hides_for_raintotal():
         _select(rc, METRIC_DRY).v_model = "raintotal"
         assert _text_field(rc, THRESHOLD) is None
         # The hidden field must not shift the Advanced toggle off its handler.
-        _click(rc, "vars.modal.advanced_toggle")
+        _sections(rc, t("vars.modal.advanced_toggle"))[0].v_model = 0
         assert _select(rc, "vars.modal.param_rain_source") is not None
         _click(rc, "common.add")
         assert added and added[0]["name"] == "dry_spell_raintotal"
