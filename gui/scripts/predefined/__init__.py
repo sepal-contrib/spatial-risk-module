@@ -7,11 +7,13 @@ Public API. Theme modules (``terrain``, ``infrastructure``, ``water``,
 
 from gui.scripts.predefined.aoi import get_aoi_ee_feature, resolve_aoi_ee
 from gui.scripts.predefined.catalogue import (
+    CUSTOM_TAG,
     DYNAMIC_ATTRS,
     GROUP_ORDER,
     PREDEFINED_CATALOGUE,
     PREDEFINED_NAMES,
     entry_for_name,
+    entry_for_variable,
     resolved_entry,
     validate_entry,
 )
@@ -44,6 +46,7 @@ from gui.scripts.predefined.periods import (
 )
 
 __all__ = [
+    "CUSTOM_TAG",
     "DYNAMIC_ATTRS",
     "GROUP_ORDER",
     "PREDEFINED_CATALOGUE",
@@ -60,6 +63,7 @@ __all__ = [
     "default_param_values",
     "describe_params",
     "entry_for_name",
+    "entry_for_variable",
     "get_aoi_ee_feature",
     "inactive_to_defaults",
     "is_editable",

@@ -23,6 +23,8 @@ def prepare_predefined_download(var, overwrite=False):
     already on disk (``GEEVar._download`` skips the export, so the hook's
     Earth Engine cost would buy nothing).
     """
+    if getattr(var, "path", None):
+        return None  # a user's own asset, even one named like a catalogue layer
     key, params, entry = entry_for_name(getattr(var, "name", "") or "")
     hook = entry.get("prepare_download") if entry else None
     if hook is None or not getattr(var, "gee_images", None):

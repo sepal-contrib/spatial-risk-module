@@ -187,9 +187,9 @@ def _catalogue_entry(var):
     key, the same way the style resolvers do. Param-dependent fields (unit,
     legend classes) are evaluated for the params in the name.
     """
-    from gui.scripts.predefined import entry_for_name
+    from gui.scripts.predefined import entry_for_variable
 
-    return entry_for_name(getattr(var, "name", "") or "")[2]
+    return entry_for_variable(var)[2]
 
 
 def _is_categorical(render_kind: str, cat, var=None) -> bool:

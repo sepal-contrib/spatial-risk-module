@@ -122,3 +122,98 @@ def test_a_layer_that_cannot_be_rebuilt_is_kept_for_the_next_save(seen, monkeypa
     assert "forest_gfc_tc45_2020" not in loaded.raw_variables
     loaded.save()
     assert set(Project.load("cloud").cloud_variables) == {"forest_gfc_tc45_2020"}
+
+
+def test_a_layer_gone_from_the_catalogue_is_reported_once_then_dropped(seen):
+    """No catalogue entry and no asset id: nothing can rebuild it, ever."""
+    loaded = _save_and_reload(
+        (
+            "forest_gfc_tc45_2020",
+            GEEVar(
+                name="forest_gfc_tc45",
+                year=2020,
+                data_type=DataType.raster,
+                gee_images=["IMAGE"],
+            ),
+        )
+    )
+    loaded.cloud_variables["retired_layer"] = {"name": "retired_layer"}
+
+    assert restore_cloud_variables(loaded) == ["retired_layer"]
+    assert loaded.cloud_variables == {}
+    assert "forest_gfc_tc45_2020" in loaded.raw_variables
+
+
+def test_the_aoi_is_resolved_once_for_all_layers(seen, monkeypatch):
+    """Converting a drawn AOI is costly; two layers share one conversion."""
+    loaded = _save_and_reload(
+        *(
+            (
+                f"forest_gfc_tc45_{year}",
+                GEEVar(
+                    name="forest_gfc_tc45",
+                    year=year,
+                    data_type=DataType.raster,
+                    gee_images=["IMAGE"],
+                ),
+            )
+            for year in (2019, 2020)
+        )
+    )
+    calls = []
+    fake_aoi = ee.Geometry.__new__(ee.Geometry)
+    monkeypatch.setattr(pv, "resolve_aoi_ee", lambda r: calls.append(r) or fake_aoi)
+
+    assert restore_cloud_variables(loaded) == []
+    assert len(loaded.raw_variables) == 2 and len(calls) == 1
+
+
+def test_adding_the_layer_again_supersedes_its_saved_recipe(seen, monkeypatch):
+    """Re-added then removed, a failed recipe must not bring the layer back."""
+    import solara
+    from _notification_host import render_under_notifications
+
+    from gui.tile import variables_tile
+
+    loaded = _save_and_reload(
+        (
+            "forest_gfc_tc45_2020",
+            GEEVar(
+                name="forest_gfc_tc45",
+                year=2020,
+                data_type=DataType.raster,
+                gee_images=["IMAGE"],
+            ),
+        )
+    )
+    assert "forest_gfc_tc45_2020" in loaded.cloud_variables  # not yet restored
+    captured = {}
+
+    @solara.component
+    def _StubModal(**kwargs):
+        captured.update(kwargs)
+        solara.Text("modal")
+
+    monkeypatch.setattr(variables_tile, "VariableModal", _StubModal)
+    project = solara.reactive(loaded, equals=lambda a, b: a is b)
+    _, rc = render_under_notifications(
+        lambda: variables_tile.VariablesTile(project=project), handle_error=False
+    )
+    try:
+        captured["on_add"](
+            {
+                "source": "predefined",
+                "type": "GEEVar",
+                "name": "forest_gfc_tc45",
+                "year": 2020,
+                "data_type": DataType.raster,
+                "predefined_key": "forest_gfc",
+                "params": {"tree_cover_threshold": 45},
+            }
+        )
+    finally:
+        rc.close()
+
+    p = project.value
+    assert "forest_gfc_tc45_2020" in p.raw_variables
+    assert p.cloud_variables == {}

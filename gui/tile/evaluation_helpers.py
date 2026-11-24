@@ -129,8 +129,10 @@ def expected_forest_for_truth(truth_name):
 
     Interval targets declare ``forest_at_start`` in the catalogue:
     ``deforestation_gfc_tc30_2015_2020`` -> ``("forest_gfc_tc30", 2015)``,
-    ``degradation_tmf_2015_2020`` -> ``("forest_tmf", 2015)``. None for any
-    other name (Process-step loss layers, custom truths).
+    ``degradation_tmf_2015_2020`` -> ``("forest_tmf", 2015)``. An entry whose
+    forest map is dated at year end sets ``forest_year_offset: -1``: MapBiomas
+    LULC 2014 is the cover on 1 January 2015. None for any other name
+    (Process-step loss layers, custom truths).
     """
     from gui.scripts.predefined import build_predefined_name, entry_for_name
 
@@ -139,7 +141,8 @@ def expected_forest_for_truth(truth_name):
     if pair is None or params.get("start_year") is None:
         return None
     forest_key, forest_params = pair(params)
-    return build_predefined_name(forest_key, forest_params), int(params["start_year"])
+    year = int(params["start_year"]) + entry.get("forest_year_offset", 0)
+    return build_predefined_name(forest_key, forest_params), year
 
 
 def _paired_forest(project, truth_key):

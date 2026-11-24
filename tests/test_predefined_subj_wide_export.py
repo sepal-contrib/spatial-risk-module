@@ -125,6 +125,15 @@ def test_asset_id_geevar_is_skipped():
     assert prepare_predefined_download(var) is None
 
 
+def test_a_custom_asset_named_subj_keeps_its_own_image(monkeypatch, fake_ee, tmp_path):
+    """Shown on the map, an asset GEEVar holds an image; the hook leaves it alone."""
+    calls = _units(monkeypatch, 999)
+    var = _subj_var(fake_ee, tmp_path)
+    var.path = "projects/me/assets/subj"
+    assert prepare_predefined_download(var) is None
+    assert var.gee_images == ["byte-image"] and calls == []
+
+
 class _Proj:
     def __init__(self):
         self.raw_variables = {}

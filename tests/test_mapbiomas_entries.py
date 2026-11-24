@@ -400,7 +400,7 @@ def test_defo_all_vegetation_adds_secondary_codes(fake_ee):
     mapbiomas._get_deforestation_mapbiomas(
         "AOI", region="paraguay", vegetation="all", start_year=2015, end_year=2016
     )
-    assert fake_ee.args_of("remap") == [([2, 3], [1, 1], 0), ([4, 6], [1, 1], 0)]
+    assert fake_ee.args_of("remap") == [([2, 3, 5], [1, 1, 1], 0), ([4, 6], [1, 1], 0)]
 
 
 def test_defo_builder_refuses_a_start_before_the_region_data(fake_ee):
@@ -464,7 +464,8 @@ def test_defo_pairs_with_native_vegetation_lulc_at_start(region):
     start = mapbiomas.defo_interval_years(region)[0]
     name = f"deforestation_mapbiomas_{region}_{start}_{start + 1}"
     lulc_name, year = expected_forest_for_truth(name)
-    assert (lulc_name, year) == (f"mapbiomas_lulc_{region}_gfn", start)
+    # The target's baseline is LULC start - 1 (cover on 1 January of start).
+    assert (lulc_name, year) == (f"mapbiomas_lulc_{region}_gfn", start - 1)
     assert validate_entry("mapbiomas_lulc", {"region": region}, year) is None
 
 
@@ -912,7 +913,7 @@ def test_logging_period_pairs_with_lulc_forest_at_start():
 
     assert expected_forest_for_truth("logging_mapbiomas_brazil_period_2015_2020") == (
         "mapbiomas_lulc_brazil",
-        2015,
+        2014,
     )
     assert expected_forest_for_truth("logging_mapbiomas_brazil") is None
 

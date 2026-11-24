@@ -31,7 +31,8 @@ class Variable(BaseModel):
     # Catalogue layers leave it None and take their look from the catalogue.
     vis_params: Optional[Dict[str, Any]] = None
     # Catalogue parameter values a predefined layer was built with
-    # (``{"classes": ["large", "major", "canal"]}``); None for any other layer.
+    # (``{"classes": ["large", "major", "canal"]}``, ``{}`` when it has none);
+    # None for any other layer.
     params: Optional[Dict[str, Any]] = None
     grid_signature: Optional[str] = None
     """Signature of the geobox this file sits on (see harmonization.geobox_signature).

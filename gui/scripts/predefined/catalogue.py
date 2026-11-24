@@ -137,6 +137,17 @@ def entry_for_name(name):
     return key, full, resolved_entry(key, full)
 
 
+#: Tag on a layer the user added from a file or asset (``_build_variable``).
+CUSTOM_TAG = "custom"
+
+
+def entry_for_variable(var):
+    """``entry_for_name`` for a layer; none for a user's layer named like one."""
+    if CUSTOM_TAG in (getattr(var, "tags", None) or ()):
+        return None, {}, None
+    return entry_for_name(getattr(var, "name", "") or "")
+
+
 def validate_entry(catalogue_key, params, year):
     """The entry's ``validate(full params, year)`` result, or None.
 

@@ -53,10 +53,9 @@ def EvaluationFormDialog(project, open_, on_submit: Callable[[dict], None]):
         ti = parse_interval(p, key)
         set_interval(str(ti) if ti is not None else "")
         # An interval target names its forest-at-start layer (same threshold /
-        # definition, start year): pick it when the project has it.
-        paired = forest_key_for_truth(p, key)
-        if paired:
-            set_forest_key(paired)
+        # definition, start year): pick it when the project has it, else go
+        # back to the default rather than keep the previous target's pair.
+        set_forest_key(forest_key_for_truth(p, key) or default_forest_key(p) or "")
 
     def reset():
         set_truth_key("")

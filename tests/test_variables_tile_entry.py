@@ -450,6 +450,8 @@ def test_downloaded_catalogue_layer_reopens_as_predefined(tmp_path, monkeypatch)
         path=project.folders.data_raw_folder / f"{name}.tif",
         raster_type=RasterType.categorical,
         project=project,
+        # Copied from the GEEVar by to_local_raster: marks a catalogue layer.
+        params={"tree_cover_threshold": 30, "start_year": 2015, "end_year": 2020},
     )
     entry = _variable_to_entry(var.name, var, project)
 

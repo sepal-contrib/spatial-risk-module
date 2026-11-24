@@ -320,9 +320,9 @@ _LULC_ENTRY = {
 # --- deforestation (interval target, Part C contract) ------------------------------
 
 # value -> (baseline codes at start - 1, event codes in start .. end - 1).
-# DEFO_CLASSES: 2 primary vegetation, 3 secondary vegetation,
-# 4 primary suppression, 6 secondary suppression.
-DEFO_VEGETATION = {"primary": ((2,), (4,)), "all": ((2, 3), (4, 6))}
+# DEFO_CLASSES: 2 primary vegetation, 3 secondary vegetation, 4 primary
+# suppression, 5 recovery to secondary (vegetation again), 6 secondary suppression.
+DEFO_VEGETATION = {"primary": ((2,), (4,)), "all": ((2, 3, 5), (4, 6))}
 
 
 def defo_interval_years(region):
@@ -415,6 +415,7 @@ _DEFO_ENTRY = {
     "legend_class_keys": ("legend.class.stable", "legend.class.loss"),
     "validate": _validate_defo,
     "forest_at_start": _defo_forest_at_start,
+    "forest_year_offset": -1,  # the baseline is LULC start - 1, see above
     "prepare_download": _prepare_mapbiomas_download,
 }
 
@@ -768,6 +769,7 @@ _LOGGING_ENTRY = {
     "legend_class_keys": _logging_legend,
     "validate": _validate_logging,
     "forest_at_start": _logging_forest_at_start,
+    "forest_year_offset": -1,  # the baseline is LULC start - 1
     "prepare_download": _prepare_mapbiomas_download,
 }
 
