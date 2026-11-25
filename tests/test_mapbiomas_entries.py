@@ -33,7 +33,8 @@ MAPBIOMAS_KEYS = list(mapbiomas.ENTRIES)
 THEME_GROUP = {
     "mapbiomas_lulc": "forest",
     "deforestation_mapbiomas": "forest_change",
-    "mapbiomas_fire": "fire",
+    "burned_area_mapbiomas": "fire",
+    "fire_history_mapbiomas": "fire",
     "logging_mapbiomas": "forest_change",
     "mapbiomas_water": "water",
 }
@@ -471,58 +472,59 @@ def test_defo_pairs_with_native_vegetation_lulc_at_start(region):
     assert validate_entry("mapbiomas_lulc", {"region": region}, year) is None
 
 
-# --- mapbiomas_fire: burned area and fire history (Task 9) ----------------------
+# --- burned_area_mapbiomas ------------------------------------------------------
 
 FIRE_PERU = (
     ROOT + "peru/fire/collection2/mapbiomas_peru_fire_collection2_monthly_burned_v1"
 )
 FIRE_MONITOR = ROOT + "brazil/fire/monitor/mapbiomas_fire_monthly_burned_v1"
+BURNED = "burned_area_mapbiomas"
+HISTORY = "fire_history_mapbiomas"
 
 
 @pytest.mark.parametrize(
     "values, name",
     [
-        ({"region": "brazil", "product": "burned"}, "mapbiomas_fire_brazil_burned"),
+        ({"region": "brazil"}, "burned_area_mapbiomas_brazil"),
+        ({"region": "peru", "period": "sep"}, "burned_area_mapbiomas_peru_sep"),
         (
-            {"region": "peru", "product": "burned", "period": "sep"},
-            "mapbiomas_fire_peru_burned_sep",
+            {"region": "brazil", "period": "sep", "source": "monitor"},
+            "burned_area_mapbiomas_brazil_sep_monitor",
         ),
         (
-            {
-                "region": "brazil",
-                "product": "burned",
-                "period": "sep",
-                "source": "monitor",
-            },
-            "mapbiomas_fire_brazil_burned_sep_monitor",
-        ),
-        (
-            {"region": "brazil", "product": "burned", "source": "monitor"},
-            "mapbiomas_fire_brazil_burned_monitor",
+            {"region": "brazil", "source": "monitor"},
+            "burned_area_mapbiomas_brazil_monitor",
         ),
     ],
 )
-def test_fire_names(values, name):
-    """Fire names."""
-    full = _full("mapbiomas_fire", **values)
-    assert build_predefined_name("mapbiomas_fire", full) == name
-    assert resolve_predefined(name) == ("mapbiomas_fire", full)
+def test_burned_names(values, name):
+    """Burned area names."""
+    full = _full(BURNED, **values)
+    assert build_predefined_name(BURNED, full) == name
+    assert resolve_predefined(name) == (BURNED, full)
 
 
 @pytest.mark.parametrize(
     "name",
     [
-        "mapbiomas_fire_brazil_severity",  # burn severity is not offered
-        "mapbiomas_fire_brazil",  # product is always written
-        "mapbiomas_fire_brazil_burned_year",  # default written out
-        "mapbiomas_fire_brazil_burned_collection",  # default written out
-        "mapbiomas_fire_brazil_burned_monitor_sep",  # segments out of order
-        "mapbiomas_fire_amazon_burned",  # no Pan-Amazon fire
+        "burned_area_mapbiomas_brazil_severity",  # burn severity is not offered
+        "burned_area_mapbiomas_brazil_year",  # default written out
+        "burned_area_mapbiomas_brazil_collection",  # default written out
+        "burned_area_mapbiomas_brazil_monitor_sep",  # segments out of order
+        "burned_area_mapbiomas_amazon",  # no Pan-Amazon fire
+        "burned_area_mapbiomas_brazil_y5",  # window belongs to fire history
     ],
 )
-def test_fire_rejected_names(name):
-    """Fire rejected names."""
+def test_burned_rejected_names(name):
+    """Burned area rejected names."""
     assert resolve_predefined(name) == (None, {})
+
+
+def test_burned_does_not_shadow_modis_burned_area():
+    """The MODIS key is a prefix of the MapBiomas one: both still resolve."""
+    assert resolve_predefined("burned_area_viirs")[0] == "burned_area"
+    assert resolve_predefined("fire_history_y5")[0] == "fire_history"
+    assert resolve_predefined("fire_history_mapbiomas_brazil_y5")[0] == HISTORY
 
 
 def _region_mask_calls(lulc_asset):
@@ -534,9 +536,9 @@ def _region_mask_calls(lulc_asset):
     ]
 
 
-def test_fire_burned_collection_year(fake_ee):
-    """Fire burned collection year."""
-    mapbiomas._get_mapbiomas_fire("AOI", 2020, region="peru")
+def test_burned_collection_year(fake_ee):
+    """Burned area collection year."""
+    mapbiomas._get_burned_area_mapbiomas("AOI", 2020, region="peru")
     assert fake_ee.calls == [
         ("Image", (FIRE_PERU,), {}),
         ("select", ("burned_monthly_2020",), {}),
@@ -550,16 +552,16 @@ def test_fire_burned_collection_year(fake_ee):
     ]
 
 
-def test_fire_burned_collection_month_matches_the_burn_month(fake_ee):
-    """Fire burned collection month matches the burn month."""
-    mapbiomas._get_mapbiomas_fire("AOI", 2020, region="peru", period="sep")
+def test_burned_collection_month_matches_the_burn_month(fake_ee):
+    """Burned area collection month matches the burn month."""
+    mapbiomas._get_burned_area_mapbiomas("AOI", 2020, region="peru", period="sep")
     assert fake_ee.calls[2] == ("eq", (9,), {})
     assert "gt" not in fake_ee.names()[:3]
 
 
-def test_fire_monitor_month(fake_ee):
-    """Fire monitor month."""
-    mapbiomas._get_mapbiomas_fire(
+def test_burned_monitor_month(fake_ee):
+    """Burned area monitor month."""
+    mapbiomas._get_burned_area_mapbiomas(
         "AOI", 2026, region="brazil", period="sep", source="monitor"
     )
     assert fake_ee.args_of("ImageCollection") == [(FIRE_MONITOR,)]
@@ -569,41 +571,40 @@ def test_fire_monitor_month(fake_ee):
     assert names.index("max") < names.index("gt") < names.index("unmask")
 
 
-def test_fire_monitor_year_takes_every_month_of_the_year(fake_ee):
-    """Fire monitor year takes every month of the year."""
-    mapbiomas._get_mapbiomas_fire("AOI", 2025, region="brazil", source="monitor")
+def test_burned_monitor_year_takes_every_month_of_the_year(fake_ee):
+    """Burned area monitor year takes every month of the year."""
+    mapbiomas._get_burned_area_mapbiomas("AOI", 2025, region="brazil", source="monitor")
     assert fake_ee.args_of("Filter.eq") == [("year", 2025)]
     assert "max" in fake_ee.names()
 
 
 def test_fire_offers_no_burn_severity():
-    """Burn severity was dropped: no product option, no registry asset."""
-    assert "severity" not in mapbiomas.FIRE_PRODUCT_PARAM["options"]
+    """Burn severity was dropped: no registry asset."""
     assert not reg.has_product("brazil", "fire_severity")
     assert "fire_severity" not in reg.FAMILIES["fire"]
 
 
-def test_fire_years():
-    """Fire years."""
-    assert resolved_entry("mapbiomas_fire", {"region": "paraguay"})["years"] == list(
+def test_burned_years():
+    """Burned area years."""
+    assert resolved_entry(BURNED, {"region": "paraguay"})["years"] == list(
         range(1999, 2025)
     )
     monitor = {"source": "monitor"}
-    assert resolved_entry("mapbiomas_fire", monitor)["years"] == list(range(2019, 2026))
-    assert resolved_entry("mapbiomas_fire", {**monitor, "period": "oct"})[
-        "years"
-    ] == list(range(2019, 2027))
-    assert resolved_entry("mapbiomas_fire", {**monitor, "period": "nov"})[
-        "years"
-    ] == list(range(2019, 2026))
+    assert resolved_entry(BURNED, monitor)["years"] == list(range(2019, 2026))
+    assert resolved_entry(BURNED, {**monitor, "period": "oct"})["years"] == list(
+        range(2019, 2027)
+    )
+    assert resolved_entry(BURNED, {**monitor, "period": "nov"})["years"] == list(
+        range(2019, 2026)
+    )
 
 
-def test_fire_validate_monitor_months():
+def test_burned_validate_monitor_months():
     """Review focus 2: 2026 annual is partial; Nov 2026 is not published yet."""
-    params = {"region": "brazil", "product": "burned", "source": "monitor"}
-    assert validate_entry("mapbiomas_fire", {**params, "period": "oct"}, 2026) is None
+    params = {"region": "brazil", "source": "monitor"}
+    assert validate_entry(BURNED, {**params, "period": "oct"}, 2026) is None
     for period in ("nov", "year"):
-        err = validate_entry("mapbiomas_fire", {**params, "period": period}, 2026)
+        err = validate_entry(BURNED, {**params, "period": period}, 2026)
         assert err == (
             "vars.mapbiomas.error_period",
             {
@@ -614,28 +615,27 @@ def test_fire_validate_monitor_months():
         )
 
 
-def test_fire_validate_monitor_outside_brazil():
+def test_burned_validate_monitor_outside_brazil():
     """The Fire Monitor is Brazil only."""
     peru = {"region": t("vars.mapbiomas.region_peru")}
-    assert validate_entry(
-        "mapbiomas_fire",
-        {"region": "peru", "product": "burned", "source": "monitor"},
-        2020,
-    ) == ("vars.mapbiomas.error_not_available", peru)
+    assert validate_entry(BURNED, {"region": "peru", "source": "monitor"}, 2020) == (
+        "vars.mapbiomas.error_not_available",
+        peru,
+    )
 
 
-def test_fire_validate_rejects_stale_year_after_region_switch():
+def test_burned_validate_rejects_stale_year_after_region_switch():
     """Review focus 3: 1990 is fine for Brazil, not for Colombia."""
-    assert validate_entry("mapbiomas_fire", {"region": "brazil"}, 1990) is None
-    assert validate_entry("mapbiomas_fire", {"region": "colombia"}, 1990) == (
+    assert validate_entry(BURNED, {"region": "brazil"}, 1990) is None
+    assert validate_entry(BURNED, {"region": "colombia"}, 1990) == (
         "vars.mapbiomas.error_year",
         {"region": t("vars.mapbiomas.region_colombia"), "first": 2000, "last": 2025},
     )
 
 
-def test_fire_display():
-    """Fire display."""
-    burned = resolved_entry("mapbiomas_fire", {})
+def test_burned_display():
+    """Burned area display."""
+    burned = resolved_entry(BURNED, {})
     assert burned["raster_type"] == "categorical"
     assert burned["vis_params"] == {"palette": ["ffffff", "d84315"], "min": 0, "max": 1}
     assert burned["legend_class_keys"] == (
@@ -645,89 +645,93 @@ def test_fire_display():
     assert burned.get("class_labels") is None
 
 
-# --- mapbiomas_fire: since / frequency (Task 10) ----------------------------------
+# --- fire_history_mapbiomas: same params and values as the MODIS fire_history ----
+
+
+def test_history_shares_the_modis_params():
+    """Metric and look-back are the MODIS fire_history param specs."""
+    modis = {s["key"]: s for s in param_specs("fire_history")}
+    ours = {s["key"]: s for s in param_specs(HISTORY)}
+    assert list(ours) == ["region", "metric", "window"]
+    assert ours["metric"] == modis["metric"]
+    assert ours["window"] == modis["window"]
 
 
 @pytest.mark.parametrize(
     "values, name",
     [
-        ({"region": "brazil", "product": "since"}, "mapbiomas_fire_brazil_since"),
+        ({"region": "brazil"}, "fire_history_mapbiomas_brazil"),
         (
-            {"region": "peru", "product": "frequency", "window": 5},
-            "mapbiomas_fire_peru_frequency_w5",
+            {"region": "brazil", "metric": "since"},
+            "fire_history_mapbiomas_brazil_since",
         ),
+        ({"region": "peru", "window": 5}, "fire_history_mapbiomas_peru_y5"),
     ],
 )
-def test_fire_history_names(values, name):
+def test_history_names(values, name):
     """Fire history names."""
-    full = _full("mapbiomas_fire", **values)
-    assert build_predefined_name("mapbiomas_fire", full) == name
-    assert resolve_predefined(name) == ("mapbiomas_fire", full)
+    full = _full(HISTORY, **values)
+    assert build_predefined_name(HISTORY, full) == name
+    assert resolve_predefined(name) == (HISTORY, full)
 
 
 @pytest.mark.parametrize(
     "name",
     [
-        "mapbiomas_fire_brazil_burned_w5",  # window is inactive for burned
-        "mapbiomas_fire_brazil_since_sep",  # period is inactive for since
-        "mapbiomas_fire_brazil_since_monitor",  # source is inactive for since
-        "mapbiomas_fire_brazil_since_w10",  # default written out
-        "mapbiomas_fire_brazil_since_w26",  # above max
+        "fire_history_mapbiomas_brazil_sep",  # no period: annual data
+        "fire_history_mapbiomas_brazil_monitor",  # no source
+        "fire_history_mapbiomas_brazil_y10",  # default written out
+        "fire_history_mapbiomas_brazil_count",  # default written out
+        "fire_history_mapbiomas_brazil_y21",  # above max
     ],
 )
-def test_fire_history_rejected_names(name):
+def test_history_rejected_names(name):
     """Fire history rejected names."""
     assert resolve_predefined(name) == (None, {})
 
 
-def test_fire_since_builder(fake_ee):
-    """Fire since builder."""
-    mapbiomas._get_mapbiomas_fire(
-        "AOI", 2020, region="brazil", product="since", window=10
+def test_history_since_builder(fake_ee):
+    """since: 0 = burned the year before, window = none (MODIS convention)."""
+    mapbiomas._get_fire_history_mapbiomas(
+        "AOI", 2020, region="brazil", metric="since", window=10
     )
     bands = [a[0] for a in fake_ee.args_of("select") if a[0] != 0]
     assert bands == [f"burned_monthly_{y}" for y in range(2010, 2020)]
     [(images,)] = fake_ee.args_of("ImageCollection")
     assert len(images) == 10
     assert [a[0] for a in fake_ee.args_of("multiply")] == list(range(2010, 2020))
-    assert ("Image", (2020,), {}) in fake_ee.calls
-    assert ("where", (ANY, 11), {}) in fake_ee.calls
+    assert ("Image", (2019,), {}) in fake_ee.calls
+    assert ("where", (ANY, 10), {}) in fake_ee.calls
     assert fake_ee.names()[-4:] == ["updateMask", "toInt16", "clip", "rename"]
 
 
-def test_fire_frequency_builder(fake_ee):
-    """Fire frequency builder."""
-    mapbiomas._get_mapbiomas_fire(
-        "AOI", 2020, region="peru", product="frequency", window=5
-    )
+def test_history_count_builder(fake_ee):
+    """count: burned years in the look-back."""
+    mapbiomas._get_fire_history_mapbiomas("AOI", 2020, region="peru", window=5)
     bands = [a[0] for a in fake_ee.args_of("select") if a[0] != 0]
     assert bands == [f"burned_monthly_{y}" for y in range(2015, 2020)]
     assert "sum" in fake_ee.names() and "where" not in fake_ee.names()
 
 
-def test_fire_history_years_and_validate():
+def test_history_years_and_validate():
     """Fire history years and validate."""
-    since = {"region": "brazil", "product": "since"}
-    assert resolved_entry("mapbiomas_fire", since)["years"] == list(range(1995, 2027))
-    freq = {"region": "paraguay", "product": "frequency", "window": 25}
-    assert resolved_entry("mapbiomas_fire", freq)["years"] == [2024, 2025]
-    assert validate_entry("mapbiomas_fire", since, 1994) == (
+    since = {"region": "brazil", "metric": "since"}
+    assert resolved_entry(HISTORY, since)["years"] == list(range(1995, 2027))
+    longest = {"region": "paraguay", "window": 20}
+    assert resolved_entry(HISTORY, longest)["years"] == list(range(2019, 2026))
+    assert validate_entry(HISTORY, since, 1994) == (
         "vars.mapbiomas.error_year",
         {"region": t("vars.mapbiomas.region_brazil"), "first": 1995, "last": 2026},
     )
 
 
-def test_fire_history_display():
+def test_history_display():
     """Fire history display."""
-    since = resolved_entry("mapbiomas_fire", {"product": "since", "window": 5})
-    assert since["raster_type"] == "continuous"
-    assert since["unit_key"] == "legend.unit.years_value"
-    assert since["vis_params"]["min"] == 1 and since["vis_params"]["max"] == 6
-    freq = resolved_entry("mapbiomas_fire", {"product": "frequency"})
-    assert freq["raster_type"] == "continuous"
-    assert freq["unit_key"] == "legend.unit.plain_value"
-    assert freq["vis_params"]["min"] == 0 and freq["vis_params"]["max"] == 10
-    assert resolved_entry("mapbiomas_fire", {})["unit_key"] is None
+    for metric in ("count", "since"):
+        entry = resolved_entry(HISTORY, {"metric": metric, "window": 5})
+        assert entry["raster_type"] == "continuous"
+        assert entry["unit_key"] == "legend.unit.years_value"
+        assert entry["vis_params"]["min"] == 0 and entry["vis_params"]["max"] == 5
 
 
 # --- logging_mapbiomas: By year / Over a period ---------------------------------------

@@ -29,7 +29,12 @@ ROUND1_KEYS = (
     [
         f"vars.{section}.{key}"
         for section in ("predefined", "predefined_info")
-        for key in ("mapbiomas_lulc", "deforestation_mapbiomas", "mapbiomas_fire")
+        for key in (
+            "mapbiomas_lulc",
+            "deforestation_mapbiomas",
+            "burned_area_mapbiomas",
+            "fire_history_mapbiomas",
+        )
     ]
     + [
         f"vars.modal.{key}"
@@ -42,13 +47,6 @@ ROUND1_KEYS = (
             "lulc_mode_groups",
             "param_lulc_groups",
             "param_lulc_groups_hint",
-            "param_fire_product",
-            "param_fire_product_hint",
-            "fire_product_burned",
-            "fire_product_since",
-            "fire_product_frequency",
-            "param_fire_window",
-            "param_fire_window_hint",
             "param_mapbiomas_fire_source",
             "param_mapbiomas_fire_source_hint",
             "mapbiomas_fire_source_collection",

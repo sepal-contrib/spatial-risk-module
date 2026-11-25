@@ -319,15 +319,14 @@ def test_month_period_follows_the_year():
 
 
 def test_controllers_come_before_the_year():
-    """Region and product set the year list, so they sit above it."""
-    rc = _render(_predefined("mapbiomas_fire"))
+    """The region sets the year list, so it sits above it."""
+    rc = _render(_predefined("burned_area_mapbiomas"))
     assert _subsequence(
         _labels_in_page_order(rc),
         [
-            _param_label("mapbiomas_fire", "region"),
-            _param_label("mapbiomas_fire", "product"),
+            _param_label("burned_area_mapbiomas", "region"),
             YEAR,
-            _param_label("mapbiomas_fire", "period"),
+            _param_label("burned_area_mapbiomas", "period"),
             RASTER,
         ],
     )
@@ -355,12 +354,12 @@ def test_year_pair_follows_the_basic_params():
 
 
 def test_inactive_period_leaves_the_year_alone():
-    """Fire history product: no Period, Year still before Raster type."""
-    rc = _render(_predefined("mapbiomas_fire", {"product": "since"}))
+    """Fire history (MapBiomas): no Period, Year still before Raster type."""
+    rc = _render(_predefined("fire_history_mapbiomas", {"metric": "since"}))
     labels = _labels_in_page_order(rc)
-    assert _param_label("mapbiomas_fire", "period") not in labels
+    assert _param_label("burned_area_mapbiomas", "period") not in labels
     assert _subsequence(
-        labels, [_param_label("mapbiomas_fire", "product"), YEAR, RASTER]
+        labels, [_param_label("fire_history_mapbiomas", "metric"), YEAR, RASTER]
     )
 
 

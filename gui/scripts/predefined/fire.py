@@ -227,6 +227,39 @@ _FIRE_DAYS_VIS = {"palette": ["ffffcc", "fd8d3c", "bd0026"]}
 _FIRE_FRP_VIS = {"palette": ["ffffcc", "fe9929", "cc4c02", "662506"]}
 
 
+# Shared with fire_history_mapbiomas, so both fire histories read the same.
+HISTORY_METRIC_PARAM = {
+    "key": "metric",
+    "label_key": "vars.modal.param_history_metric",
+    "hint_key": "vars.modal.param_history_metric_hint",
+    "type": "choice",
+    "default": "count",
+    "options": ["count", "since"],
+    "option_label_key_prefix": "vars.modal.history_metric_",
+    "suffix_prefix": "",
+    "omit_default": True,
+}
+
+HISTORY_WINDOW_PARAM = {
+    "key": "window",
+    "label_key": "vars.modal.param_history_window",
+    "hint_key": "vars.modal.param_history_window_hint",
+    "type": "int",
+    "default": 10,
+    "min": 1,
+    "max": 20,
+    "suffix_prefix": "y",
+    "omit_default": True,
+}
+
+
+def history_vis(params):
+    """count: more fire = darker; since: recent fire = darker."""
+    if params["metric"] == "count":
+        return {"palette": ["ffffff", "fdae61", "d7191c", "67001f"]}
+    return {"palette": ["67001f", "d7191c", "fdae61", "ffffff"]}
+
+
 def _burn_sensor_param():
     return {
         "key": "sensor",
@@ -340,28 +373,8 @@ ENTRIES = {
         "raster_type": "continuous",
         "temporal": True,
         "params": [
-            {
-                "key": "metric",
-                "label_key": "vars.modal.param_history_metric",
-                "hint_key": "vars.modal.param_history_metric_hint",
-                "type": "choice",
-                "default": "count",
-                "options": ["count", "since"],
-                "option_label_key_prefix": "vars.modal.history_metric_",
-                "suffix_prefix": "",
-                "omit_default": True,
-            },
-            {
-                "key": "window",
-                "label_key": "vars.modal.param_history_window",
-                "hint_key": "vars.modal.param_history_window_hint",
-                "type": "int",
-                "default": 10,
-                "min": 1,
-                "max": 20,
-                "suffix_prefix": "y",
-                "omit_default": True,
-            },
+            HISTORY_METRIC_PARAM,
+            HISTORY_WINDOW_PARAM,
             period_param(),
             {
                 "key": "source",
@@ -378,12 +391,7 @@ ENTRIES = {
         **availability_fields(HISTORY_AVAILABILITY, _history_needs),
         "get_image": _get_fire_history,
         "default_scale": lambda params: 463 if params["source"] == "burned" else 926,
-        # count: more fire = darker; since: recent fire = darker.
-        "vis_params": lambda params: (
-            {"palette": ["ffffff", "fdae61", "d7191c", "67001f"]}
-            if params["metric"] == "count"
-            else {"palette": ["67001f", "d7191c", "fdae61", "ffffff"]}
-        ),
+        "vis_params": history_vis,
         "unit_key": "legend.unit.years_value",
     },
 }

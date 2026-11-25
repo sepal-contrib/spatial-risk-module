@@ -24,7 +24,8 @@ EXPECTED_KEYS = {
     "subj",
     "mapbiomas_lulc",
     "deforestation_mapbiomas",
-    "mapbiomas_fire",
+    "burned_area_mapbiomas",
+    "fire_history_mapbiomas",
     "logging_mapbiomas",
     "mapbiomas_water",
 }
@@ -51,7 +52,8 @@ THEME_OF = {
     "subj": "admin",
     "mapbiomas_lulc": "mapbiomas",
     "deforestation_mapbiomas": "mapbiomas",
-    "mapbiomas_fire": "mapbiomas",
+    "burned_area_mapbiomas": "mapbiomas",
+    "fire_history_mapbiomas": "mapbiomas",
     "logging_mapbiomas": "mapbiomas",
     "mapbiomas_water": "mapbiomas",
 }

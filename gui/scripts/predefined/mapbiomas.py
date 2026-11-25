@@ -19,6 +19,11 @@ Two rules hold for every layer here:
 
 import ee
 
+from gui.scripts.predefined.fire import (
+    HISTORY_METRIC_PARAM,
+    HISTORY_WINDOW_PARAM,
+    history_vis,
+)
 from gui.scripts.predefined.forest_change import LOSS_PALETTE, check_interval
 from gui.scripts.predefined.mapbiomas_registry import (
     LULC_CODE_TO_GROUP,
@@ -422,21 +427,6 @@ _DEFO_ENTRY = {
 
 # --- fire (begin) -----------------------------------------------------------------
 
-FIRE_PRODUCT_PARAM = {
-    "key": "product",
-    "label_key": "vars.modal.param_fire_product",
-    "hint_key": "vars.modal.param_fire_product_hint",
-    "type": "choice",
-    "options": ["burned", "since", "frequency"],
-    "default": "burned",
-    "option_label_key_prefix": "vars.modal.fire_product_",
-    "suffix_prefix": "",
-    "advanced": False,
-    "omit_default": False,
-}
-
-FIRE_PERIOD_PARAM = {**period_param(), "depends_on": {"product": ["burned"]}}
-
 FIRE_SOURCE_PARAM = {
     "key": "source",
     "label_key": "vars.modal.param_mapbiomas_fire_source",
@@ -448,25 +438,6 @@ FIRE_SOURCE_PARAM = {
     "suffix_prefix": "",
     "advanced": True,
     "omit_default": True,
-    "depends_on": {"product": ["burned"]},
-}
-
-_FIRE_HISTORY = ("since", "frequency")
-
-# max 25: Paraguay and Colombia have 26 years of fire data, so every region
-# still offers at least two years (first + window .. last + 1).
-FIRE_WINDOW_PARAM = {
-    "key": "window",
-    "label_key": "vars.modal.param_fire_window",
-    "hint_key": "vars.modal.param_fire_window_hint",
-    "type": "int",
-    "default": 10,
-    "min": 1,
-    "max": 25,
-    "suffix_prefix": "w",
-    "advanced": False,
-    "omit_default": True,
-    "depends_on": {"product": list(_FIRE_HISTORY)},
 }
 
 
@@ -480,27 +451,20 @@ def _period_years(region, product, period):
     ]
 
 
-def _uses_monitor(params):
-    return params["product"] == "burned" and params["source"] == "monitor"
-
-
-def _fire_years(params):
-    region, product = params["region"], params["product"]
-    if _uses_monitor(params) and has_product(region, "fire_monitor"):
+def _burned_years(params):
+    region = params["region"]
+    if params["source"] == "monitor" and has_product(region, "fire_monitor"):
         return _period_years(region, "fire_monitor", params["period"])
-    if product in _FIRE_HISTORY:
-        years = year_list(region, "fire")
-        return list(range(years[0] + int(params["window"]), years[-1] + 2))
-    # A combination the region lacks keeps the collection's years; validate
+    # A region without the Monitor keeps the collection's years; validate
     # reports it as not available.
     return year_list(region, "fire")
 
 
-def _validate_fire(params, year):
+def _validate_burned(params, year):
     region = params["region"]
-    if _uses_monitor(params):
+    if params["source"] == "monitor":
         return _check_period(region, "fire_monitor", year, params["period"])
-    return _check_year(region, year, _fire_years(params))
+    return _check_year(region, year, _burned_years(params))
 
 
 def _burned(region, year, period, source):
@@ -523,100 +487,92 @@ def _burned(region, year, period, source):
     return band.gt(0) if month is None else band.eq(month)
 
 
-def _fire_history(region, year, product, window):
-    """Years since the last burn, or burned-year count, over year-window .. year-1."""
-    rec = mapbiomas_asset(region, "fire")
-    years = list(range(year - window, year))
-    # Same band name on every image, so the collection reducers line up.
-    flags = [_band(rec, y).gt(0).unmask(0).rename("b") for y in years]
-    if product == "since":
-        last = ee.ImageCollection(
-            [f.multiply(y).toInt16() for f, y in zip(flags, years)]
-        ).max()
-        return ee.Image(year).subtract(last).where(last.eq(0), window + 1)
-    return ee.ImageCollection([f.toInt16() for f in flags]).sum()
-
-
-def _get_mapbiomas_fire(
-    aoi,
-    year,
-    region="brazil",
-    product="burned",
-    period="year",
-    source="collection",
-    window=10,
+def _get_burned_area_mapbiomas(
+    aoi, year, region="brazil", period="year", source="collection"
 ):
-    """MapBiomas Fire for the chosen region.
+    """MapBiomas burned area: 1 = burned in the year or month, 0 = not burned.
 
-    burned: 0/1 for the year or month; since:
-    years since the last burn (window + 1 = none in the window); frequency:
-    burned years in the window. ``unmask(0)`` makes "nothing burned" 0, then
-    ``_inside`` re-masks everything outside the region (nodata, not 0).
+    ``unmask(0)`` makes "nothing burned" 0, then ``_inside`` re-masks
+    everything outside the region (nodata, not 0).
     """
-    params = {
-        "region": region,
-        "product": product,
-        "period": period,
-        "source": source,
-        "window": window,
-    }
-    _require_valid(_validate_fire(params, year))
-    if product in _FIRE_HISTORY:
-        image = _fire_history(region, year, product, int(window))
-        return _finish(_inside(image, region).toInt16(), aoi)
+    params = {"region": region, "period": period, "source": source}
+    _require_valid(_validate_burned(params, year))
     image = _burned(region, year, period, source)
     return _finish(_inside(image.unmask(0), region).toByte(), aoi)
 
 
-def _fire_raster_type(params):
-    return "continuous" if params["product"] in _FIRE_HISTORY else "categorical"
-
-
-def _fire_vis(params):
-    product, window = params["product"], int(params["window"])
-    if product == "since":
-        return {
-            "palette": ["d73027", "fc8d59", "fee08b", "ffffbf"],
-            "min": 1,
-            "max": window + 1,
-        }
-    if product == "frequency":
-        return {
-            "palette": ["ffffff", "fdd49e", "fc8d59", "b30000"],
-            "min": 0,
-            "max": window,
-        }
-    return {"palette": ["ffffff", "d84315"], "min": 0, "max": 1}
-
-
-def _fire_unit_key(params):
-    return {
-        "since": "legend.unit.years_value",
-        "frequency": "legend.unit.plain_value",
-    }.get(params["product"])
-
-
-_FIRE_ENTRY = {
-    "label_key": "vars.predefined.mapbiomas_fire",
-    "description_key": "vars.predefined_info.mapbiomas_fire",
+_BURNED_ENTRY = {
+    "label_key": "vars.predefined.burned_area_mapbiomas",
+    "description_key": "vars.predefined_info.burned_area_mapbiomas",
     "group": "fire",
     "var_type": "GEEVar",
-    "raster_type": _fire_raster_type,
+    "raster_type": "categorical",
     "temporal": True,
-    "years": _fire_years,
+    "years": _burned_years,
     "default_scale": 30,
-    "params": [
-        region_param("fire"),
-        FIRE_PRODUCT_PARAM,
-        FIRE_PERIOD_PARAM,
-        FIRE_SOURCE_PARAM,
-        FIRE_WINDOW_PARAM,
-    ],
-    "get_image": _get_mapbiomas_fire,
-    "vis_params": _fire_vis,
-    "unit_key": _fire_unit_key,
+    "params": [region_param("fire"), period_param(), FIRE_SOURCE_PARAM],
+    "get_image": _get_burned_area_mapbiomas,
+    "vis_params": {"palette": ["ffffff", "d84315"], "min": 0, "max": 1},
     "legend_class_keys": ("legend.class.unburned", "legend.class.burned"),
-    "validate": _validate_fire,
+    "validate": _validate_burned,
+    "prepare_download": _prepare_mapbiomas_download,
+}
+
+
+def _history_years(params):
+    """Years with a full look-back: first + window .. last + 1."""
+    years = year_list(params["region"], "fire")
+    return list(range(years[0] + int(params["window"]), years[-1] + 2))
+
+
+def _validate_history(params, year):
+    return _check_year(params["region"], year, _history_years(params))
+
+
+def _fire_history(region, year, metric, window):
+    """Burned-year count, or years since the last burn, over year-window .. year-1.
+
+    Same convention as the MODIS fire_history: since = 0 when the year before
+    burned, ``window`` when nothing burned in the look-back.
+    """
+    rec = mapbiomas_asset(region, "fire")
+    years = list(range(year - window, year))
+    # Same band name on every image, so the collection reducers line up.
+    flags = [_band(rec, y).gt(0).unmask(0).rename("b") for y in years]
+    if metric == "since":
+        last = ee.ImageCollection(
+            [f.multiply(y).toInt16() for f, y in zip(flags, years)]
+        ).max()
+        return ee.Image(year - 1).subtract(last).where(last.eq(0), window)
+    return ee.ImageCollection([f.toInt16() for f in flags]).sum()
+
+
+def _get_fire_history_mapbiomas(aoi, year, region="brazil", metric="count", window=10):
+    """MapBiomas fire history before 1 January of ``year``; nodata outside region."""
+    params = {"region": region, "metric": metric, "window": window}
+    _require_valid(_validate_history(params, year))
+    image = _fire_history(region, year, metric, int(window))
+    return _finish(_inside(image, region).toInt16(), aoi)
+
+
+_HISTORY_ENTRY = {
+    "label_key": "vars.predefined.fire_history_mapbiomas",
+    "description_key": "vars.predefined_info.fire_history_mapbiomas",
+    "group": "fire",
+    "var_type": "GEEVar",
+    "raster_type": "continuous",
+    "temporal": True,
+    "years": _history_years,
+    "default_scale": 30,
+    "params": [region_param("fire"), HISTORY_METRIC_PARAM, HISTORY_WINDOW_PARAM],
+    "get_image": _get_fire_history_mapbiomas,
+    "vis_params": lambda params: {
+        **history_vis(params),
+        "min": 0,
+        "max": int(params["window"]),
+    },
+    "unit_key": "legend.unit.years_value",
+    "validate": _validate_history,
     "prepare_download": _prepare_mapbiomas_download,
 }
 
@@ -800,7 +756,8 @@ _WATER_ENTRY = {
 ENTRIES = {
     "mapbiomas_lulc": _LULC_ENTRY,
     "deforestation_mapbiomas": _DEFO_ENTRY,
-    "mapbiomas_fire": _FIRE_ENTRY,
+    "burned_area_mapbiomas": _BURNED_ENTRY,
+    "fire_history_mapbiomas": _HISTORY_ENTRY,
     "logging_mapbiomas": _LOGGING_ENTRY,
     "mapbiomas_water": _WATER_ENTRY,
 }
