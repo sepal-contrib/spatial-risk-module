@@ -64,6 +64,7 @@
       "type_gee": "Google Earth Engine asset",
       "type_local_vector": "Local vector file",
       "predefined_variable_label": "Variable",
+      "layer_info_title": "About {label}",
       "predefined_year_label": "Year",
       "year_hint_forest": "Forest cover on 1 January {year}, i.e. the state at the end of {previous}.",
       "predefined_var_type_label": "Variable type",

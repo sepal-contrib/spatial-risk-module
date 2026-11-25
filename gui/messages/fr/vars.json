@@ -64,6 +64,7 @@
       "type_gee": "Asset Google Earth Engine",
       "type_local_vector": "Fichier vectoriel local",
       "predefined_variable_label": "Variable",
+      "layer_info_title": "À propos de {label}",
       "predefined_year_label": "Année",
       "year_hint_forest": "Couvert forestier au 1er janvier {year}, soit l'état à la fin de {previous}.",
       "predefined_var_type_label": "Type de variable",

@@ -45,6 +45,7 @@ from gui.widget.band_select import (
 from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS
 from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
 from gui.widget.enter_key import ENTER_DEFAULT
+from gui.widget.help import InfoPopup
 from gui.widget.text_style import MUTED
 from gui.widget.vis_style_fields import (
     ClassList,
@@ -685,6 +686,7 @@ def VariableModal(
             return
         year_by_source.current[source] = year
         set_source(value)
+        set_display_open(False)  # both forms share the Visualization panel
         set_year(year_by_source.current.get(value, ""))
 
     def _submit_predefined():
@@ -753,10 +755,12 @@ def VariableModal(
             class_error = as_classes and vc.validate(display["classes"])
             if class_error:
                 set_error(t(class_error))
+                set_display_open(True)  # show the field at fault
                 return
             current = _style_vis(display, as_classes, _own_palette(default))
             if current is None:
                 set_error(t("vars.modal.err_range"))
+                set_display_open(True)
                 return
             vis_params = vis_override(default, current)
         entry = {
@@ -792,11 +796,13 @@ def VariableModal(
             class_error = vc.validate(classes)
             if class_error:
                 set_error(t(class_error))
+                set_display_open(True)  # show the field at fault
                 return
         elif is_raster:
             valid, span = probes.parse_span(vmin, vmax)
             if not valid:
                 set_error(t("vars.modal.err_range"))
+                set_display_open(True)
                 return
         yr = int(year) if year and str(year).strip() else None
         entry = {
@@ -1017,6 +1023,8 @@ def VariableModal(
                         band_field=lambda: _render_band_field(
                             bands_task, band_ref, band_items, picked_band, set_band
                         ),
+                        vis_open=display_open,
+                        set_vis_open=set_display_open,
                     )
 
                 if error:
@@ -1062,26 +1070,20 @@ def _render_predefined_fields(
 ):
     """Fields shown when source == 'predefined'.
 
-    ``display_section`` draws the layer's Display section (the modal owns its
-    state).
+    Rows mirror the user form (``_render_custom_fields``): each read-only
+    field sits on the row of its editable twin there. ``display_section``
+    draws the layer's Display section (the modal owns its state).
     """
-    rv.Select(
-        label=t("vars.modal.predefined_variable_label"),
-        items=_predefined_items(),
-        v_model=predefined_key,
-        on_v_model=on_select_predefined,
-        dense=True,
-        outlined=True,
-    )
+    _LayerSelect(predefined_key, on_select_predefined, cat)
 
     if cat:
-        # Data-source blurb: where the layer comes from and how it is generated
-        # (catalogue link included). Rendered inline so it updates per selection.
-        if cat.get("description_key"):
-            with solara.Div(
-                style=MUTED + "font-size:0.85rem;padding:0 4px 4px 4px;",
-            ):
-                solara.Markdown(t(cat["description_key"]))
+        rv.TextField(
+            label=t("vars.modal.predefined_var_type_label"),
+            v_model=_type_display(cat.get("var_type", "GEEVar")),
+            dense=True,
+            outlined=True,
+            disabled=True,
+        )
 
         # Year — selectable list for temporal variables
         if cat["temporal"]:
@@ -1130,6 +1132,13 @@ def _render_predefined_fields(
                 if spec["key"] in active and spec.get("type") != "year":
                     _render_param_field(spec, params_raw, set_params_raw)
         year_pair_row(pair_below)
+        rv.TextField(
+            label=t("vars.modal.predefined_raster_type_label"),
+            v_model=cat["raster_type"],
+            dense=True,
+            outlined=True,
+            disabled=True,
+        )
         advanced = [
             s for s in advanced_param_specs(predefined_key) if s["key"] in active
         ]
@@ -1156,22 +1165,6 @@ def _render_predefined_fields(
                     children=[availability_error],
                 )
 
-        # Read-only info fields
-        rv.TextField(
-            label=t("vars.modal.predefined_var_type_label"),
-            v_model=_type_display(cat.get("var_type", "GEEVar")),
-            dense=True,
-            outlined=True,
-            disabled=True,
-        )
-        rv.TextField(
-            label=t("vars.modal.predefined_raster_type_label"),
-            v_model=cat["raster_type"],
-            dense=True,
-            outlined=True,
-            disabled=True,
-        )
-
     if storage_key:
         solara.Text(
             t(
@@ -1182,6 +1175,37 @@ def _render_predefined_fields(
             ),
             style=MUTED + "font-size:0.8rem;padding:0 4px 4px;",
         )
+
+
+@solara.component
+def _LayerSelect(predefined_key, on_select, cat):
+    """The predefined Variable select, its description behind an info icon.
+
+    Same idiom as the Train form's model select: the prepend-inner icon (the
+    only one whose click Vuetify keeps from opening the menu), parked on the
+    right by the shared .field-info-icon CSS. A component of its own because
+    its hooks cannot live in the conditionally called field renderer.
+    """
+    info_open, set_info_open = solara.use_state(False)
+    description_key = (cat or {}).get("description_key")
+    select = rv.Select(
+        label=t("vars.modal.predefined_variable_label"),
+        items=_predefined_items(),
+        v_model=predefined_key,
+        on_v_model=on_select,
+        dense=True,
+        outlined=True,
+        prepend_inner_icon="mdi-information-outline" if description_key else None,
+        class_="field-info-icon" if description_key else "",
+    )
+    # rv.use_event is a hook — call it unconditionally.
+    rv.use_event(select, "click:prepend-inner", lambda *_: set_info_open(True))
+    InfoPopup(
+        t("vars.modal.layer_info_title", label=t(cat["label_key"])) if cat else "",
+        t(description_key) if description_key else "",
+        info_open and bool(description_key),
+        set_info_open,
+    )
 
 
 def _render_param_field(spec, params_raw, set_params_raw):
@@ -1447,11 +1471,15 @@ def _render_custom_fields(
     key_exists,
     vis_fields=None,
     band_field=lambda: None,
+    vis_open=False,
+    set_vis_open=lambda value: None,
 ):
     """Fields shown when source == 'custom'.
 
-    ``vis_fields`` draws the layer's visualization fields under its raster
-    type or rasterization method (the modal owns their state).
+    Rows follow the predefined form: input (file or asset) before the year,
+    then the raster type or rasterization method. ``vis_fields`` draws the
+    layer's visualization fields in a collapsed panel after them, like the
+    predefined Visualization section (the modal owns their state).
     """
     ArtifactNameField(
         value=name,
@@ -1468,16 +1496,6 @@ def _render_custom_fields(
         dense=True,
         outlined=True,
         hint=t("vars.modal.custom_type_hint"),
-        persistent_hint=True,
-    )
-    rv.TextField(
-        label=t("vars.modal.custom_year_label"),
-        v_model=year,
-        on_v_model=set_year,
-        dense=True,
-        outlined=True,
-        type="number",
-        hint=t("vars.modal.custom_year_hint"),
         persistent_hint=True,
     )
     if var_type in ("LocalRasterVar", "LocalVectorVar"):
@@ -1509,6 +1527,16 @@ def _render_custom_fields(
             hint=t("vars.modal.custom_scale_hint"),
             persistent_hint=True,
         )
+    rv.TextField(
+        label=t("vars.modal.custom_year_label"),
+        v_model=year,
+        on_v_model=set_year,
+        dense=True,
+        outlined=True,
+        type="number",
+        hint=t("vars.modal.custom_year_hint"),
+        persistent_hint=True,
+    )
     if var_type in ("LocalRasterVar", "GEEVar"):
         rv.Select(
             label=t("vars.modal.custom_raster_type_label"),
@@ -1521,7 +1549,7 @@ def _render_custom_fields(
             persistent_hint=True,
         )
         if vis_fields is not None:
-            vis_fields()
+            _panel(t("vars.modal.display_toggle"), vis_open, set_vis_open, vis_fields)
     if var_type == "LocalVectorVar":
         rv.Select(
             label=t("vars.modal.custom_rasterization_method_label"),
@@ -1534,7 +1562,7 @@ def _render_custom_fields(
             persistent_hint=True,
         )
         if vis_fields is not None:
-            vis_fields()
+            _panel(t("vars.modal.display_toggle"), vis_open, set_vis_open, vis_fields)
 
 
 def _render_band_field(task, ref, items, picked, set_band):
