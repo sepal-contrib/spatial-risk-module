@@ -53,6 +53,7 @@ def period_param(advanced=False):
         "suffix_prefix": "",
         "advanced": advanced,
         "omit_default": True,
+        "after_year": True,  # the modal shows the month right after its year
     }
 
 

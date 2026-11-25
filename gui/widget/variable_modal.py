@@ -1085,53 +1085,56 @@ def _render_predefined_fields(
             disabled=True,
         )
 
-        # Year — selectable list for temporal variables
-        if cat["temporal"]:
-            picked = _parse_year(year)
-            hint_key = cat.get("year_hint_key")
-            rv.Select(
-                label=t("vars.modal.predefined_year_label"),
-                items=sorted(cat.get("years", []), reverse=True),  # newest first
-                v_model=picked,
-                on_v_model=lambda v: set_year(str(v) if v else ""),
-                dense=True,
-                outlined=True,
-                hint=(
-                    t(hint_key, year=picked, previous=picked - 1)
-                    if hint_key and picked
-                    else ""
-                ),
-                persistent_hint=bool(hint_key and picked),
-            )
-
         # Layer-specific knobs declared by the catalogue, rendered generically
-        # (no per-layer branching here). Basic knobs first; advanced ones sit
-        # in a collapsed section.
+        # (no per-layer branching here): what, then when. Basic knobs that
+        # pick the years (region, product, a By year switch) come first, then
+        # the Year select or the start/end pair, then the month that narrows
+        # the year ("after_year"). Advanced knobs sit in a collapsed section.
         # Conditional params (depends_on) ruled out by their controller are
-        # hidden; their values are reset to the default on submit. The
-        # always-present div keeps later siblings (and their click handlers)
-        # in place when a field comes and goes.
+        # hidden; their values are reset to the default on submit. Every
+        # block that comes and goes sits in an always-present div, which
+        # keeps later siblings (and their click handlers) in place.
         active = {s["key"] for s in active_param_specs(predefined_key, params_raw)}
-        basic = basic_param_specs(predefined_key)
-        # Interval layers (deforestation_gfc, ...): start and end year side by
-        # side in place of the Year select (they are non-temporal). A param can
-        # switch the pair off (logging_mapbiomas By year); such a pair sits
-        # below the fields, after the switch that shows it.
-        pair = [s for s in basic if s.get("type") == "year" and s["key"] in active]
-        pair_below = any(s.get("depends_on") for s in pair)
+        basic = [s for s in basic_param_specs(predefined_key) if s["key"] in active]
 
-        def year_pair_row(show):
-            with rv.Html(tag="div", style_="display:flex;gap:8px;"):
-                for spec in pair if show else ():
+        def param_block(specs):
+            with rv.Html(tag="div"):
+                for spec in specs:
+                    _render_param_field(spec, params_raw, set_params_raw)
+
+        param_block(
+            s for s in basic if s.get("type") != "year" and not s.get("after_year")
+        )
+
+        # Year — selectable list for temporal variables
+        with rv.Html(tag="div"):
+            if cat["temporal"]:
+                picked = _parse_year(year)
+                hint_key = cat.get("year_hint_key")
+                rv.Select(
+                    label=t("vars.modal.predefined_year_label"),
+                    items=sorted(cat.get("years", []), reverse=True),  # newest 1st
+                    v_model=picked,
+                    on_v_model=lambda v: set_year(str(v) if v else ""),
+                    dense=True,
+                    outlined=True,
+                    hint=(
+                        t(hint_key, year=picked, previous=picked - 1)
+                        if hint_key and picked
+                        else ""
+                    ),
+                    persistent_hint=bool(hint_key and picked),
+                )
+
+        # Interval layers (deforestation_gfc, ...): start and end year side by
+        # side in place of the Year select (they are non-temporal).
+        with rv.Html(tag="div", style_="display:flex;gap:8px;"):
+            for spec in basic:
+                if spec.get("type") == "year":
                     with rv.Html(tag="div", style_="flex:1;min-width:0;"):
                         _render_param_field(spec, params_raw, set_params_raw)
 
-        year_pair_row(not pair_below)
-        with rv.Html(tag="div"):
-            for spec in basic:
-                if spec["key"] in active and spec.get("type") != "year":
-                    _render_param_field(spec, params_raw, set_params_raw)
-        year_pair_row(pair_below)
+        param_block(s for s in basic if s.get("after_year"))
         rv.TextField(
             label=t("vars.modal.predefined_raster_type_label"),
             v_model=cat["raster_type"],

@@ -171,8 +171,8 @@ def test_interval_years_come_before_the_read_only_raster_type():
     )
 
 
-def test_raster_type_follows_a_year_pair_shown_below():
-    """A year pair shown below the fields still precedes Raster type."""
+def test_logging_pair_follows_its_timing_switch():
+    """The switch, then the start/end pair it reveals, then Raster type."""
     rc = _render(_predefined("logging_mapbiomas", {"timing": "period"}))
     years = _year_labels("logging_mapbiomas")
     assert years
@@ -282,3 +282,93 @@ def test_a_class_error_opens_the_predefined_visualization_panel():
     _submit(rc)
     assert t(vc.ERR_NO_CLASSES) in _alert_text(rc)
     assert _sections(rc, t(TOGGLE))[0].v_model == 0
+
+
+# ---- Year placement: what, then when; the month reads after its year ---------
+
+YEAR = t("vars.modal.predefined_year_label")
+RASTER = t("vars.modal.predefined_raster_type_label")
+
+
+def _param_label(key, param_key):
+    spec = next(s for s in param_specs(key) if s["key"] == param_key)
+    return t(spec["label_key"])
+
+
+def test_only_the_month_period_goes_after_the_year():
+    """The flag lives on the shared month param only."""
+    for key in PREDEFINED_CATALOGUE:
+        for spec in param_specs(key):
+            assert bool(spec.get("after_year")) == (
+                spec["label_key"] == "vars.modal.param_period"
+            ), (key, spec["key"])
+
+
+def test_month_period_follows_the_year():
+    """Precipitation reads Year, then the month."""
+    rc = _render(_predefined("precipitation"))
+    assert _subsequence(
+        _labels_in_page_order(rc),
+        [
+            t("vars.modal.predefined_var_type_label"),
+            YEAR,
+            _param_label("precipitation", "period"),
+            RASTER,
+        ],
+    )
+
+
+def test_controllers_come_before_the_year():
+    """Region and product set the year list, so they sit above it."""
+    rc = _render(_predefined("mapbiomas_fire"))
+    assert _subsequence(
+        _labels_in_page_order(rc),
+        [
+            _param_label("mapbiomas_fire", "region"),
+            _param_label("mapbiomas_fire", "product"),
+            YEAR,
+            _param_label("mapbiomas_fire", "period"),
+            RASTER,
+        ],
+    )
+
+
+def test_timing_switch_comes_before_the_year_it_reveals():
+    """Protected areas By year: the switch, then Year."""
+    rc = _render(_predefined("protected_area", {"timing": "yearly"}))
+    assert _subsequence(
+        _labels_in_page_order(rc), [t("vars.modal.param_pa_timing"), YEAR, RASTER]
+    )
+
+
+def test_year_pair_follows_the_basic_params():
+    """MapBiomas deforestation: Region, then start/end years."""
+    rc = _render(_predefined("deforestation_mapbiomas"))
+    assert _subsequence(
+        _labels_in_page_order(rc),
+        [
+            _param_label("deforestation_mapbiomas", "region"),
+            *_year_labels("deforestation_mapbiomas"),
+            RASTER,
+        ],
+    )
+
+
+def test_inactive_period_leaves_the_year_alone():
+    """Fire history product: no Period, Year still before Raster type."""
+    rc = _render(_predefined("mapbiomas_fire", {"product": "since"}))
+    labels = _labels_in_page_order(rc)
+    assert _param_label("mapbiomas_fire", "period") not in labels
+    assert _subsequence(
+        labels, [_param_label("mapbiomas_fire", "product"), YEAR, RASTER]
+    )
+
+
+def test_class_buttons_still_work_below_the_year():
+    """Year now sits mid-form; the class list below it still responds."""
+    rc = _render(_predefined("protected_area", {"timing": "yearly"}))
+    year = _select(rc, "vars.modal.predefined_year_label")
+    year.v_model = year.items[0]  # past the "Year is required" check
+    _remove_all_classes(rc)
+    _submit(rc)
+    assert t(vc.ERR_NO_CLASSES) in _alert_text(rc)
