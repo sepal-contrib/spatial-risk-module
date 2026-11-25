@@ -18,6 +18,7 @@ from gui.scripts.predefined import (
     resolved_entry,
     validate_entry,
 )
+from gui.scripts.predefined import mapbiomas_registry as reg
 from gui.scripts.predefined.mapbiomas_registry import (
     LULC_CODE_TO_GROUP,
     LULC_GROUPS,
@@ -131,8 +132,9 @@ def test_every_combination_round_trips(key):
 def test_offered_years_validate(key):
     """Review focus 2: every offered year passes validate; the next year fails.
 
-    A combination the region does not offer at all (severity outside Brazil,
-    monthly water in Peru) fails for every year with error_not_available.
+    A combination the region does not offer at all (the Fire Monitor
+    outside Brazil, monthly water in Peru) fails for every year with
+    error_not_available.
     """
     for values in _combos(key):
         if resolved_entry(key, values).get("interval_years"):
@@ -469,7 +471,7 @@ def test_defo_pairs_with_native_vegetation_lulc_at_start(region):
     assert validate_entry("mapbiomas_lulc", {"region": region}, year) is None
 
 
-# --- mapbiomas_fire: burned area and severity (Task 9) ---------------------------
+# --- mapbiomas_fire: burned area and fire history (Task 9) ----------------------
 
 FIRE_PERU = (
     ROOT + "peru/fire/collection2/mapbiomas_peru_fire_collection2_monthly_burned_v1"
@@ -498,7 +500,6 @@ FIRE_MONITOR = ROOT + "brazil/fire/monitor/mapbiomas_fire_monthly_burned_v1"
             {"region": "brazil", "product": "burned", "source": "monitor"},
             "mapbiomas_fire_brazil_burned_monitor",
         ),
-        ({"region": "brazil", "product": "severity"}, "mapbiomas_fire_brazil_severity"),
     ],
 )
 def test_fire_names(values, name):
@@ -511,8 +512,7 @@ def test_fire_names(values, name):
 @pytest.mark.parametrize(
     "name",
     [
-        "mapbiomas_fire_brazil_severity_sep",  # period is inactive for severity
-        "mapbiomas_fire_brazil_severity_monitor",  # source is inactive for severity
+        "mapbiomas_fire_brazil_severity",  # burn severity is not offered
         "mapbiomas_fire_brazil",  # product is always written
         "mapbiomas_fire_brazil_burned_year",  # default written out
         "mapbiomas_fire_brazil_burned_collection",  # default written out
@@ -576,11 +576,11 @@ def test_fire_monitor_year_takes_every_month_of_the_year(fake_ee):
     assert "max" in fake_ee.names()
 
 
-def test_fire_severity(fake_ee):
-    """Fire severity."""
-    mapbiomas._get_mapbiomas_fire("AOI", 2020, region="brazil", product="severity")
-    assert fake_ee.calls[1] == ("select", ("severity_class_2020",), {})
-    assert fake_ee.calls[2] == ("unmask", (0,), {})
+def test_fire_offers_no_burn_severity():
+    """Burn severity was dropped: no product option, no registry asset."""
+    assert "severity" not in mapbiomas.FIRE_PRODUCT_PARAM["options"]
+    assert not reg.has_product("brazil", "fire_severity")
+    assert "fire_severity" not in reg.FAMILIES["fire"]
 
 
 def test_fire_years():
@@ -614,15 +614,9 @@ def test_fire_validate_monitor_months():
         )
 
 
-def test_fire_validate_severity_and_monitor_outside_brazil():
-    """Fire validate severity and monitor outside brazil."""
+def test_fire_validate_monitor_outside_brazil():
+    """The Fire Monitor is Brazil only."""
     peru = {"region": t("vars.mapbiomas.region_peru")}
-    assert validate_entry(
-        "mapbiomas_fire", {"region": "peru", "product": "severity"}, 2020
-    ) == (
-        "vars.mapbiomas.error_not_available",
-        peru,
-    )
     assert validate_entry(
         "mapbiomas_fire",
         {"region": "peru", "product": "burned", "source": "monitor"},
@@ -648,10 +642,7 @@ def test_fire_display():
         "legend.class.unburned",
         "legend.class.burned",
     )
-    assert burned["class_labels"] is None
-    severity = resolved_entry("mapbiomas_fire", {"product": "severity"})
-    assert [c["value"] for c in severity["class_labels"]] == [0, 1, 2, 3, 4, 5]
-    assert severity["vis_params"]["max"] == 5
+    assert burned.get("class_labels") is None
 
 
 # --- mapbiomas_fire: since / frequency (Task 10) ----------------------------------

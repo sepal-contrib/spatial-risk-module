@@ -45,7 +45,6 @@ ROUND1_KEYS = (
             "param_fire_product",
             "param_fire_product_hint",
             "fire_product_burned",
-            "fire_product_severity",
             "fire_product_since",
             "fire_product_frequency",
             "param_fire_window",
@@ -62,7 +61,6 @@ ROUND1_KEYS = (
     ]
     + [f"vars.mapbiomas.region_{r}" for r in REGIONS]
     + [f"vars.mapbiomas.group_{g}" for g in GROUPS]
-    + [f"vars.mapbiomas.severity_{n}" for n in range(6)]
     + [
         f"vars.mapbiomas.{key}"
         for key in (

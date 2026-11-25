@@ -266,7 +266,7 @@ _LULC_OBSERVED = {
 # Products grouped under one catalogue entry. A family's region list is the
 # union of its products' regions.
 FAMILIES = {
-    "fire": ("fire", "fire_severity", "fire_monitor"),
+    "fire": ("fire", "fire_monitor"),
     "water": ("water_annual", "water_monthly"),
 }
 
@@ -415,13 +415,6 @@ _ASSETS = {
         1990,
         2025,
         "Fire Collection 2",
-    ),
-    ("brazil", "fire_severity"): _bands(
-        "brazil/fire/collection5_1/mapbiomas_fire_collection51_severity_class_v1",
-        "severity_class_{year}",
-        1985,
-        2025,
-        "Fire Collection 5.1",
     ),
     ("brazil", "fire_monitor"): _months(
         "brazil/fire/monitor/mapbiomas_fire_monthly_burned_v1",

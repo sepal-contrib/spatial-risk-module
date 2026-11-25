@@ -98,11 +98,6 @@ VERIFIED = {
         "burned_monthly_{year}",
         (1990, 2025),
     ),
-    ("brazil", "fire_severity"): (
-        "brazil/fire/collection5_1/mapbiomas_fire_collection51_severity_class_v1",
-        "severity_class_{year}",
-        (1985, 2025),
-    ),
     ("brazil", "fire_monitor"): (
         "brazil/fire/monitor/mapbiomas_fire_monthly_burned_v1",
         "FireMonth",
@@ -303,7 +298,6 @@ def test_mapbiomas_asset_unknown_raises_key_error(region, product):
         ("lulc", reg.MAPBIOMAS_REGIONS),
         ("deforestation", ("brazil", "bolivia", "paraguay", "peru")),
         ("fire", ("brazil", "colombia", "paraguay", "peru")),
-        ("fire_severity", ("brazil",)),
         ("logging", ("brazil",)),
         ("water", ("brazil", "bolivia", "peru")),
         ("water_monthly", ("brazil", "bolivia")),

@@ -427,7 +427,7 @@ FIRE_PRODUCT_PARAM = {
     "label_key": "vars.modal.param_fire_product",
     "hint_key": "vars.modal.param_fire_product_hint",
     "type": "choice",
-    "options": ["burned", "severity", "since", "frequency"],
+    "options": ["burned", "since", "frequency"],
     "default": "burned",
     "option_label_key_prefix": "vars.modal.fire_product_",
     "suffix_prefix": "",
@@ -469,13 +469,6 @@ FIRE_WINDOW_PARAM = {
     "depends_on": {"product": list(_FIRE_HISTORY)},
 }
 
-FIRE_SEVERITY_CLASS_LABELS = [
-    {"value": n, "label_key": f"vars.mapbiomas.severity_{n}", "color": color}
-    for n, color in enumerate(
-        ["ffffff", "ffffb2", "fecc5c", "fd8d3c", "f03b20", "bd0026"]
-    )
-]
-
 
 def _period_years(region, product, period):
     """Years whose ``period`` the monthly record covers ("year" = all 12 months)."""
@@ -495,8 +488,6 @@ def _fire_years(params):
     region, product = params["region"], params["product"]
     if _uses_monitor(params) and has_product(region, "fire_monitor"):
         return _period_years(region, "fire_monitor", params["period"])
-    if product == "severity" and has_product(region, "fire_severity"):
-        return year_list(region, "fire_severity")
     if product in _FIRE_HISTORY:
         years = year_list(region, "fire")
         return list(range(years[0] + int(params["window"]), years[-1] + 2))
@@ -507,8 +498,6 @@ def _fire_years(params):
 
 def _validate_fire(params, year):
     region = params["region"]
-    if params["product"] == "severity" and not has_product(region, "fire_severity"):
-        return _not_available(region)
     if _uses_monitor(params):
         return _check_period(region, "fire_monitor", year, params["period"])
     return _check_year(region, year, _fire_years(params))
@@ -559,7 +548,7 @@ def _get_mapbiomas_fire(
 ):
     """MapBiomas Fire for the chosen region.
 
-    burned: 0/1 for the year or month; severity: 0 = unburned, 1-5; since:
+    burned: 0/1 for the year or month; since:
     years since the last burn (window + 1 = none in the window); frequency:
     burned years in the window. ``unmask(0)`` makes "nothing burned" 0, then
     ``_inside`` re-masks everything outside the region (nodata, not 0).
@@ -575,10 +564,7 @@ def _get_mapbiomas_fire(
     if product in _FIRE_HISTORY:
         image = _fire_history(region, year, product, int(window))
         return _finish(_inside(image, region).toInt16(), aoi)
-    if product == "severity":
-        image = _band(mapbiomas_asset(region, "fire_severity"), year)
-    else:
-        image = _burned(region, year, period, source)
+    image = _burned(region, year, period, source)
     return _finish(_inside(image.unmask(0), region).toByte(), aoi)
 
 
@@ -600,12 +586,6 @@ def _fire_vis(params):
             "min": 0,
             "max": window,
         }
-    if product == "severity":
-        return {
-            "palette": [c["color"] for c in FIRE_SEVERITY_CLASS_LABELS],
-            "min": 0,
-            "max": 5,
-        }
     return {"palette": ["ffffff", "d84315"], "min": 0, "max": 1}
 
 
@@ -614,10 +594,6 @@ def _fire_unit_key(params):
         "since": "legend.unit.years_value",
         "frequency": "legend.unit.plain_value",
     }.get(params["product"])
-
-
-def _fire_class_labels(params):
-    return FIRE_SEVERITY_CLASS_LABELS if params["product"] == "severity" else None
 
 
 _FIRE_ENTRY = {
@@ -639,7 +615,6 @@ _FIRE_ENTRY = {
     "get_image": _get_mapbiomas_fire,
     "vis_params": _fire_vis,
     "unit_key": _fire_unit_key,
-    "class_labels": _fire_class_labels,
     "legend_class_keys": ("legend.class.unburned", "legend.class.burned"),
     "validate": _validate_fire,
     "prepare_download": _prepare_mapbiomas_download,
