@@ -1208,6 +1208,7 @@ def _render_param_field(spec, params_raw, set_params_raw):
             outlined=True,
             hint=t(spec["hint_key"]),
             persistent_hint=True,
+            class_="sr-param-field",
         )
         return
     if kind == "multichoice":
@@ -1226,6 +1227,7 @@ def _render_param_field(spec, params_raw, set_params_raw):
             ),
             multiple=True,
             chips=True,
+            class_="sr-param-field multi-chips",
             small_chips=True,
             dense=True,
             outlined=True,
@@ -1248,6 +1250,7 @@ def _render_param_field(spec, params_raw, set_params_raw):
             outlined=True,
             hint=t(spec["hint_key"]),
             persistent_hint=True,
+            class_="sr-param-field",
         )
         return
     rv.TextField(
@@ -1259,6 +1262,7 @@ def _render_param_field(spec, params_raw, set_params_raw):
         type="number",
         hint=t(spec["hint_key"]),
         persistent_hint=True,
+        class_="sr-param-field",
     )
 
 
