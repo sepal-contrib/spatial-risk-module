@@ -96,10 +96,13 @@ def _predefined_items():
         keys = [k for k, m in PREDEFINED_CATALOGUE.items() if m.get("group") == group]
         if not keys:
             continue
+        labels = {k: t(PREDEFINED_CATALOGUE[k]["label_key"]) for k in keys}
+        # Same layer name from another source ("Deforestation (MapBiomas)") sits
+        # next to its first occurrence, not at the end of the group.
+        names = [labels[k].split(" (")[0] for k in keys]
+        keys.sort(key=lambda k: names.index(labels[k].split(" (")[0]))
         items.append({"header": t(f"vars.predefined_group.{group}")})
-        items.extend(
-            {"text": t(PREDEFINED_CATALOGUE[k]["label_key"]), "value": k} for k in keys
-        )
+        items.extend({"text": labels[k], "value": k} for k in keys)
     return items
 
 

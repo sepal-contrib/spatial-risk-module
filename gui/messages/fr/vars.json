@@ -25,7 +25,7 @@
       "burned_area_mapbiomas": "Surface brûlée (MapBiomas)",
       "fire_history_mapbiomas": "Historique des feux (MapBiomas)",
       "logging_mapbiomas": "Exploitation forestière sélective (MapBiomas Brésil)",
-      "mapbiomas_water": "Eau de surface (MapBiomas)"
+      "mapbiomas_water": "Eaux de surface (MapBiomas)"
     },
     "predefined_info": {
       "altitude": "Altitude (m), découpée sur votre AOI. Continue. Source par défaut : [NASA SRTM 30 m](https://developers.google.com/earth-engine/datasets/catalog/USGS_SRTMGL1_003). Les paramètres avancés proposent [Copernicus GLO-30](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_DEM_GLO30) (© DLR e.V. 2010-2014 et © Airbus Defence and Space GmbH 2014-2018, fourni dans le cadre de COPERNICUS par l'Union européenne et l'ESA) et [NASADEM](https://developers.google.com/earth-engine/datasets/catalog/NASA_NASADEM_HGT_001).",

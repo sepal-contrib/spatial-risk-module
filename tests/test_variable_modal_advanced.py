@@ -218,3 +218,18 @@ def test_dropdown_items_are_grouped_in_declared_order():
             continue
         assert PREDEFINED_CATALOGUE[item["value"]]["group"] == group, item
     assert {i["value"] for i in items if "value" in i} == set(PREDEFINED_CATALOGUE)
+
+
+def test_dropdown_keeps_same_named_layers_together():
+    """Every source of one layer name sits together, in catalogue order."""
+    from gui.widget.variable_modal import _predefined_items
+
+    keys = [i["value"] for i in _predefined_items() if "value" in i]
+    for run in (
+        ["deforestation_gfc", "deforestation_tmf", "deforestation_mapbiomas"],
+        ["burned_area", "burned_area_mapbiomas"],
+        ["fire_history", "fire_history_mapbiomas"],
+        ["surface_water", "mapbiomas_water"],
+    ):
+        start = keys.index(run[0])
+        assert keys[start : start + len(run)] == run
