@@ -3,7 +3,6 @@
 import logging
 import threading
 from enum import Enum
-from pathlib import Path
 
 import ee
 import solara
@@ -13,13 +12,13 @@ from gui.i18n import t
 from gui.scripts import process_actions
 from gui.scripts.file_prompts import DeletePrompt, delete_prompt, overwrite_prompt
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.predefined import CUSTOM_TAG
 from gui.scripts.layer_labels import raw_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.notify_bridge import (
     layer_progress_reporter,
     tracked_job,
 )
+from gui.scripts.predefined import CUSTOM_TAG
 from gui.scripts.project_ui_helpers import format_size
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context
 from gui.scripts.variable_classes import outline_style
@@ -1013,28 +1012,34 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             toggling_keys=toggling,
         )
 
-        # Download-all button, below the list. While any download runs it is an
-        # outlined button with the grey hourglass (no spinner, see
-        # HOURGLASS_CSS: grey on the blue fill would read poorly); it stays
-        # clickable for the layers not downloading yet, and with none left it
-        # ignores clicks (sr-busy) instead of fading to disabled grey.
+        # Download-pending button, below the list; gone with nothing to
+        # download. While any download runs it is an outlined button with the
+        # grey hourglass (no spinner, see HOURGLASS_CSS: grey on the blue fill
+        # would read poorly); it stays clickable for the layers not downloading
+        # yet, and with none left it ignores clicks (sr-busy).
         idle_pending = [k for k in pending_geevars if k not in downloading]
         busy = bool(downloading)
         busy_classes = []
         if busy:
             busy_classes = ["sr-hourglass"] if idle_pending else BUSY_CLASSES
         solara.Style(HOURGLASS_CSS)
-        solara.Button(
-            t("tiles.variables.download_button", count=len(idle_pending)),
-            icon_name=BUSY_ICON if busy else "mdi-cloud-download-outline",
-            color=None if busy else "primary",
-            outlined=busy,
-            small=True,
-            block=True,
-            on_click=lambda: on_download(None),
-            disabled=not idle_pending and not busy,
-            classes=busy_classes,
-        )
+        if idle_pending or busy:
+            solara.Button(
+                # Everything already downloading: the plain verb, not a
+                # "0 pending" beside the hourglass.
+                (
+                    t("tiles.variables.download_button", count=len(idle_pending))
+                    if idle_pending
+                    else t("widgets.product_table.verb_download")
+                ),
+                icon_name=BUSY_ICON if busy else "mdi-cloud-download-outline",
+                color=None if busy else "primary",
+                outlined=busy,
+                small=True,
+                block=True,
+                on_click=lambda: on_download(None),
+                classes=busy_classes,
+            )
 
     editing_entry = (
         _variable_to_entry(editing_key, p.raw_variables[editing_key], p)

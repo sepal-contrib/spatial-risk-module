@@ -194,8 +194,13 @@ def _harmonize_all(rc):
             else:
                 yield from leaves(c)
 
-    label = t("tiles.process.harmonize_all_button")
-    hits = [b for b in rc.find(vw.Btn).widgets if label in list(leaves(b))]
+    # The label carries a count ("Harmonize missing (2)"): match what precedes it.
+    label = t("widgets.product_table.verb_harmonize")
+    hits = [
+        b
+        for b in rc.find(vw.Btn).widgets
+        if any(s.startswith(label) for s in leaves(b))
+    ]
     assert len(hits) == 1, f"expected one {label!r} button, got {len(hits)}"
     return hits[0]
 

@@ -204,7 +204,8 @@ def test_download_all_is_the_hourglass_while_a_download_runs(monkeypatch):
     """Download-all shows the hourglass, not a spinner, while any row downloads.
 
     With a layer still idle it stays clickable; with every layer downloading it
-    ignores clicks (``sr-busy``) rather than fading to the disabled grey (#38).
+    ignores clicks (``sr-busy``) rather than fading to the disabled grey (#38),
+    and reads "Download" rather than "Download 0 pending" (#39).
     """
     import ipyvuetify as vw
 
@@ -215,21 +216,20 @@ def test_download_all_is_the_hourglass_while_a_download_runs(monkeypatch):
     project = solara.reactive(_project(), equals=lambda a, b: a is b)
     _captured, rc = _render(monkeypatch, project, _Notifier())
 
-    def button():
-        def leaves(w):
-            for c in getattr(w, "children", None) or []:
-                if isinstance(c, str):
-                    yield c
-                else:
-                    yield from leaves(c)
+    def leaves(w):
+        for c in getattr(w, "children", None) or []:
+            if isinstance(c, str):
+                yield c
+            else:
+                yield from leaves(c)
 
+    def button():
         hits = [
             b
             for b in rc.find(vw.Btn).widgets
             if any(
-                s.startswith(t("tiles.variables.download_button", count=n))
+                s.startswith(t("widgets.product_table.verb_download"))
                 for s in leaves(b)
-                for n in (0, 1, 2)
             )
         ]
         assert len(hits) == 1
@@ -252,6 +252,7 @@ def test_download_all_is_the_hourglass_while_a_download_runs(monkeypatch):
         inflight.claim("rivers")  # nothing left to start
         assert _wait(lambda: "sr-busy" in (button().class_ or ""))
         assert button().disabled is False and not button().loading
+        assert t("widgets.product_table.verb_download") in list(leaves(button()))
 
         inflight.release("roads", "rivers")
         assert _wait(lambda: icon(button()) == ["mdi-cloud-download-outline"])

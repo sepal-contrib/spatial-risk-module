@@ -660,9 +660,8 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             last_status.current = (status_key, harmonization_hint.value)
         disk = last_status.current[1] if last_status.current[0] == status_key else None
         # The pure verdict stands; the disk one overrides for unknown keys only.
-        if pure is None:
-            status = None
-        elif not pure.unknown:
+        # (`pure` is set here: the tile returned above without a project.)
+        if not pure.unknown:
             status = pure  # steady state: no disk involved
         elif disk is None:
             # `pure` still carries its `unknown` list, which is what makes the
@@ -674,23 +673,19 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 current=pure.current + disk.current,
             )
         run_in_flight = processing.value or process_task.pending
-        # Only once the status has actually landed: while it is still being
-        # checked we do not know there is nothing to do, and disabling on a
-        # maybe would block a run the user is entitled to. An `unknown` entry
-        # is such a maybe — it sits in neither list, so keying off an empty
-        # `pending` alone would kill the button on exactly the legacy projects
-        # that most need a run.
-        nothing_pending = (
-            status is not None
-            and not status.pending
-            and not getattr(status, "unknown", ())
-        )
+        # What a bulk run would take on: the pending layers, plus the `unknown`
+        # ones a bulk run re-checks on disk (it recomputes its own status over
+        # the whole project). One set feeds the rows' spinners, the count on
+        # Harmonize N pending and whether that button shows, so the three
+        # cannot drift. An `unknown` entry is a maybe — it sits in neither
+        # list, so keying off `pending` alone would hide the button on exactly
+        # the legacy projects that most need a run.
+        missing_keys = status.pending + status.unknown
+        nothing_pending = not missing_keys
         if not run_in_flight:
             running_keys = set()
         elif pending_harmonize.value is not None:
             running_keys = {pending_harmonize.value}
-        elif status is None:
-            running_keys = set()
         else:
             # A bulk run recomputes its own status from disk over the whole
             # project, so an unstamped layer is genuinely under consideration
@@ -698,9 +693,7 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
             # moot — the merge above resolves `unknown` away before a run
             # starts — but not on a legacy project where Run is pressed before
             # the disk verdict lands, which is the case this exists for.
-            running_keys = set(status.pending) | set(
-                getattr(status, "unknown", None) or ()
-            )
+            running_keys = set(missing_keys)
 
         HarmonizationVariableList(
             project=project,
@@ -753,36 +746,38 @@ def ProcessTile(project, processing, map_=None, legend_port=None):
                 style=MUTED + "font-size:0.8rem;font-style:italic;",
             )
 
-        # Same icon as the per-row action, same shape as Step 2's Download-all
-        # under its source list; outlined with the grey hourglass while a run is
-        # in flight (as Download-all does).
+        # Same icon as the per-row action, same shape as Step 2's Download
+        # under its source list, and like it the label counts what a press
+        # would process (the layers read pending or still checking). Outlined
+        # with the grey hourglass while a run is in flight (as Download does).
         solara.Style(HOURGLASS_CSS)
-        solara.Button(
-            t("tiles.process.harmonize_all_button"),
-            icon_name=BUSY_ICON if run_in_flight else "mdi-hammer",
-            classes=BUSY_CLASSES if run_in_flight else [],
-            color=None if run_in_flight else "primary",
-            outlined=run_in_flight,
-            small=True,
-            block=True,
-            on_click=run_processing,
-            # `disabled=` is a render-time prop: like `processing` (only set INSIDE
-            # the coroutine), it reaches the browser a round-trip after the task
-            # starts, so neither actually stops a fast double-click. This is
-            # cosmetic only — it makes the button also *look* disabled during that
-            # window. The real guard is run_processing()'s synchronous
-            # process_task.pending check above, same gate as ProjectPanel's
-            # confirm_delete. variables_tile/postprocess_tile still wire
-            # on_click straight to their task (same gap, filed as a follow-up).
-            # ``nothing_pending`` is not a double-click guard but a no-op guard:
-            # with every layer already on the reference grid a run rewrites
-            # nothing, and the sentence that used to say so is gone, so the
-            # button carries it — as Download-all does with no cloud layers left.
-            # A run in flight is the hourglass instead (BUSY_CLASSES ignores
-            # clicks without the faded disabled look).
-            disabled=not run_in_flight
-            and (not has_base or nothing_pending or "reference" in reference_inflight),
-        )
+        # Gone with every layer already on the reference grid (a run would
+        # rewrite nothing), as Download is with no cloud layers left. A run in
+        # flight keeps it as the hourglass until the run ends.
+        if run_in_flight or not nothing_pending:
+            solara.Button(
+                t("tiles.process.harmonize_all_button", count=len(missing_keys)),
+                icon_name=BUSY_ICON if run_in_flight else "mdi-hammer",
+                classes=BUSY_CLASSES if run_in_flight else [],
+                color=None if run_in_flight else "primary",
+                outlined=run_in_flight,
+                small=True,
+                block=True,
+                on_click=run_processing,
+                # `disabled=` is a render-time prop: like `processing` (only set
+                # INSIDE the coroutine), it reaches the browser a round-trip
+                # after the task starts, so neither actually stops a fast
+                # double-click. This is cosmetic only — it makes the button also
+                # *look* disabled during that window. The real guard is
+                # run_processing()'s synchronous process_task.pending check
+                # above, same gate as ProjectPanel's confirm_delete.
+                # variables_tile/postprocess_tile still wire on_click straight
+                # to their task (same gap, filed as a follow-up). A run in
+                # flight is the hourglass instead (BUSY_CLASSES ignores clicks
+                # without the faded disabled look).
+                disabled=not run_in_flight
+                and (not has_base or "reference" in reference_inflight),
+            )
 
     # `will_replace` is the creation flow's overwrite guard; setting a reference
     # is idempotent, so there is nothing to confirm.

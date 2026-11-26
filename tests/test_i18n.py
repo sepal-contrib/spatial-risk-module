@@ -283,7 +283,9 @@ def test_harmonization_rename_values():
     assert i18n.t("workflow.tab_process") == "Harmonization"
     assert i18n.t("workflow.tab_postprocess") == "Derived layers"
     assert i18n.t("tiles.process.header") == "### Harmonization"
-    assert i18n.t("tiles.process.harmonize_all_button") == "Harmonize all"
+    assert (
+        i18n.t("tiles.process.harmonize_all_button", count=2) == "Harmonize 2 pending"
+    )
     assert i18n.t("tiles.postprocess.header") == "### Derived layers"
     assert i18n.t("widgets.variable_list.processed_title") == "Harmonized variables"
     # keys orphaned by the compact tile were dropped (missing-key behavior)
