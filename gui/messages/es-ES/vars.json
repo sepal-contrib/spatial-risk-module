@@ -321,7 +321,12 @@
       "param_logging_timing": "Período",
       "param_logging_timing_hint": "Por año muestra la tala de un año; en un período, la tala entre un año inicial y un año final.",
       "logging_timing_yearly": "Por año",
-      "logging_timing_period": "En un período"
+      "logging_timing_period": "En un período",
+      "param_change_span": "Período",
+      "param_change_span_hint": "Un año muestra los cambios de un solo año calendario; en un período, los ocurridos entre un año inicial y uno final.",
+      "change_span_year": "Un año",
+      "change_span_period": "En un período",
+      "one_year_hint": "Cambios durante {year}: bosque el 1 de enero de {year}, cambiado antes del 1 de enero de {next}."
     },
     "predefined_group": {
       "terrain": "Terreno",

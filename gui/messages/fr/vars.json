@@ -321,7 +321,12 @@
       "param_logging_timing": "Période",
       "param_logging_timing_hint": "Par année cartographie l'exploitation d'une année ; sur une période, l'exploitation entre une année de début et une année de fin.",
       "logging_timing_yearly": "Par année",
-      "logging_timing_period": "Sur une période"
+      "logging_timing_period": "Sur une période",
+      "param_change_span": "Période",
+      "param_change_span_hint": "Une année montre les changements d'une seule année civile ; sur une période, ceux entre une année de début et une année de fin.",
+      "change_span_year": "Une année",
+      "change_span_period": "Sur une période",
+      "one_year_hint": "Changements en {year} : forêt au 1er janvier {year}, changée avant le 1er janvier {next}."
     },
     "predefined_group": {
       "terrain": "Relief",

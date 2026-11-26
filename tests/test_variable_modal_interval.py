@@ -236,3 +236,91 @@ def test_logging_submit_over_a_period_saves_the_pair():
         "start_year": 2015,
         "end_year": 2020,
     }
+
+
+# ---- One year: a single year Y stored as the Y .. Y + 1 interval -------------
+
+SPAN = "vars.modal.param_change_span"
+YEAR = "vars.modal.predefined_year_label"
+
+
+def _gfc_2019():
+    return _defo_gfc({"tree_cover_threshold": 30, "start_year": 2019, "end_year": 2020})
+
+
+def test_change_targets_show_the_period_control():
+    """GFC deforestation shows Period; logging keeps its own switch only."""
+    rc = _render(_defo_gfc({}))
+    sel = _select(rc, SPAN)
+    assert sel and sel.v_model == "period"
+    rc = _render(
+        {
+            "source": "predefined",
+            "predefined_key": "logging_mapbiomas",
+            "params": {"timing": "period"},
+        }
+    )
+    # logging's own switch is labelled "Period" too: tell them apart by hint
+    hint = t("vars.modal.param_change_span_hint")
+    assert not [s for s in rc.find(vw.Select).widgets if s.hint == hint]
+
+
+def test_one_year_saves_the_one_year_interval():
+    """One year 2019 is stored as 2019-2020, with no trace of the switch."""
+    added = []
+    rc = _render(_defo_gfc({}), on_add=added.append)
+    _select(rc, SPAN).v_model = "year"
+    assert _select(rc, "vars.modal.param_start_year") is None
+    _select(rc, YEAR).v_model = 2019
+    _submit(rc)
+    assert added[0]["name"] == "deforestation_gfc_tc30_2019_2020"
+    assert "_span" not in (added[0].get("params") or {})
+    assert "_span" not in added[0]["name"]
+
+
+def test_one_year_offers_only_years_with_a_next_year():
+    """TMF 2025 is not offered in One year."""
+    rc = _render(
+        {"source": "predefined", "predefined_key": "deforestation_tmf", "params": {}}
+    )
+    _select(rc, SPAN).v_model = "year"
+    items = _select(rc, YEAR).items
+    assert items and 2025 not in items
+
+
+def test_one_year_layer_reopens_in_one_year():
+    """Edit of a 2019-2020 layer shows One year, Year 2019."""
+    rc = _render(_gfc_2019())
+    assert _select(rc, SPAN).v_model == "year"
+    assert _select(rc, YEAR).v_model == 2019
+
+
+def test_switching_to_one_year_rewrites_the_end():
+    """2015-2020 switched to One year becomes 2015-2016."""
+    added = []
+    rc = _render(
+        _defo_gfc({"tree_cover_threshold": 30, "start_year": 2015, "end_year": 2020}),
+        on_add=added.append,
+    )
+    _select(rc, SPAN).v_model = "year"
+    _submit(rc)
+    assert added[0]["name"] == "deforestation_gfc_tc30_2015_2016"
+
+
+def test_clearing_one_year_blanks_both():
+    """No year picked: submit reports the missing start year, nothing is added."""
+    added = []
+    rc = _render(_gfc_2019(), on_add=added.append)
+    _select(rc, YEAR).v_model = None
+    _submit(rc)
+    assert not added
+    assert t(
+        "vars.modal.error_param_year", label=t("vars.modal.param_start_year")
+    ) in _alert_text(rc)
+
+
+def test_other_layer_starts_over_a_period():
+    """The switch does not leak to the next layer picked."""
+    rc = _render(_gfc_2019())
+    _select(rc, "vars.modal.predefined_variable_label").v_model = "deforestation_tmf"
+    assert _select(rc, SPAN).v_model == "period"

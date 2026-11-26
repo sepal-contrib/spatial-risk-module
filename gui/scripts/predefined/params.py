@@ -93,6 +93,30 @@ def interval_param_specs(entry):
     ]
 
 
+def offers_one_year(entry):
+    """Does an interval entry offer the One year shortcut (start Y, end Y + 1)?
+
+    Not when the pair has its own switch (``interval_depends_on``: logging's
+    By year is a predictor, not a one-year target).
+    """
+    entry = entry or {}
+    return bool(entry.get("interval_years")) and not entry.get("interval_depends_on")
+
+
+def one_year_starts(years):
+    """The years Y whose Y + 1 is offered too, ascending."""
+    offered = set(years)
+    return sorted(y for y in offered if y + 1 in offered)
+
+
+def is_one_year(values):
+    """True when ``start_year``/``end_year`` are set and one year apart."""
+    try:
+        return int(values["end_year"]) - int(values["start_year"]) == 1
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def match_year_segment(spec, segment):
     """The year a segment encodes, or None (not 4 ASCII digits / not offered)."""
     if not _YEAR_SEGMENT.fullmatch(segment or ""):

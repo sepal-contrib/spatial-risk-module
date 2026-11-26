@@ -321,7 +321,12 @@
       "param_logging_timing": "Período",
       "param_logging_timing_hint": "Por ano mapeia a exploração em um ano; em um período, a exploração entre um ano inicial e um ano final.",
       "logging_timing_yearly": "Por ano",
-      "logging_timing_period": "Em um período"
+      "logging_timing_period": "Em um período",
+      "param_change_span": "Período",
+      "param_change_span_hint": "Um ano mostra as mudanças de um único ano civil; em um período, as ocorridas entre um ano inicial e um final.",
+      "change_span_year": "Um ano",
+      "change_span_period": "Em um período",
+      "one_year_hint": "Mudanças durante {year}: floresta em 1º de janeiro de {year}, alterada antes de 1º de janeiro de {next}."
     },
     "predefined_group": {
       "terrain": "Terreno",

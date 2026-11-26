@@ -321,7 +321,12 @@
       "param_logging_timing": "Period",
       "param_logging_timing_hint": "By year maps logging in one year; over a period maps logging between a start and an end year.",
       "logging_timing_yearly": "By year",
-      "logging_timing_period": "Over a period"
+      "logging_timing_period": "Over a period",
+      "param_change_span": "Period",
+      "param_change_span_hint": "One year maps the changes of a single calendar year; over a period, those between a start and an end year.",
+      "change_span_year": "One year",
+      "change_span_period": "Over a period",
+      "one_year_hint": "Changes during {year}: forest on 1 January {year}, changed before 1 January {next}."
     },
     "predefined_group": {
       "terrain": "Terrain",

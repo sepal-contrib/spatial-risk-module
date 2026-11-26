@@ -24,6 +24,11 @@ from gui.scripts.predefined import (
     validate_entry,
     vis_override,
 )
+from gui.scripts.predefined.params import (
+    is_one_year,
+    offers_one_year,
+    one_year_starts,
+)
 from gui.scripts.predefined_variables import (
     GROUP_ORDER,
     PREDEFINED_CATALOGUE,
@@ -199,6 +204,11 @@ def _type_display(var_type: str) -> str:
     """Friendly label for a variable-type discriminator (falls back to raw)."""
     key = _TYPE_LABEL_KEYS.get(var_type)
     return t(key) if key else var_type
+
+
+#: Form-only key in ``params_raw``: "year" = One year, absent/"period" = a
+#: start/end pair. Not a catalogue param, so it never reaches names or saves.
+SPAN_KEY = "_span"
 
 
 def _raw_params(values):
@@ -465,7 +475,12 @@ def VariableModal(
             **default_param_values(initial_key),
             **(initial_entry.get("params") or {}),
         }
-        set_params_raw(_raw_params(initial_params))
+        raw = _raw_params(initial_params)
+        if offers_one_year(PREDEFINED_CATALOGUE.get(initial_key)) and is_one_year(
+            initial_params
+        ):
+            raw[SPAN_KEY] = "year"
+        set_params_raw(raw)
         set_advanced_open(changed_advanced_count(initial_key, initial_params) > 0)
         set_var_type(initial_entry.get("type", VAR_TYPES[0]))
         set_name(initial_entry.get("name", ""))
@@ -1127,10 +1142,18 @@ def _render_predefined_fields(
                 )
 
         # Interval layers (deforestation_gfc, ...): start and end year side by
-        # side in place of the Year select (they are non-temporal).
+        # side in place of the Year select (they are non-temporal). Change
+        # targets can instead take One year: Y stored as the Y .. Y + 1 pair.
+        pair = [s for s in basic if s.get("type") == "year"]
+        one_year = offers_one_year(cat) and params_raw.get(SPAN_KEY) == "year"
+        with rv.Html(tag="div"):
+            if offers_one_year(cat) and pair:
+                _ChangeSpanSelect(pair[0]["options"], params_raw, set_params_raw)
         with rv.Html(tag="div", style_="display:flex;gap:8px;"):
-            for spec in basic:
-                if spec.get("type") == "year":
+            if one_year:
+                _one_year_select(pair[0]["options"], params_raw, set_params_raw)
+            else:
+                for spec in pair:
                     with rv.Html(tag="div", style_="flex:1;min-width:0;"):
                         _render_param_field(spec, params_raw, set_params_raw)
 
@@ -1208,6 +1231,63 @@ def _LayerSelect(predefined_key, on_select, cat):
         t(description_key) if description_key else "",
         info_open and bool(description_key),
         set_info_open,
+    )
+
+
+def _one_year_pair(year):
+    """Form values for One year ``year`` (blank pair when cleared)."""
+    if year in (None, ""):
+        return {"start_year": "", "end_year": ""}
+    return {"start_year": str(year), "end_year": str(int(year) + 1)}
+
+
+def _ChangeSpanSelect(years, params_raw, set_params_raw):
+    """Period: One year / Over a period, above a change target's years."""
+
+    def on_span(value):
+        def update(prev):
+            out = {**prev, SPAN_KEY: value}
+            if value == "year":
+                # Keep a start that has a next year; else start over blank.
+                start = _parse_year(prev.get("start_year"))
+                out.update(
+                    _one_year_pair(start if start in one_year_starts(years) else None)
+                )
+            return out
+
+        set_params_raw(update)
+
+    rv.Select(
+        label=t("vars.modal.param_change_span"),
+        items=[
+            {"text": t("vars.modal.change_span_period"), "value": "period"},
+            {"text": t("vars.modal.change_span_year"), "value": "year"},
+        ],
+        v_model=params_raw.get(SPAN_KEY) or "period",
+        on_v_model=on_span,
+        dense=True,
+        outlined=True,
+        hint=t("vars.modal.param_change_span_hint"),
+        persistent_hint=True,
+        class_="sr-param-field",
+    )
+
+
+def _one_year_select(years, params_raw, set_params_raw):
+    """The single Year select of One year; writes both interval years."""
+    picked = _parse_year(params_raw.get("start_year"))
+    rv.Select(
+        label=t("vars.modal.predefined_year_label"),
+        items=sorted(one_year_starts(years), reverse=True),  # newest first
+        v_model=picked,
+        on_v_model=lambda v: set_params_raw(lambda prev: {**prev, **_one_year_pair(v)}),
+        dense=True,
+        outlined=True,
+        hint=t("vars.modal.one_year_hint", year=picked, next=picked + 1)
+        if picked
+        else "",
+        persistent_hint=bool(picked),
+        class_="sr-param-field",
     )
 
 

@@ -341,3 +341,43 @@ def test_interval_target_checks_follow_the_period():
     period = NS(name="logging_mapbiomas_brazil_period_2015_2020")
     assert _is_interval_target(period) is True
     assert interval_from_target("logging_mapbiomas_brazil") is None
+
+
+# --- One year: the one-year interval behind the Period switch ----------------
+
+from gui.scripts.predefined.forest_change import TMF_YEARS  # noqa: E402
+from gui.scripts.predefined.params import (  # noqa: E402
+    is_one_year,
+    offers_one_year,
+    one_year_starts,
+)
+
+
+@pytest.mark.parametrize(
+    "key, offered",
+    [
+        ("deforestation_gfc", True),
+        ("deforestation_tmf", True),
+        ("degradation_tmf", True),
+        ("deforestation_mapbiomas", True),
+        ("logging_mapbiomas", False),
+        ("forest_gfc", False),
+    ],
+)
+def test_offers_one_year(key, offered):
+    """The four change targets offer One year; logging and plain layers do not."""
+    assert offers_one_year(PREDEFINED_CATALOGUE[key]) is offered
+
+
+def test_one_year_starts_need_a_next_year():
+    """TMF 2025 has no 2026, so it is not a One year start."""
+    assert one_year_starts([2001, 2002, 2003]) == [2001, 2002]
+    assert 2025 not in one_year_starts(TMF_YEARS)
+
+
+def test_is_one_year():
+    """Only a one-year gap reads as One year."""
+    assert is_one_year({"start_year": 2019, "end_year": 2020})
+    assert is_one_year({"start_year": "2019", "end_year": "2020"})
+    assert not is_one_year({"start_year": 2015, "end_year": 2020})
+    assert not is_one_year({"start_year": None, "end_year": 2020})
