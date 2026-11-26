@@ -3,7 +3,6 @@
 import logging
 import threading
 from enum import Enum
-from pathlib import Path
 
 import ee
 import solara
@@ -13,13 +12,13 @@ from gui.i18n import t
 from gui.scripts import process_actions
 from gui.scripts.file_prompts import DeletePrompt, delete_prompt, overwrite_prompt
 from gui.scripts.inflight import InflightKeys
-from gui.scripts.predefined import CUSTOM_TAG
 from gui.scripts.layer_labels import raw_layer_label
 from gui.scripts.map_helpers import add_vector_on_map, is_mappable
 from gui.scripts.notify_bridge import (
     layer_progress_reporter,
     tracked_job,
 )
+from gui.scripts.predefined import CUSTOM_TAG
 from gui.scripts.project_ui_helpers import format_size
 from gui.scripts.solara_threads import publish_if_current, spawn_in_context
 from gui.scripts.variable_classes import outline_style
