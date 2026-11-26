@@ -58,7 +58,7 @@ def test_status_keys_resolve_in_english():
     list's own Status column already says, per variable and in place.
     """
     assert t("tiles.process.checking_status") != "tiles.process.checking_status"
-    assert t("tiles.process.harmonize_all_button") == "Harmonize all"
+    assert t("tiles.process.harmonize_all_button", count=2) == "Harmonize 2 pending"
     # Orphaned by the reference strip and the chip removal — missing-key
     # behavior is the assertion.
     for gone in (
@@ -432,8 +432,8 @@ def test_a_legacy_project_drops_harmonized_after_an_in_place_edit(monkeypatch):
         rc.close()
 
 
-def _harmonize_all(rc):
-    """The bulk button, found by its label."""
+def _harmonize_buttons(rc):
+    """The bulk buttons, found by their label (zero or one)."""
 
     def leaves(w):
         for c in getattr(w, "children", None) or []:
@@ -442,18 +442,28 @@ def _harmonize_all(rc):
             else:
                 yield from leaves(c)
 
-    label = t("tiles.process.harmonize_all_button")
-    hits = [b for b in rc.find(vw.Btn).widgets if label in list(leaves(b))]
-    assert len(hits) == 1, f"expected one {label!r} button, got {len(hits)}"
+    # The label carries a count ("Harmonize 2 pending"): match what precedes it.
+    label = t("widgets.product_table.verb_harmonize")
+    return [
+        b
+        for b in rc.find(vw.Btn).widgets
+        if any(s.startswith(label) for s in leaves(b))
+    ]
+
+
+def _harmonize_all(rc):
+    """The bulk button, found by its label."""
+    hits = _harmonize_buttons(rc)
+    assert len(hits) == 1, f"expected one Harmonize button, got {len(hits)}"
     return hits[0]
 
 
-def test_harmonize_all_goes_dead_once_every_layer_is_current(monkeypatch):
+def test_harmonize_all_is_gone_once_every_layer_is_current(monkeypatch):
     """Nothing pending means pressing it would rewrite nothing.
 
     The sentence that used to say so ("Running again will do nothing") is
-    gone, so the button itself has to carry it — the same contract as
-    Download-all, which is dead when no layer is still cloud-backed.
+    gone, and so is the button — the same contract as Download, which is
+    gone when no layer is still cloud-backed.
     """
     monkeypatch.setattr(
         process_tile,
@@ -464,8 +474,8 @@ def test_harmonize_all_goes_dead_once_every_layer_is_current(monkeypatch):
     rc = _render_process_tile(project)
     try:
         assert _wait_until(
-            lambda: _harmonize_all(rc).disabled is True
-        ), "Harmonize all stayed live with nothing left to harmonize"
+            lambda: not _harmonize_buttons(rc)
+        ), "Harmonize stayed on screen with nothing left to harmonize"
     finally:
         rc.close()
 

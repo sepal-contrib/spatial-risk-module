@@ -336,11 +336,13 @@ def test_the_strip_stops_inviting_a_change_while_a_warp_runs(monkeypatch):
 
 def _row_hammers(rc):
     """The per-row harmonize buttons (the bulk one carries a label as well)."""
-    label = t("tiles.process.harmonize_all_button")
+    # The bulk label carries a count ("Harmonize 2 pending"): match its prefix.
+    label = t("widgets.product_table.verb_harmonize")
     return [
         b
         for b in rc.find(vw.Btn).widgets
-        if "mdi-play" in list(_leaves(b)) and label not in list(_leaves(b))
+        if "mdi-play" in list(_leaves(b))
+        and not any(s.startswith(label) for s in _leaves(b))
     ]
 
 

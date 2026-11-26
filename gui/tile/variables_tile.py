@@ -1012,28 +1012,34 @@ def VariablesTile(project, map_=None, sepal_client=None, legend_port=None):
             toggling_keys=toggling,
         )
 
-        # Download-all button, below the list. While any download runs it is an
-        # outlined button with the grey hourglass (no spinner, see
-        # HOURGLASS_CSS: grey on the blue fill would read poorly); it stays
-        # clickable for the layers not downloading yet, and with none left it
-        # ignores clicks (sr-busy) instead of fading to disabled grey.
+        # Download-pending button, below the list; gone with nothing to
+        # download. While any download runs it is an outlined button with the
+        # grey hourglass (no spinner, see HOURGLASS_CSS: grey on the blue fill
+        # would read poorly); it stays clickable for the layers not downloading
+        # yet, and with none left it ignores clicks (sr-busy).
         idle_pending = [k for k in pending_geevars if k not in downloading]
         busy = bool(downloading)
         busy_classes = []
         if busy:
             busy_classes = ["sr-hourglass"] if idle_pending else BUSY_CLASSES
         solara.Style(HOURGLASS_CSS)
-        solara.Button(
-            t("tiles.variables.download_button", count=len(idle_pending)),
-            icon_name=BUSY_ICON if busy else "mdi-cloud-download-outline",
-            color=None if busy else "primary",
-            outlined=busy,
-            small=True,
-            block=True,
-            on_click=lambda: on_download(None),
-            disabled=not idle_pending and not busy,
-            classes=busy_classes,
-        )
+        if idle_pending or busy:
+            solara.Button(
+                # Everything already downloading: the plain verb, not a
+                # "0 pending" beside the hourglass.
+                (
+                    t("tiles.variables.download_button", count=len(idle_pending))
+                    if idle_pending
+                    else t("widgets.product_table.verb_download")
+                ),
+                icon_name=BUSY_ICON if busy else "mdi-cloud-download-outline",
+                color=None if busy else "primary",
+                outlined=busy,
+                small=True,
+                block=True,
+                on_click=lambda: on_download(None),
+                classes=busy_classes,
+            )
 
     editing_entry = (
         _variable_to_entry(editing_key, p.raw_variables[editing_key], p)
