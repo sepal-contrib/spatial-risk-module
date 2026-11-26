@@ -28,18 +28,22 @@ _SELECTION_BAR = (
 
 
 @solara.component
-def RampSelect(value, on_value, invert, on_invert, disabled=False):
+def RampSelect(
+    value, on_value, invert, on_invert, disabled=False, default_palette=None
+):
     """The colour ramp select and, on its row, the Invert switch.
 
     The chosen ramp shows its bar and name; the menu rows' bars are CSS
     (``ramp_menu_css``), as a widget slot cannot read the row it is drawn for.
+    A catalogue layer's ``default_palette`` is offered first, as "default".
     """
     items = [
-        {"text": t(f"vars.modal.ramp_{key}"), "value": key} for key in palettes.RAMPS
+        {"text": t(f"vars.modal.ramp_{key}"), "value": key}
+        for key in palettes.ramp_keys(default_palette)
     ]
     slots = []
     if value is not None:
-        gradient = palettes.ramp_css(value, invert)
+        gradient = palettes.ramp_css(value, invert, default_palette)
         chosen = rv.Html(
             tag="span",
             children=[
@@ -49,7 +53,7 @@ def RampSelect(value, on_value, invert, on_invert, disabled=False):
         )
         slots = [{"name": "selection", "children": chosen}]
     with rv.Html(tag="div", style_=_RAMP_ROW):
-        solara.Style(palettes.ramp_menu_css(RAMP_MENU, invert))
+        solara.Style(palettes.ramp_menu_css(RAMP_MENU, invert, default_palette))
         rv.Select(
             label=t("vars.modal.ramp_label"),
             items=items,
@@ -151,6 +155,17 @@ def ClassList(classes, on_classes, disabled=False):
     def _update(i, **changes):
         on_classes([{**c, **changes} if j == i else c for j, c in enumerate(classes)])
 
+    def _relabel(i, text):
+        # Typing replaces a catalogue label: it stops following the language.
+        on_classes(
+            [
+                {k: v for k, v in c.items() if k != "label_key"} | {"label": text}
+                if j == i
+                else c
+                for j, c in enumerate(classes)
+            ]
+        )
+
     def _add(text):
         value = _parse_value(text)
         if value is None or value in {c["value"] for c in classes}:
@@ -206,8 +221,8 @@ def ClassList(classes, on_classes, disabled=False):
                     rv.Html(tag="span", style_=_CLASS_VALUE, children=[str(c["value"])])
                     rv.TextField(
                         placeholder=t("vars.modal.class_label"),
-                        v_model=c["label"],
-                        on_v_model=lambda value, i=i: _update(i, label=value or ""),
+                        v_model=t(c["label_key"]) if c.get("label_key") else c["label"],
+                        on_v_model=lambda value, i=i: _relabel(i, value or ""),
                         dense=True,
                         hide_details=True,
                         disabled=disabled,

@@ -150,6 +150,7 @@ def test_build_predefined_forwards_params_to_get_image(monkeypatch):
     assert seen["params"] == {"tree_cover_threshold": 45}
     assert seen["year"] == 2020
     assert var.name == "forest_gfc_tc45"  # suffix kept: it names the output file
+    assert var.params == {"tree_cover_threshold": 45}  # kept for the Details dialog
 
 
 def test_build_predefined_without_params_is_unchanged(monkeypatch):
@@ -428,3 +429,152 @@ def test_local_raster_band_becomes_single_band_vrt(tmp_path, monkeypatch):
     entry = _variable_to_entry("multi", var, _FakeProject())
     assert entry["path"] == str(src)
     assert entry["band"] == 2
+
+
+def _project(tmp_path, monkeypatch):
+    from spatialrisk import Project
+
+    monkeypatch.setenv("SPATIAL_RISK_DATA_DIR", str(tmp_path / "data"))
+    return Project(project_name="p")
+
+
+def test_downloaded_catalogue_layer_reopens_as_predefined(tmp_path, monkeypatch):
+    """A downloaded catalogue layer edits as predefined, not as a custom file."""
+    from spatialrisk.variables.local_raster_var import LocalRasterVar
+
+    project = _project(tmp_path, monkeypatch)
+    name = "deforestation_gfc_tc30_2015_2020"
+    var = LocalRasterVar(
+        name=name,
+        # Where GEEVar._download writes it.
+        path=project.folders.data_raw_folder / f"{name}.tif",
+        raster_type=RasterType.categorical,
+        project=project,
+        # Copied from the GEEVar by to_local_raster: marks a catalogue layer.
+        params={"tree_cover_threshold": 30, "start_year": 2015, "end_year": 2020},
+    )
+    entry = _variable_to_entry(var.name, var, project)
+
+    assert entry["source"] == "predefined"
+    assert entry["type"] == "GEEVar"
+    assert entry["predefined_key"] == "deforestation_gfc"
+    assert entry["params"] == {
+        "tree_cover_threshold": 30,
+        "start_year": 2015,
+        "end_year": 2020,
+    }
+    assert entry["year"] == ""
+    assert "vis_params" not in entry  # no override: the catalogue look applies
+
+
+def test_catalogue_named_file_at_a_user_path_stays_custom(tmp_path, monkeypatch):
+    """A user's own slope.tif is not a download: Save must keep its file."""
+    from spatialrisk.variables.local_raster_var import LocalRasterVar
+
+    project = _project(tmp_path, monkeypatch)
+    user_file = tmp_path / "mine" / "slope.tif"
+    var = LocalRasterVar(
+        name="slope",
+        path=user_file,
+        raster_type=RasterType.continuous,
+        project=project,
+    )
+    entry = _variable_to_entry("slope", var, project)
+
+    assert entry["source"] == "custom"
+    assert entry["path"] == str(user_file)
+
+
+def test_catalogue_named_file_without_project_stays_custom():
+    """No project to locate the download folder: the safe side is custom."""
+    from spatialrisk.variables.local_raster_var import LocalRasterVar
+
+    var = LocalRasterVar(
+        name="slope", path="/tmp/slope.tif", raster_type=RasterType.continuous
+    )
+    assert _variable_to_entry("slope", var, _FakeProject())["source"] == "custom"
+
+
+def test_override_round_trips(tmp_path, monkeypatch):
+    """A saved display override survives build -> download -> reopen."""
+    import ee
+
+    import gui.scripts.predefined_variables as pv
+    from gui.tile.variables_tile import _build_predefined
+
+    monkeypatch.setitem(
+        pv.PREDEFINED_CATALOGUE,
+        "forest_gfc",
+        {
+            **pv.PREDEFINED_CATALOGUE["forest_gfc"],
+            "get_image": lambda aoi, year=None, **params: "IMAGE",
+        },
+    )
+    monkeypatch.setattr(
+        pv, "resolve_aoi_ee", lambda _result: ee.Geometry.__new__(ee.Geometry)
+    )
+
+    class _Reactive:
+        value = object()
+
+    class _FakeState:
+        aoi_result = _Reactive()
+
+    monkeypatch.setattr("gui.store.state_manager.app_state", _FakeState)
+
+    project = _project(tmp_path, monkeypatch)
+    vis = {"palette": ["000000", "ff0000"], "min": 0, "max": 1}
+    var = _build_predefined(
+        {
+            "source": "predefined",
+            "type": "GEEVar",
+            "name": "forest_gfc_tc45",
+            "predefined_key": "forest_gfc",
+            "params": {"tree_cover_threshold": 45},
+            "year": 2020,
+            "data_type": DataType.raster,
+            "raster_type": RasterType.categorical,
+            "vis_params": vis,
+        },
+        project,
+    )
+    assert var.vis_params == vis
+
+    entry = _variable_to_entry("forest_gfc_tc45_2020", var, project)
+    assert entry["source"] == "predefined"
+    assert entry["params"] == {"tree_cover_threshold": 45}
+    assert entry["vis_params"] == vis
+
+    # The downloaded copy (GEEVar.to_local_raster) keeps both.
+    from spatialrisk.variables.local_raster_var import LocalRasterVar
+
+    local = LocalRasterVar(
+        name=var.name,
+        path=var.expected_local_path,
+        raster_type=RasterType.categorical,
+        project=project,
+        year=2020,
+        params=var.params,
+        vis_params=var.vis_params,
+    )
+    entry = _variable_to_entry("forest_gfc_tc45_2020", local, project)
+    assert entry["source"] == "predefined"
+    assert entry["params"] == {"tree_cover_threshold": 45}
+    assert entry["vis_params"] == vis
+    assert entry["year"] == "2020"
+
+
+def test_custom_layer_named_like_nothing_stays_custom():
+    """A local raster whose name is no catalogue layer keeps the custom branch."""
+    from spatialrisk.variables.local_raster_var import LocalRasterVar
+
+    var = LocalRasterVar(
+        name="my_dem",
+        path="/tmp/my_dem.tif",
+        raster_type=RasterType.continuous,
+    )
+    entry = _variable_to_entry("my_dem", var, _FakeProject())
+
+    assert entry["source"] == "custom"
+    assert entry["type"] == "LocalRasterVar"
+    assert entry["path"] == "/tmp/my_dem.tif"

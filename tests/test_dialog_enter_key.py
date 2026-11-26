@@ -187,13 +187,20 @@ def test_confirm_dialog_defaults_to_confirm_not_cancel_or_the_secondary_choice()
 
 
 def test_variable_modal_defaults_to_its_submit_button():
-    """The Add Variable modal predates the frame; it tags its own submit."""
+    """The Add Variable modal predates the frame; it tags its own submit.
+
+    Its layer-info popup is a nested dialog with no default: Enter there
+    presses nothing rather than adding the variable behind it.
+    """
     box, rc = reacton.render(
         VariableModal(open_=solara.reactive(True), on_add=lambda entry: None),
         handle_error=False,
     )
     try:
-        assert _label(_only_default(box)) == t("common.add")
+        defaults = _defaults(box)
+        assert sorted(len(buttons) for buttons in defaults.values()) == [0, 1]
+        (buttons,) = [b for b in defaults.values() if b]
+        assert _label(buttons[0]) == t("common.add")
     finally:
         rc.close()
 

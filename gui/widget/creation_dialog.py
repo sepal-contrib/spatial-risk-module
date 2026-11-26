@@ -66,6 +66,13 @@ _ADVANCED_PANEL_CSS = """
 .multi-chips .v-select__selections { flex-wrap: wrap; padding: 3px 0; }
 .multi-chips .v-select__selections .v-chip { margin: 2px 4px 2px 0; }
 
+/* Catalogue param fields (`variable_modal._render_param_field`). Their
+   persistent hints wrap to two or three lines, and the next outlined field's
+   floating label rises above its border into that text; chips also need room
+   below the outlined label's notch. */
+.sr-param-field.v-input { margin-bottom: 10px; }
+.sr-param-field.multi-chips .v-select__selections { padding-top: 8px; }
+
 /* Formula textarea: patsy code reads better monospaced. */
 .formula-field textarea { font-family: monospace; font-size: 13px; }
 

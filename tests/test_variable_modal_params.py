@@ -54,14 +54,37 @@ def test_param_field_renders_the_seeded_value():
     assert _threshold_field({"tree_cover_threshold": 45}).v_model == "45"
 
 
-def test_param_field_does_not_invent_a_value_the_state_lacks():
-    """A params dict without this key leaves the field blank, not defaulted.
+def test_missing_param_is_seeded_into_state_and_submitted():
+    """A params dict without this key seeds the default into the form state.
 
-    Displaying the catalogue default here would promise a value that
-    ``coerce_param_values`` never sees, producing an unactionable range error
-    on submit.
+    The field must never show a value ``coerce_param_values`` won't see (that
+    gave an unactionable range error on submit). The default now lives in the
+    state itself, so what is shown is exactly what is submitted.
     """
-    assert _threshold_field({"some_other_param": 1}).v_model == ""
+    added = []
+    box, rc = reacton.render(
+        VariableModal(
+            open_=solara.reactive(True),
+            on_add=added.append,
+            initial_entry={
+                "source": "predefined",
+                "predefined_key": "forest_gfc",
+                "params": {"some_other_param": 1},
+                "year": 2020,
+            },
+        )
+    )
+    try:
+        label = t("vars.modal.param_tree_cover_threshold")
+        field = next(f for f in _find(box, vw.TextField) if f.label == label)
+        assert field.v_model == "30"
+        submit = [
+            b for b in rc.find(vw.Btn).widgets if t("common.add") in str(b.children)
+        ]
+        submit[0].click()
+        assert added and added[0]["params"]["tree_cover_threshold"] == 30
+    finally:
+        rc.close()
 
 
 def test_param_edits_use_a_functional_state_update():
@@ -71,7 +94,7 @@ def test_param_edits_use_a_functional_state_update():
     be stale by the time the handler runs. (Source inspection: reacton gives no
     hook here to interleave two handler calls within one render.)
     """
-    src = " ".join(inspect.getsource(mod._render_predefined_fields).split())
+    src = " ".join(inspect.getsource(mod._render_param_field).split())
     assert "set_params_raw(" in src
     assert "lambda prev: {**prev," in src  # the update reads the LATEST state
     assert "{**params_raw" not in src  # never the render's snapshot

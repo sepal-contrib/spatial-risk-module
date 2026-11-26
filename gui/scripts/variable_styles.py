@@ -59,7 +59,7 @@ def resolve_variable_style(var) -> dict:
     should auto-stretch to the file's actual min/max (localtileserver does this
     when they are not pinned). ``render_kind`` names which branch was taken, one
     of ``"postprocess_distance"``, ``"postprocess_change"``, ``"custom_classes"``,
-    ``"custom_palette"``,
+    ``"custom_palette"``, ``"class_palette"``,
     ``"catalogue_palette"``, ``"random_visualizer"``, ``"categorical_fallback"``,
     ``"continuous_fallback"`` —
     the legend builder uses it instead of re-deriving this dispatch logic.
@@ -79,10 +79,7 @@ def resolve_variable_style(var) -> dict:
       [0, 1]; continuous -> grayscale auto-stretched.
     """
     from gui.scripts.postprocess_styles import resolve_postprocess_style
-    from gui.scripts.predefined_variables import (
-        PREDEFINED_CATALOGUE,
-        resolve_predefined,
-    )
+    from gui.scripts.predefined import entry_for_variable
     from gui.scripts.variable_classes import class_colormap, visible_classes
 
     # Post-process outputs (edge/dist/loss/gain) first: they are renamed because they
@@ -124,9 +121,21 @@ def resolve_variable_style(var) -> dict:
 
     # Parameterised layers are named <key>_<suffix> (forest_gfc_tc30) — resolve
     # back to the catalogue key so they keep the palette they had as GEE layers.
-    cat_key, _params = resolve_predefined(name)
-    cat = PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
+    _key, _params, cat = entry_for_variable(var)
     if cat:
+        if cat.get("class_labels"):
+            # The catalogue's class table, drawn like a user class list.
+            from gui.scripts.variable_classes import from_class_labels
+
+            classes = from_class_labels(cat["class_labels"])
+            return {
+                "colormap": class_colormap(classes),
+                "vmin": 1,
+                "vmax": max(len(classes), 2),
+                "nodata": 0,
+                "classes": classes,
+                "render_kind": "class_palette",
+            }
         if cat.get("random_visualizer"):
             # Many arbitrary class values -> qualitative ramp (approximation of
             # GEE's per-class randomVisualizer, which has no local equivalent).

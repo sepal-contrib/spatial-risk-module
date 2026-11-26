@@ -124,6 +124,52 @@ def default_forest_key(project):
     return None
 
 
+def expected_forest_for_truth(truth_name):
+    """``(variable name, year)`` of the forest-at-start layer a target pairs with.
+
+    Interval targets declare ``forest_at_start`` in the catalogue:
+    ``deforestation_gfc_tc30_2015_2020`` -> ``("forest_gfc_tc30", 2015)``,
+    ``degradation_tmf_2015_2020`` -> ``("forest_tmf", 2015)``. An entry whose
+    forest map is dated at year end sets ``forest_year_offset: -1``: MapBiomas
+    LULC 2014 is the cover on 1 January 2015. None for any other name
+    (Process-step loss layers, custom truths).
+    """
+    from gui.scripts.predefined import build_predefined_name, entry_for_name
+
+    _key, params, entry = entry_for_name(truth_name or "")
+    pair = (entry or {}).get("forest_at_start")
+    if pair is None or params.get("start_year") is None:
+        return None
+    forest_key, forest_params = pair(params)
+    year = int(params["start_year"]) + entry.get("forest_year_offset", 0)
+    return build_predefined_name(forest_key, forest_params), year
+
+
+def _paired_forest(project, truth_key):
+    """(expected (name, year) or None, matching storage key or None)."""
+    pv = getattr(project, "processed_variables", None) or {}
+    truth = pv.get(truth_key) if truth_key else None
+    expected = expected_forest_for_truth(truth.name) if truth is not None else None
+    if expected is None:
+        return None, None
+    name, year = expected
+    for key, var in pv.items():
+        if var.name == name and getattr(var, "year", None) == year:
+            return expected, key
+    return expected, None
+
+
+def forest_key_for_truth(project, truth_key):
+    """Storage key of the processed layer an interval target pairs with, or None."""
+    return _paired_forest(project, truth_key)[1]
+
+
+def missing_forest_for_truth(project, truth_key):
+    """``(name, year)`` the user must add and process, or None when present/N/A."""
+    expected, key = _paired_forest(project, truth_key)
+    return expected if key is None else None
+
+
 def parse_interval(project, truth_key):
     """Interval (int) parsed from the truth variable's name, or None."""
     if project is None or not truth_key:
@@ -148,6 +194,16 @@ def build_truth_spec(project, truth_key, forest_key, interval):
         return None, "Select a truth (deforestation) variable."
     if not forest_key:
         return None, "Select a forest-at-start variable."
+    if forest_key == truth_key:
+        return None, (
+            "The forest-at-start layer must be a forest map, not the truth layer "
+            "itself."
+        )
+    if interval is None or not str(interval).strip():
+        return None, (
+            "The interval (years) could not be read from the truth variable's "
+            "name: enter the number of years it covers."
+        )
     try:
         ti = int(interval)
     except (TypeError, ValueError):

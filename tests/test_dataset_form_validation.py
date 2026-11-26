@@ -82,6 +82,8 @@ def test_temporal_variables_are_offered_once_per_year(tmp_path):
         2021,
     )
     assert by_text["altitude"]["value"] == choice_value("altitude", None)
+    # Newest year first (#35).
+    assert texts.index("defor (2020)") < texts.index("defor (2015)")
 
 
 def test_missing_or_removed_target_is_refused(tmp_path):

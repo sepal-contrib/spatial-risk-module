@@ -13,6 +13,7 @@ import reacton.ipyvuetify as rv
 import solara
 
 from gui.i18n import t
+from gui.scripts.predefined import entry_for_variable, param_rows
 from gui.scripts.variable_labels import year_label
 from gui.widget.details_fields import ro_field
 from gui.widget.variable_list import derived_source_key
@@ -121,6 +122,21 @@ def harmonized_details(project, key, status=None) -> Optional[VariableDetails]:
         ),
         (t(_K + "file_path"), str(path) if path else None),
     ]
+    # A predefined layer's params, one field each after the source. A layer
+    # saved before params were stored reads them back from its name, where a
+    # default value is omitted. A user's own layer named like one shows none.
+    cat_key, name_params, _entry = entry_for_variable(raw)
+    if cat_key is not None:
+        # Catalogue layers also say whether they use the catalogue display.
+        display = (
+            t(_K + "display_custom")
+            if getattr(raw, "vis_params", None)
+            else t(_K + "display_default")
+        )
+        rows[1:1] = param_rows(
+            cat_key,
+            getattr(raw, "params", None) or name_params,
+        ) + [(t(_K + "display"), display)]
     name = year_label(getattr(raw, "name", None) or key, getattr(raw, "year", None))
     return VariableDetails(name, rows)
 

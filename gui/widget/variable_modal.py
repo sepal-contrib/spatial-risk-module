@@ -16,9 +16,26 @@ from gui.scripts import variable_classes as vc
 from gui.scripts import variable_palettes as palettes
 from gui.scripts import variable_probes as probes
 from gui.scripts.legend_data import Label, format_number, variable_spec_from_vis
+from gui.scripts.predefined import (
+    active_param_specs,
+    aoi_param_defaults,
+    default_vis,
+    resolved_entry,
+    validate_entry,
+    vis_override,
+)
+from gui.scripts.predefined.params import (
+    is_one_year,
+    offers_one_year,
+    one_year_starts,
+)
 from gui.scripts.predefined_variables import (
+    GROUP_ORDER,
     PREDEFINED_CATALOGUE,
+    advanced_param_specs,
+    basic_param_specs,
     build_predefined_name,
+    changed_advanced_count,
     coerce_param_values,
     default_param_values,
     param_specs,
@@ -30,8 +47,10 @@ from gui.widget.band_select import (
     bands_block_save,
     use_band_list,
 )
+from gui.widget.creation_dialog import _ADVANCED_PANEL_CSS
 from gui.widget.dialog_nudge import NUDGE_CSS, use_outside_click_nudge
 from gui.widget.enter_key import ENTER_DEFAULT
+from gui.widget.help import InfoPopup
 from gui.widget.text_style import MUTED
 from gui.widget.vis_style_fields import (
     ClassList,
@@ -68,11 +87,23 @@ _VECTOR_EXTENSIONS = [".geojson", ".gpkg", ".shp", ".json"]
 
 
 def _predefined_items():
-    """Build dropdown items at render time so labels respect the active locale."""
-    return [
-        {"text": t(meta["label_key"]), "value": key}
-        for key, meta in PREDEFINED_CATALOGUE.items()
-    ]
+    """Dropdown items grouped by theme, built at render time for the locale.
+
+    Vuetify renders ``{"header": ...}`` items as non-selectable subheaders.
+    """
+    items = []
+    for group in GROUP_ORDER:
+        keys = [k for k, m in PREDEFINED_CATALOGUE.items() if m.get("group") == group]
+        if not keys:
+            continue
+        labels = {k: t(PREDEFINED_CATALOGUE[k]["label_key"]) for k in keys}
+        # Same layer name from another source ("Deforestation (MapBiomas)") sits
+        # next to its first occurrence, not at the end of the group.
+        names = [labels[k].split(" (")[0] for k in keys]
+        keys.sort(key=lambda k: names.index(labels[k].split(" (")[0]))
+        items.append({"header": t(f"vars.predefined_group.{group}")})
+        items.extend({"text": labels[k], "value": k} for k in keys)
+    return items
 
 
 def _source_items():
@@ -97,15 +128,143 @@ def custom_vis(raster_type: str, classes, ramp: str, invert: bool, span=None):
     return palettes.continuous_vis(ramp, invert, span)
 
 
+def _own_palette(default):
+    """A catalogue palette offered as the "default" ramp, or None.
+
+    A palette that is a preset shows as that preset: None here.
+    """
+    palette = (default or {}).get("palette")
+    if not palette or palettes.ramp_choice({"palette": palette})[0]:
+        return None
+    return palette
+
+
+def _display_state(vis, kind, default_palette=None, default=None):
+    """The style fields' state for ``vis``, a saved or default style.
+
+    ``kind`` and ``values`` are the raster type and the class values of the
+    default (``default``, else ``vis``) the fields are seeded for: a style
+    seeded for another one is reseeded, never submitted.
+    """
+    vis = vis or {}
+    values = _class_values(default or vis)
+    classes = []
+    if kind == RasterType.categorical.value:
+        # Also reads a legacy ``["ffffff", colour]`` 0..1 mask as its classes.
+        classes = vc.from_vis(vis) or []
+        named = {c["value"]: c for c in (default or {}).get("classes") or []}
+        if not vis.get("classes") and _class_values({"classes": classes}) == values:
+            # A legacy mask has no names: the catalogue's translated ones.
+            classes = [
+                vc.make(
+                    c["value"],
+                    c["color"],
+                    named[c["value"]]["label"],
+                    c["visible"],
+                    named[c["value"]].get("label_key"),
+                )
+                for c in classes
+            ]
+    ramp, invert = palettes.ramp_choice(vis, default_palette)
+    pinned = "min" in vis and "max" in vis
+    return {
+        "kind": kind,
+        "values": values,
+        "classes": classes,
+        "ramp": ramp or ("default" if default_palette else palettes.DEFAULT_RAMP),
+        "invert": invert,
+        "vmin": _number_text(vis["min"]) if pinned else "",
+        "vmax": _number_text(vis["max"]) if pinned else "",
+    }
+
+
+def _class_values(vis):
+    return frozenset(c["value"] for c in (vis or {}).get("classes") or [])
+
+
+def _style_vis(style, categorical, default_palette=None):
+    """The ``vis_params`` the style fields show, None while they cannot be drawn."""
+    if categorical:
+        return {"classes": [dict(c) for c in style["classes"]]}
+    valid, span = probes.parse_span(style["vmin"], style["vmax"])
+    # A "default" ramp whose layer now has a preset palette waits for its reseed.
+    if not valid or style["ramp"] not in palettes.ramp_keys(default_palette):
+        return None
+    return palettes.continuous_vis(
+        style["ramp"], style["invert"], span, default_palette
+    )
+
+
 def _number_text(value) -> str:
     value = float(value)
     return str(int(value)) if value.is_integer() else str(value)
+
+
+_NO_DISPLAY = _display_state(None, None)
 
 
 def _type_display(var_type: str) -> str:
     """Friendly label for a variable-type discriminator (falls back to raw)."""
     key = _TYPE_LABEL_KEYS.get(var_type)
     return t(key) if key else var_type
+
+
+#: Form-only key in ``params_raw``: "year" = One year, absent/"period" = a
+#: start/end pair. Not a catalogue param, so it never reaches names or saves.
+SPAN_KEY = "_span"
+
+
+def _raw_params(values):
+    """Form state for param values: lists stay lists (multichoice), the rest text.
+
+    Stringifying a list would turn ``["large", "major"]`` into the text
+    ``"['large', 'major']"`` and break the multiple select. None (an unset
+    interval year) becomes blank, not the text "None".
+    """
+    return {
+        k: ("" if v is None else list(v) if isinstance(v, (list, tuple)) else str(v))
+        for k, v in values.items()
+    }
+
+
+def _resolvable_params(predefined_key, params_raw):
+    """The form's choice values that are valid options.
+
+    Dynamic catalogue fields (years, raster type, scale...) depend on choice
+    params (period, source, metric). While a number field is mid-edit and the
+    form does not coerce, the year list must still follow the choices on
+    screen rather than jump back to the defaults.
+    """
+    out = {}
+    for spec in param_specs(predefined_key):
+        value = params_raw.get(spec["key"])
+        if spec.get("type", "int") == "choice" and value in spec["options"]:
+            out[spec["key"]] = value
+    return out
+
+
+def _parse_year(year):
+    """The year field's value as an int, or None when blank."""
+    try:
+        return int(str(year).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _aoi_seeded_defaults(key):
+    """Catalogue defaults for ``key``, overlaid with what the selected AOI suggests.
+
+    Specs with an ``aoi_default`` hook (the MapBiomas ``region``) pick the
+    collection that covers the AOI's country. The hook reads the AOI's method
+    and name and the static registry only: no Earth Engine call in this
+    event handler.
+    """
+    from gui.store.state_manager import app_state
+
+    values = default_param_values(key)
+    if key:
+        values.update(aoi_param_defaults(key, app_state.aoi_result.value))
+    return values
 
 
 @solara.component
@@ -132,9 +291,16 @@ def VariableModal(
     var_type, set_var_type = solara.use_state(VAR_TYPES[0])
     name, set_name = solara.use_state("")
     year, set_year = solara.use_state("")
+    # The year each source last held: the two share the year field, so a
+    # predefined layer's default year never lands in the custom Year field and
+    # a typed one survives a look at the other source.
+    year_by_source = solara.use_ref({})
     # Raw (string) values for the selected predefined layer's declared params,
     # keyed by param key. Coerced to ints on submit.
     params_raw, set_params_raw = solara.use_state({})
+    # Advanced parameters section: collapsed on layer selection, opened on edit
+    # when the saved values differ from the defaults.
+    advanced_open, set_advanced_open = solara.use_state(False)
     file_path, set_file_path = solara.use_state("")
     asset_id, set_asset_id = solara.use_state("")
     scale, set_scale = solara.use_state("")
@@ -154,6 +320,11 @@ def VariableModal(
     vmax, set_vmax = solara.use_state("")
     seed = vc.default_classes(t("legend.class.absent"), t("legend.class.present"))
     classes, set_classes = solara.use_state(seed)
+    # A predefined layer's display style: the fields, seeded from the catalogue
+    # default or the saved override, and whether the user changed them since.
+    display, set_display = solara.use_state(_NO_DISPLAY)
+    display_open, set_display_open = solara.use_state(False)
+    display_touched, set_display_touched = solara.use_state(False)
 
     def _start_classes(kind, method):
         """The classes a new layer of this kind starts from."""
@@ -194,14 +365,57 @@ def VariableModal(
     # Only a multi-band source records a band; one band is the file as is.
     picked_band = band if len(band_values) > 1 and band in band_values else None
 
-    # Derived: catalogue entry for the selected predefined variable
-    cat = PREDEFINED_CATALOGUE.get(predefined_key) if predefined_key else None
+    # Typed param values when the form is valid; dynamic catalogue fields
+    # (years, raster type, scale...) are resolved for them.
+    _values, _bad_param = (
+        coerce_param_values(predefined_key, params_raw)
+        if predefined_key
+        else ({}, None)
+    )
+    _typed = (
+        _values
+        if _bad_param is None
+        else _resolvable_params(predefined_key, params_raw)
+    )
+
+    # Derived: catalogue entry for the selected predefined variable, with its
+    # param-dependent fields evaluated for the values on screen.
+    cat = (
+        resolved_entry(predefined_key, _typed)
+        if predefined_key in PREDEFINED_CATALOGUE
+        else None
+    )
+
+    display_kind = cat["raster_type"] if cat is not None else None
+    display_default = default_vis(predefined_key, _typed) if cat is not None else None
+    own_palette = _own_palette(display_default)
+    display_categorical = display_kind == RasterType.categorical.value
+    display_vis = (
+        _style_vis(display, display_categorical, own_palette)
+        if display_default is not None and display["kind"] == display_kind
+        else None
+    )
+
+    # A non-temporal predefined layer never carries a year, even if one is
+    # left in the state from a previously selected temporal layer.
+    _year = (
+        year if source != "predefined" or (cat is not None and cat["temporal"]) else ""
+    )
+
+    # Static availability check (never Earth Engine): a year or month past the
+    # source's last complete month, or an impossible combination (FRP from
+    # FIRMS), shows inline next to the fields and blocks submit.
+    _unavailable = (
+        validate_entry(predefined_key, _values, _parse_year(_year))
+        if cat is not None and _bad_param is None
+        else None
+    )
+    availability_error = t(_unavailable[0], **_unavailable[1]) if _unavailable else None
 
     # Storage key the entry will land under (mirrors variables_tile.entry_key).
     # A predefined layer's params are baked into its name (forest_gfc_tc30), so
     # the preview only shows the suffix once the values are valid.
     if source == "predefined":
-        _values, _bad_param = coerce_param_values(predefined_key, params_raw)
         _key_name = (
             build_predefined_name(predefined_key, _values)
             if predefined_key and _bad_param is None
@@ -210,8 +424,8 @@ def VariableModal(
     else:
         _key_name = name.strip()
     storage_key = (
-        f"{_key_name}_{year}"
-        if (_key_name and year and str(year).strip())
+        f"{_key_name}_{_year}"
+        if (_key_name and _year and str(_year).strip())
         else _key_name
     )
     key_exists = (
@@ -224,9 +438,11 @@ def VariableModal(
         set_source(SOURCES[0])
         set_predefined_key("")
         set_params_raw({})
+        set_advanced_open(False)
         set_var_type(VAR_TYPES[0])
         set_name("")
         set_year("")
+        year_by_source.current = {}
         set_file_path("")
         set_asset_id("")
         set_scale("")
@@ -238,6 +454,9 @@ def VariableModal(
         set_vmin("")
         set_vmax("")
         set_classes(seed)
+        set_display(_NO_DISPLAY)
+        set_display_open(False)
+        set_display_touched(False)
         _clear_probes()
         probed.current = None
         set_error(None)
@@ -253,13 +472,23 @@ def VariableModal(
         set_source(initial_entry.get("source", "custom"))
         set_predefined_key(initial_entry.get("predefined_key", ""))
         initial_key = initial_entry.get("predefined_key", "")
-        initial_params = initial_entry.get("params") or default_param_values(
-            initial_key
-        )
-        set_params_raw({k: str(v) for k, v in initial_params.items()})
+        # Defaults under the saved values: a legacy or partial ``params``
+        # still seeds every knob it lacks.
+        initial_params = {
+            **default_param_values(initial_key),
+            **(initial_entry.get("params") or {}),
+        }
+        raw = _raw_params(initial_params)
+        if offers_one_year(PREDEFINED_CATALOGUE.get(initial_key)) and is_one_year(
+            initial_params
+        ):
+            raw[SPAN_KEY] = "year"
+        set_params_raw(raw)
+        set_advanced_open(changed_advanced_count(initial_key, initial_params) > 0)
         set_var_type(initial_entry.get("type", VAR_TYPES[0]))
         set_name(initial_entry.get("name", ""))
         set_year(str(initial_entry.get("year") or ""))
+        year_by_source.current = {}
         set_file_path(initial_entry.get("path", ""))
         set_asset_id(initial_entry.get("asset_id", ""))
         set_scale(initial_entry.get("scale", ""))
@@ -289,12 +518,53 @@ def VariableModal(
         pinned = continuous and "min" in vis and "max" in vis
         set_vmin(_number_text(vis["min"]) if pinned else "")
         set_vmax(_number_text(vis["max"]) if pinned else "")
+        # A predefined layer stores only an override: one opens the section.
+        override = bool(vis) and initial_key in PREDEFINED_CATALOGUE
+        if initial_key in PREDEFINED_CATALOGUE:
+            default = default_vis(initial_key, initial_params)
+            set_display(
+                _display_state(
+                    vis or default,
+                    resolved_entry(initial_key, initial_params)["raster_type"],
+                    _own_palette(default),
+                    default,
+                )
+            )
+        set_display_open(override)
+        set_display_touched(override)
         _clear_probes()
         saved_ref = initial_entry.get("asset_id") or initial_entry.get("path")
         probed.current = (saved_ref, initial_entry.get("band")) if saved_ref else None
         set_error(None)
 
     solara.use_effect(prefill_from_initial, [open_.value])
+
+    def _reseed_display():
+        # Another layer or params: the fields follow the new default unless
+        # the user changed them. A raster type flip always reseeds, as class
+        # colours cannot style a continuous layer (Design 6), and so do new
+        # class values (their colours would be stale) and a "default" ramp
+        # whose layer now has a preset palette.
+        if cat is None:
+            return
+        moved = display["values"] != _class_values(display_default)
+        stale = moved or (display["ramp"] == "default" and own_palette is None)
+        if display_touched and display["kind"] == display_kind and not stale:
+            return
+        set_display(_display_state(display_default, display_kind, own_palette))
+        set_display_touched(False)
+
+    solara.use_effect(
+        _reseed_display, [predefined_key, display_kind, repr(display_default)]
+    )
+
+    def _on_display(field, value):
+        set_display(lambda prev: {**prev, field: value})
+        set_display_touched(True)
+
+    def _reset_display():
+        set_display(_display_state(display_default, display_kind, own_palette))
+        set_display_touched(False)
 
     # ---- value probes (gui.scripts.variable_probes) ----
     is_gee = var_type == "GEEVar"
@@ -414,23 +684,57 @@ def VariableModal(
     def on_select_predefined(key):
         """Select a predefined layer and seed its params with catalogue defaults.
 
-        The previous layer's values must not leak across.
+        The previous layer's values must not leak across. The year stays when
+        the new layer offers it, else it becomes the layer's newest year.
         """
         set_predefined_key(key or "")
-        set_params_raw({k: str(v) for k, v in default_param_values(key or "").items()})
+        defaults = _aoi_seeded_defaults(key or "")
+        set_params_raw(_raw_params(defaults))
+        set_advanced_open(False)
+        set_display_open(False)
+        set_display_touched(False)
+        if key in PREDEFINED_CATALOGUE:
+            new_cat = resolved_entry(key, defaults)
+            if new_cat["temporal"] and _parse_year(year) not in new_cat["years"]:
+                set_year(str(max(new_cat["years"])) if new_cat["years"] else "")
+
+    def on_select_source(value):
+        """Switch source; each source gets back the year it last held."""
+        if value == source:
+            return
+        year_by_source.current[source] = year
+        set_source(value)
+        set_display_open(False)  # both forms share the Visualization panel
+        set_year(year_by_source.current.get(value, ""))
 
     def _submit_predefined():
         if not predefined_key:
             set_error(t("vars.modal.error_no_predefined_selected"))
             return
-        cat_entry = PREDEFINED_CATALOGUE[predefined_key]
-        yr = int(year) if year and str(year).strip() else None
+        # Resolved: whether a year is asked can depend on a param (protected
+        # areas' timing). Only temporal layers take the Year select.
+        cat_entry = cat
+        yr = _parse_year(year) if cat_entry["temporal"] else None
         if cat_entry["temporal"] and yr is None:
             set_error(t("vars.modal.error_year_required"))
             return
         values, bad_param = coerce_param_values(predefined_key, params_raw)
         if bad_param is not None:
-            if bad_param.get("type", "int") == "choice":
+            kind = bad_param.get("type", "int")
+            if bad_param.get("error_key"):
+                set_error(t(bad_param["error_key"]))
+            elif kind == "year":
+                set_error(
+                    t("vars.modal.error_param_year", label=t(bad_param["label_key"]))
+                )
+            elif kind == "multichoice":
+                set_error(
+                    t(
+                        "vars.modal.error_param_multichoice",
+                        label=t(bad_param["label_key"]),
+                    )
+                )
+            elif kind == "choice":
                 set_error(
                     t(
                         "vars.modal.error_param_choice",
@@ -448,6 +752,35 @@ def VariableModal(
                     )
                 )
             return
+        # Already shown inline (availability alert); refuse without repeating it.
+        if validate_entry(predefined_key, values, yr) is not None:
+            return
+        # A year left over from another layer or method is not in this list.
+        if yr is not None and yr not in resolved_entry(predefined_key, values)["years"]:
+            set_error(
+                t(
+                    "vars.modal.error_param_year",
+                    label=t("vars.modal.predefined_year_label"),
+                )
+            )
+            return
+        resolved = resolved_entry(predefined_key, values)
+        default = default_vis(predefined_key, values)
+        vis_params = None
+        # Fields seeded for the other raster type are dropped (Design 6).
+        if default is not None and display["kind"] == resolved["raster_type"]:
+            as_classes = resolved["raster_type"] == RasterType.categorical.value
+            class_error = as_classes and vc.validate(display["classes"])
+            if class_error:
+                set_error(t(class_error))
+                set_display_open(True)  # show the field at fault
+                return
+            current = _style_vis(display, as_classes, _own_palette(default))
+            if current is None:
+                set_error(t("vars.modal.err_range"))
+                set_display_open(True)
+                return
+            vis_params = vis_override(default, current)
         entry = {
             "source": "predefined",
             "type": "GEEVar",
@@ -456,9 +789,13 @@ def VariableModal(
             "name": build_predefined_name(predefined_key, values),
             "year": yr,
             "data_type": DataType.raster,
-            "raster_type": RasterType(cat_entry["raster_type"]),
+            # Resolved: e.g. active_fire is categorical for "any" detection but
+            # continuous for fire days.
+            "raster_type": RasterType(resolved["raster_type"]),
             "predefined_key": predefined_key,
             "params": values,
+            # Only what differs from the catalogue default; None follows it.
+            "vis_params": vis_params,
         }
         reset()
         open_.set(False)
@@ -477,11 +814,13 @@ def VariableModal(
             class_error = vc.validate(classes)
             if class_error:
                 set_error(t(class_error))
+                set_display_open(True)  # show the field at fault
                 return
         elif is_raster:
             valid, span = probes.parse_span(vmin, vmax)
             if not valid:
                 set_error(t("vars.modal.err_range"))
+                set_display_open(True)
                 return
         yr = int(year) if year and str(year).strip() else None
         entry = {
@@ -550,86 +889,73 @@ def VariableModal(
         if probe_error:
             solara.Text(probe_error, classes=["error--text"])
 
-    def _legend_preview():
-        # The legend the map will show, built the way the map builds it.
-        mid = None
-        if categorical:
-            if not vc.visible_classes(classes):
-                return
-            vis, kind = {"classes": classes}, "custom_classes"
-        else:
-            valid, span = probes.parse_span(vmin, vmax)
-            if not valid:
-                return
-            vis, kind = palettes.continuous_vis(ramp, invert, span), "custom_palette"
-            if span:
-                mid = format_number((span[0] + span[1]) / 2)
-        var = SimpleNamespace(name=name, raster_type=raster_type, vis_params=vis)
-        spec = variable_spec_from_vis(vis, kind, var, Label(literal=name))
-        LegendPreview(spec=spec, mid=mid)
+    def _find_probe():
+        if not is_vector or unique:  # a vector mask is always 0 and 1
+            _probe_button(
+                "vars.modal.find_classes",
+                "vars.modal.find_features_hint"
+                if is_vector
+                else "vars.modal.find_classes_hint",
+                "mdi-magnify",
+                classes_task,
+                set_classes_error,
+                classes_error,
+            )
+        if zero_one:
+            solara.Text(
+                t("vars.modal.zero_one_note"), style=MUTED + "font-size:0.8rem;"
+            )
 
     def _vis_fields():
         """A custom layer's visualization, under its raster type or method."""
-        with rv.Html(tag="div", style_=_VIS_FIELDS):
-            if categorical:
-                if not is_vector or unique:  # a vector mask is always 0 and 1
-                    _probe_button(
-                        "vars.modal.find_classes",
-                        "vars.modal.find_features_hint"
-                        if is_vector
-                        else "vars.modal.find_classes_hint",
-                        "mdi-magnify",
-                        classes_task,
-                        set_classes_error,
-                        classes_error,
-                    )
-                if zero_one:
-                    solara.Text(
-                        t("vars.modal.zero_one_note"), style=MUTED + "font-size:0.8rem;"
-                    )
-                # Keyed on the raster: a clear also empties "Add a value".
-                ClassList(classes=classes, on_classes=set_classes, disabled=busy).key(
-                    f"classes|{ref}"
-                )
-                with rv.Html(tag="div"):
-                    PaletteMenu(
-                        value=vc.palette_of(classes),
-                        on_value=lambda key: set_classes(vc.recolor(classes, key)),
-                        disabled=busy or not classes,
-                    )
-            else:
-                RampSelect(
-                    value=ramp,
-                    on_value=set_ramp,
-                    invert=invert,
-                    on_invert=set_invert,
-                    disabled=busy,
-                )
-                with rv.Html(tag="div", style_="display:flex;gap:12px;"):
-                    for label_key, value, setter in (
-                        ("vars.modal.range_min", vmin, set_vmin),
-                        ("vars.modal.range_max", vmax, set_vmax),
-                    ):
-                        rv.TextField(
-                            label=t(label_key),
-                            v_model=value,
-                            on_v_model=setter,
-                            type="number",
-                            dense=True,
-                            outlined=True,
-                            hide_details=True,
-                            disabled=busy,
-                            style_="flex:1;min-width:0;",
-                        )
-                _probe_button(
-                    "vars.modal.stretch",
-                    "vars.modal.stretch_hint",
-                    "mdi-arrow-expand-horizontal",
-                    stretch_task,
-                    set_stretch_error,
-                    stretch_error,
-                )
-            _legend_preview()
+        setters = {
+            "classes": set_classes,
+            "ramp": set_ramp,
+            "invert": set_invert,
+            "vmin": set_vmin,
+            "vmax": set_vmax,
+        }
+        _style_fields(
+            {
+                "classes": classes,
+                "ramp": ramp,
+                "invert": invert,
+                "vmin": vmin,
+                "vmax": vmax,
+            },
+            lambda field, value: setters[field](value),
+            categorical,
+            disabled=busy,
+            list_key=ref,
+            raster_type=raster_type,
+            name=name,
+            find_probe=_find_probe,
+            stretch_probe=lambda: _probe_button(
+                "vars.modal.stretch",
+                "vars.modal.stretch_hint",
+                "mdi-arrow-expand-horizontal",
+                stretch_task,
+                set_stretch_error,
+                stretch_error,
+            ),
+        )
+
+    def _display_section():
+        _render_display_section(
+            display_default is not None,
+            vis_override(display_default, display_vis) is not None,
+            display_open,
+            set_display_open,
+            lambda: _style_fields(
+                display,
+                _on_display,
+                display_categorical,
+                default_palette=own_palette,
+                list_key=predefined_key,
+                raster_type=display_kind,
+            ),
+            _reset_display,
+        )
 
     title = t("vars.modal.title_edit") if is_edit else t("vars.modal.title_add")
     submit_label = t("vars.modal.submit_save") if is_edit else t("common.add")
@@ -657,6 +983,7 @@ def VariableModal(
     with dialog:
         with rv.Card():
             solara.Style(NUDGE_CSS)
+            solara.Style(_ADVANCED_PANEL_CSS)
             with rv.CardTitle():
                 solara.Text(title)
 
@@ -666,7 +993,7 @@ def VariableModal(
                     label=t("vars.modal.source_label"),
                     items=_source_items(),
                     v_model=source,
-                    on_v_model=set_source,
+                    on_v_model=on_select_source,
                     dense=True,
                     outlined=True,
                     hint=t("vars.modal.source_hint"),
@@ -684,6 +1011,10 @@ def VariableModal(
                         key_exists,
                         params_raw,
                         set_params_raw,
+                        advanced_open,
+                        set_advanced_open,
+                        availability_error=availability_error,
+                        display_section=_display_section,
                     )
                 else:
                     _render_custom_fields(
@@ -710,6 +1041,8 @@ def VariableModal(
                         band_field=lambda: _render_band_field(
                             bands_task, band_ref, band_items, picked_band, set_band
                         ),
+                        vis_open=display_open,
+                        set_vis_open=set_display_open,
                     )
 
                 if error:
@@ -748,83 +1081,20 @@ def _render_predefined_fields(
     key_exists,
     params_raw,
     set_params_raw,
+    advanced_open,
+    set_advanced_open,
+    availability_error=None,
+    display_section=lambda: None,
 ):
-    """Fields shown when source == 'predefined'."""
-    rv.Select(
-        label=t("vars.modal.predefined_variable_label"),
-        items=_predefined_items(),
-        v_model=predefined_key,
-        on_v_model=on_select_predefined,
-        dense=True,
-        outlined=True,
-    )
+    """Fields shown when source == 'predefined'.
+
+    Rows mirror the user form (``_render_custom_fields``): each read-only
+    field sits on the row of its editable twin there. ``display_section``
+    draws the layer's Display section (the modal owns its state).
+    """
+    _LayerSelect(predefined_key, on_select_predefined, cat)
 
     if cat:
-        # Data-source blurb: where the layer comes from and how it is generated
-        # (catalogue link included). Rendered inline so it updates per selection.
-        if cat.get("description_key"):
-            with solara.Div(
-                style=MUTED + "font-size:0.85rem;padding:0 4px 4px 4px;",
-            ):
-                solara.Markdown(t(cat["description_key"]))
-
-        # Year — selectable list for temporal variables
-        if cat["temporal"]:
-            available_years = cat.get("years", [])
-            rv.Select(
-                label=t("vars.modal.predefined_year_label"),
-                items=available_years,
-                v_model=int(year) if year and str(year).strip() else None,
-                on_v_model=lambda v: set_year(str(v) if v else ""),
-                dense=True,
-                outlined=True,
-            )
-
-        # Layer-specific knobs declared by the catalogue (e.g. forest_gfc's
-        # tree-cover threshold). Rendered generically, like MODEL_REGISTRY
-        # params in the model dialog — no per-layer branching here.
-        for spec in param_specs(predefined_key):
-            pkey = spec["key"]
-            if spec.get("type", "int") == "choice":
-                rv.Select(
-                    label=t(spec["label_key"]),
-                    items=[
-                        {"text": t(spec["option_label_key_prefix"] + o), "value": o}
-                        for o in spec["options"]
-                    ],
-                    # Same no-fallback contract as the TextField below: show
-                    # exactly what will be submitted.
-                    v_model=params_raw.get(pkey, ""),
-                    on_v_model=lambda v, k=pkey: set_params_raw(
-                        lambda prev: {**prev, k: v or ""}
-                    ),
-                    dense=True,
-                    outlined=True,
-                    hint=t(spec["hint_key"]),
-                    persistent_hint=True,
-                )
-                continue
-            rv.TextField(
-                label=t(spec["label_key"]),
-                # No catalogue-default fallback: the field must show exactly
-                # what will be submitted. coerce_param_values reads params_raw
-                # directly, so displaying a default the state does not hold
-                # would show a valid number while submit rejected it as blank.
-                # Seeding with the defaults is the job of on_select_predefined.
-                v_model=str(params_raw.get(pkey, "")),
-                # Functional update: two params edited in quick succession must
-                # each build on the latest state, not on this render's snapshot.
-                on_v_model=lambda v, k=pkey: set_params_raw(
-                    lambda prev: {**prev, k: v}
-                ),
-                dense=True,
-                outlined=True,
-                type="number",
-                hint=t(spec["hint_key"]),
-                persistent_hint=True,
-            )
-
-        # Read-only info fields
         rv.TextField(
             label=t("vars.modal.predefined_var_type_label"),
             v_model=_type_display(cat.get("var_type", "GEEVar")),
@@ -832,6 +1102,65 @@ def _render_predefined_fields(
             outlined=True,
             disabled=True,
         )
+
+        # Layer-specific knobs declared by the catalogue, rendered generically
+        # (no per-layer branching here): what, then when. Basic knobs that
+        # pick the years (region, product, a By year switch) come first, then
+        # the Year select or the start/end pair, then the month that narrows
+        # the year ("after_year"). Advanced knobs sit in a collapsed section.
+        # Conditional params (depends_on) ruled out by their controller are
+        # hidden; their values are reset to the default on submit. Every
+        # block that comes and goes sits in an always-present div, which
+        # keeps later siblings (and their click handlers) in place.
+        active = {s["key"] for s in active_param_specs(predefined_key, params_raw)}
+        basic = [s for s in basic_param_specs(predefined_key) if s["key"] in active]
+
+        def param_block(specs):
+            with rv.Html(tag="div"):
+                for spec in specs:
+                    _render_param_field(spec, params_raw, set_params_raw)
+
+        param_block(
+            s for s in basic if s.get("type") != "year" and not s.get("after_year")
+        )
+
+        # Year — selectable list for temporal variables
+        with rv.Html(tag="div"):
+            if cat["temporal"]:
+                picked = _parse_year(year)
+                hint_key = cat.get("year_hint_key")
+                rv.Select(
+                    label=t("vars.modal.predefined_year_label"),
+                    items=sorted(cat.get("years", []), reverse=True),  # newest 1st
+                    v_model=picked,
+                    on_v_model=lambda v: set_year(str(v) if v else ""),
+                    dense=True,
+                    outlined=True,
+                    hint=(
+                        t(hint_key, year=picked, previous=picked - 1)
+                        if hint_key and picked
+                        else ""
+                    ),
+                    persistent_hint=bool(hint_key and picked),
+                )
+
+        # Interval layers (deforestation_gfc, ...): start and end year side by
+        # side in place of the Year select (they are non-temporal). Change
+        # targets can instead take One year: Y stored as the Y .. Y + 1 pair.
+        pair = [s for s in basic if s.get("type") == "year"]
+        one_year = offers_one_year(cat) and params_raw.get(SPAN_KEY) == "year"
+        with rv.Html(tag="div"):
+            if offers_one_year(cat) and pair:
+                _ChangeSpanSelect(pair[0]["options"], params_raw, set_params_raw)
+        with rv.Html(tag="div", style_="display:flex;gap:8px;"):
+            if one_year:
+                _one_year_select(pair[0]["options"], params_raw, set_params_raw)
+            else:
+                for spec in pair:
+                    with rv.Html(tag="div", style_="flex:1;min-width:0;"):
+                        _render_param_field(spec, params_raw, set_params_raw)
+
+        param_block(s for s in basic if s.get("after_year"))
         rv.TextField(
             label=t("vars.modal.predefined_raster_type_label"),
             v_model=cat["raster_type"],
@@ -839,6 +1168,31 @@ def _render_predefined_fields(
             outlined=True,
             disabled=True,
         )
+        advanced = [
+            s for s in advanced_param_specs(predefined_key) if s["key"] in active
+        ]
+        # Always-present boxes: opening a section must not shift the next.
+        with rv.Html(tag="div"):
+            if advanced:
+                _render_advanced_section(
+                    predefined_key,
+                    advanced,
+                    params_raw,
+                    set_params_raw,
+                    advanced_open,
+                    set_advanced_open,
+                )
+        with rv.Html(tag="div"):
+            display_section()
+
+        with rv.Html(tag="div"):
+            if availability_error:
+                rv.Alert(
+                    type="error",
+                    dense=True,
+                    class_="sr-availability-error",
+                    children=[availability_error],
+                )
 
     if storage_key:
         solara.Text(
@@ -850,6 +1204,335 @@ def _render_predefined_fields(
             ),
             style=MUTED + "font-size:0.8rem;padding:0 4px 4px;",
         )
+
+
+@solara.component
+def _LayerSelect(predefined_key, on_select, cat):
+    """The predefined Variable select, its description behind an info icon.
+
+    Same idiom as the Train form's model select: the prepend-inner icon (the
+    only one whose click Vuetify keeps from opening the menu), parked on the
+    right by the shared .field-info-icon CSS. A component of its own because
+    its hooks cannot live in the conditionally called field renderer.
+    """
+    info_open, set_info_open = solara.use_state(False)
+    description_key = (cat or {}).get("description_key")
+    select = rv.Select(
+        label=t("vars.modal.predefined_variable_label"),
+        items=_predefined_items(),
+        v_model=predefined_key,
+        on_v_model=on_select,
+        dense=True,
+        outlined=True,
+        prepend_inner_icon="mdi-information-outline" if description_key else None,
+        class_="field-info-icon" if description_key else "",
+    )
+    # rv.use_event is a hook — call it unconditionally.
+    rv.use_event(select, "click:prepend-inner", lambda *_: set_info_open(True))
+    InfoPopup(
+        t("vars.modal.layer_info_title", label=t(cat["label_key"])) if cat else "",
+        t(description_key) if description_key else "",
+        info_open and bool(description_key),
+        set_info_open,
+    )
+
+
+def _one_year_pair(year):
+    """Form values for One year ``year`` (blank pair when cleared)."""
+    if year in (None, ""):
+        return {"start_year": "", "end_year": ""}
+    return {"start_year": str(year), "end_year": str(int(year) + 1)}
+
+
+def _ChangeSpanSelect(years, params_raw, set_params_raw):
+    """Period: One year / Over a period, above a change target's years."""
+
+    def on_span(value):
+        def update(prev):
+            out = {**prev, SPAN_KEY: value}
+            if value == "year":
+                # Keep a start that has a next year; else start over blank.
+                start = _parse_year(prev.get("start_year"))
+                out.update(
+                    _one_year_pair(start if start in one_year_starts(years) else None)
+                )
+            return out
+
+        set_params_raw(update)
+
+    rv.Select(
+        label=t("vars.modal.param_change_span"),
+        items=[
+            {"text": t("vars.modal.change_span_period"), "value": "period"},
+            {"text": t("vars.modal.change_span_year"), "value": "year"},
+        ],
+        v_model=params_raw.get(SPAN_KEY) or "period",
+        on_v_model=on_span,
+        dense=True,
+        outlined=True,
+        hint=t("vars.modal.param_change_span_hint"),
+        persistent_hint=True,
+        class_="sr-param-field",
+    )
+
+
+def _one_year_select(years, params_raw, set_params_raw):
+    """The single Year select of One year; writes both interval years."""
+    picked = _parse_year(params_raw.get("start_year"))
+    rv.Select(
+        label=t("vars.modal.predefined_year_label"),
+        items=sorted(one_year_starts(years), reverse=True),  # newest first
+        v_model=picked,
+        on_v_model=lambda v: set_params_raw(lambda prev: {**prev, **_one_year_pair(v)}),
+        dense=True,
+        outlined=True,
+        hint=t("vars.modal.one_year_hint", year=picked, next=picked + 1)
+        if picked
+        else "",
+        persistent_hint=bool(picked),
+        class_="sr-param-field",
+    )
+
+
+def _render_param_field(spec, params_raw, set_params_raw):
+    """One catalogue param as a form field (int, choice or multichoice).
+
+    The field shows exactly what will be submitted: no catalogue-default
+    fallback for display (seeding defaults is ``on_select_predefined``'s job),
+    and every update is functional so two quick edits build on the latest
+    state rather than this render's snapshot.
+    """
+    pkey = spec["key"]
+    kind = spec.get("type", "int")
+    if kind == "year":
+        raw = str(params_raw.get(pkey, "") or "").strip()
+        rv.Select(
+            label=t(spec["label_key"]),
+            items=sorted(spec["options"], reverse=True),  # newest first
+            # Blank (None) until picked: interval years have no default.
+            v_model=int(raw) if raw.isdigit() else None,
+            on_v_model=lambda v, k=pkey: set_params_raw(
+                lambda prev: {**prev, k: "" if v in (None, "") else str(v)}
+            ),
+            dense=True,
+            outlined=True,
+            hint=t(spec["hint_key"]),
+            persistent_hint=True,
+            class_="sr-param-field",
+        )
+        return
+    if kind == "multichoice":
+        rv.Select(
+            label=t(spec["label_key"]),
+            items=[
+                {
+                    "text": t(spec["option_label_key_prefix"] + o["value"]),
+                    "value": o["value"],
+                }
+                for o in spec["options"]
+            ],
+            v_model=list(params_raw.get(pkey) or []),
+            on_v_model=lambda v, k=pkey: set_params_raw(
+                lambda prev: {**prev, k: list(v or [])}
+            ),
+            multiple=True,
+            chips=True,
+            class_="sr-param-field multi-chips",
+            small_chips=True,
+            dense=True,
+            outlined=True,
+            hint=t(spec["hint_key"]),
+            persistent_hint=True,
+        )
+        return
+    if kind == "choice":
+        rv.Select(
+            label=t(spec["label_key"]),
+            items=[
+                {"text": t(spec["option_label_key_prefix"] + o), "value": o}
+                for o in spec["options"]
+            ],
+            v_model=params_raw.get(pkey, ""),
+            on_v_model=lambda v, k=pkey: set_params_raw(
+                lambda prev: {**prev, k: v or ""}
+            ),
+            dense=True,
+            outlined=True,
+            hint=t(spec["hint_key"]),
+            persistent_hint=True,
+            class_="sr-param-field",
+        )
+        return
+    rv.TextField(
+        label=t(spec["label_key"]),
+        v_model=str(params_raw.get(pkey, "")),
+        on_v_model=lambda v, k=pkey: set_params_raw(lambda prev: {**prev, k: v}),
+        dense=True,
+        outlined=True,
+        type="number",
+        hint=t(spec["hint_key"]),
+        persistent_hint=True,
+        class_="sr-param-field",
+    )
+
+
+def _render_advanced_section(
+    predefined_key, specs, params_raw, set_params_raw, advanced_open, set_advanced_open
+):
+    """Collapsed "Advanced parameters" panel holding the specs.
+
+    The header carries "(n changed)" so a collapsed panel still shows that
+    non-default values are in play.
+    """
+    n_changed = changed_advanced_count(predefined_key, params_raw)
+    label = t("vars.modal.advanced_toggle")
+    if n_changed:
+        label = f"{label} {t('vars.modal.advanced_changed', n=n_changed)}"
+    defaults = _raw_params({s["key"]: s["default"] for s in specs})
+
+    def body():
+        with rv.Html(tag="div"):
+            for spec in specs:
+                _render_param_field(spec, params_raw, set_params_raw)
+        solara.Button(
+            t("vars.modal.advanced_reset"),
+            icon_name="mdi-restore",
+            on_click=lambda: set_params_raw(lambda prev: {**prev, **defaults}),
+            text=True,
+            x_small=True,
+        )
+
+    _panel(label, advanced_open, set_advanced_open, body)
+
+
+def _panel(label, is_open, set_open, body):
+    """A collapsed section in the Train/Inference "Advanced parameters" style.
+
+    ``body`` is built while closed too, so opening is a client-side expand
+    that does not wait for the server to send the fields.
+    """
+    with rv.ExpansionPanels(
+        flat=True,
+        class_="advanced-params",
+        v_model=0 if is_open else None,
+        on_v_model=lambda value: set_open(value == 0),
+        style_="margin-bottom:8px;",
+    ):
+        with rv.ExpansionPanel():
+            rv.ExpansionPanelHeader(children=[label])
+            with rv.ExpansionPanelContent():
+                body()
+
+
+def _render_display_section(editable, changed, is_open, set_open, fields, on_reset):
+    """Collapsed "Visualization parameters" panel holding the style fields.
+
+    Built like the Advanced panel. "(changed)" marks a style that differs
+    from the catalogue default. A layer with random colours shows a note.
+    """
+    label = t("vars.modal.display_toggle")
+    if changed:
+        label = f"{label} {t('vars.modal.display_changed')}"
+
+    def body():
+        if not editable:
+            solara.Text(
+                t("vars.modal.display_random_note"), style=MUTED + "font-size:0.8rem;"
+            )
+            return
+        fields()
+        solara.Button(
+            t("vars.modal.display_reset"),
+            icon_name="mdi-restore",
+            on_click=on_reset,
+            text=True,
+            x_small=True,
+        )
+
+    _panel(label, is_open, set_open, body)
+
+
+def _style_fields(
+    style,
+    on_field,
+    categorical,
+    *,
+    disabled=False,
+    default_palette=None,
+    list_key="",
+    raster_type="",
+    name="",
+    find_probe=None,
+    stretch_probe=None,
+):
+    """Class list and palette menu, or ramp and Min/Max; then the legend preview.
+
+    ``style`` has ``_display_state``'s fields and ``on_field(field, value)``
+    sets one. The probe callables (custom layers) draw the find and stretch
+    buttons.
+    """
+    classes = style["classes"]
+    with rv.Html(tag="div", style_=_VIS_FIELDS):
+        if categorical:
+            if find_probe:
+                find_probe()
+            # Keyed on the raster: a clear also empties "Add a value".
+            ClassList(
+                classes=classes,
+                on_classes=lambda value: on_field("classes", value),
+                disabled=disabled,
+            ).key(f"classes|{list_key}")
+            with rv.Html(tag="div"):
+                PaletteMenu(
+                    value=vc.palette_of(classes),
+                    on_value=lambda key: on_field("classes", vc.recolor(classes, key)),
+                    disabled=disabled or not classes,
+                )
+        else:
+            ramp = style["ramp"]
+            RampSelect(
+                value=ramp if ramp in palettes.ramp_keys(default_palette) else None,
+                on_value=lambda value: on_field("ramp", value),
+                invert=style["invert"],
+                on_invert=lambda value: on_field("invert", value),
+                disabled=disabled,
+                default_palette=default_palette,
+            )
+            with rv.Html(tag="div", style_="display:flex;gap:12px;"):
+                for label_key, field in (
+                    ("vars.modal.range_min", "vmin"),
+                    ("vars.modal.range_max", "vmax"),
+                ):
+                    rv.TextField(
+                        label=t(label_key),
+                        v_model=style[field],
+                        on_v_model=lambda value, f=field: on_field(f, value),
+                        type="number",
+                        dense=True,
+                        outlined=True,
+                        hide_details=True,
+                        disabled=disabled,
+                        style_="flex:1;min-width:0;",
+                    )
+            if stretch_probe:
+                stretch_probe()
+        _legend_preview(
+            _style_vis(style, categorical, default_palette),
+            categorical,
+            raster_type,
+            name,
+        )
+
+
+def _legend_preview(vis, categorical, raster_type, name=""):
+    """The legend the map will show for ``vis``, built the way the map builds it."""
+    if vis is None or (categorical and not vc.visible_classes(vis["classes"])):
+        return
+    kind = "custom_classes" if categorical else "custom_palette"
+    mid = format_number((vis["min"] + vis["max"]) / 2) if "min" in vis else None
+    var = SimpleNamespace(name=name, raster_type=raster_type, vis_params=vis)
+    spec = variable_spec_from_vis(vis, kind, var, Label(literal=name))
+    LegendPreview(spec=spec, mid=mid)
 
 
 def _render_custom_fields(
@@ -874,11 +1557,15 @@ def _render_custom_fields(
     key_exists,
     vis_fields=None,
     band_field=lambda: None,
+    vis_open=False,
+    set_vis_open=lambda value: None,
 ):
     """Fields shown when source == 'custom'.
 
-    ``vis_fields`` draws the layer's visualization fields under its raster
-    type or rasterization method (the modal owns their state).
+    Rows follow the predefined form: input (file or asset) before the year,
+    then the raster type or rasterization method. ``vis_fields`` draws the
+    layer's visualization fields in a collapsed panel after them, like the
+    predefined Visualization section (the modal owns their state).
     """
     ArtifactNameField(
         value=name,
@@ -895,16 +1582,6 @@ def _render_custom_fields(
         dense=True,
         outlined=True,
         hint=t("vars.modal.custom_type_hint"),
-        persistent_hint=True,
-    )
-    rv.TextField(
-        label=t("vars.modal.custom_year_label"),
-        v_model=year,
-        on_v_model=set_year,
-        dense=True,
-        outlined=True,
-        type="number",
-        hint=t("vars.modal.custom_year_hint"),
         persistent_hint=True,
     )
     if var_type in ("LocalRasterVar", "LocalVectorVar"):
@@ -936,6 +1613,16 @@ def _render_custom_fields(
             hint=t("vars.modal.custom_scale_hint"),
             persistent_hint=True,
         )
+    rv.TextField(
+        label=t("vars.modal.custom_year_label"),
+        v_model=year,
+        on_v_model=set_year,
+        dense=True,
+        outlined=True,
+        type="number",
+        hint=t("vars.modal.custom_year_hint"),
+        persistent_hint=True,
+    )
     if var_type in ("LocalRasterVar", "GEEVar"):
         rv.Select(
             label=t("vars.modal.custom_raster_type_label"),
@@ -948,7 +1635,7 @@ def _render_custom_fields(
             persistent_hint=True,
         )
         if vis_fields is not None:
-            vis_fields()
+            _panel(t("vars.modal.display_toggle"), vis_open, set_vis_open, vis_fields)
     if var_type == "LocalVectorVar":
         rv.Select(
             label=t("vars.modal.custom_rasterization_method_label"),
@@ -961,7 +1648,7 @@ def _render_custom_fields(
             persistent_hint=True,
         )
         if vis_fields is not None:
-            vis_fields()
+            _panel(t("vars.modal.display_toggle"), vis_open, set_vis_open, vis_fields)
 
 
 def _render_band_field(task, ref, items, picked, set_band):

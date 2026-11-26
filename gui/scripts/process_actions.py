@@ -5,10 +5,11 @@ set a reprojected base raster, then reproject/match + rasterize, and apply
 edge/dist post-processing.
 """
 
+import copy
 import logging
 from collections import namedtuple
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from spatialrisk.harmonization import harmonization_status_from_disk
 
@@ -44,7 +45,12 @@ def existing_download_targets(project, keys=None) -> List[tuple]:
 
 
 def materialize_raw_layers(
-    project, keys=None, on_progress=None, overwrite: bool = False, on_wait=None
+    project,
+    keys=None,
+    on_progress=None,
+    overwrite: bool = False,
+    on_wait=None,
+    on_notice=None,
 ) -> List[str]:
     """Download raw GEEVars to local vars, replacing them in raw_variables.
 
@@ -65,6 +71,11 @@ def materialize_raw_layers(
     layer's export has to queue behind another download's (geedim runs one at
     a time, see ``download_ee_image``); it never fires when the layer starts
     at once.
+
+    ``on_notice(i18n_key, kwargs)`` receives the warnings a predefined layer's
+    download hook returns (e.g. ``subj`` switching to a 16-bit export, see
+    ``gui.scripts.predefined.download_hooks``); without it they are logged,
+    which a tracked job shows as a task step.
     """
     from spatialrisk.gee.progress import geedim_download_wait, geedim_tile_progress
     from spatialrisk.log_utils import log_progress
@@ -81,6 +92,7 @@ def materialize_raw_layers(
 
     n_layers = len(pending)
     materialized: List[str] = []
+    failures = []
     for idx, (key, var) in enumerate(
         log_progress(pending, "Downloading layer", label=lambda kv: kv[0])
     ):
@@ -100,11 +112,19 @@ def materialize_raw_layers(
             if on_wait is not None
             else lambda: None
         )
-        with geedim_tile_progress(tile_cb), geedim_download_wait(wait_cb):
-            if var.data_type == DataType.vector:
-                local = var.to_local_vector(overwrite=overwrite)
-            else:
-                local = var.to_local_raster(overwrite=overwrite)
+        try:
+            with geedim_tile_progress(tile_cb), geedim_download_wait(wait_cb):
+                if var.data_type == DataType.vector:
+                    local = var.to_local_vector(overwrite=overwrite)
+                else:
+                    _prepare_predefined_download(var, overwrite, on_notice)
+                    local = var.to_local_raster(overwrite=overwrite)
+        except Exception as exc:
+            # One bad layer (e.g. a MapBiomas AOI outside its region) must not
+            # skip the rest of a bulk download; the failures are raised below.
+            logger.exception("Download of %s failed", key)
+            failures.append((key, exc))
+            continue
         # Single-image GEEVars return one var; lists are flattened defensively.
         locals_ = local if isinstance(local, list) else [local]
         for lv in locals_:
@@ -113,7 +133,27 @@ def materialize_raw_layers(
 
     if materialized:
         logger.info("Downloaded %d layer(s).", len(materialized))
+    if len(failures) == 1:
+        raise failures[0][1]
+    if failures:
+        raise RuntimeError("; ".join(f"{k}: {e}" for k, e in failures))
     return materialized
+
+
+def _prepare_predefined_download(var, overwrite, on_notice):
+    """Run a predefined layer's download hook and deliver its notice, if any."""
+    from gui.scripts.predefined import download_hooks
+
+    notice = download_hooks.prepare_predefined_download(var, overwrite=overwrite)
+    if notice is None:
+        return
+    key, kwargs = notice
+    if on_notice is not None:
+        on_notice(key, kwargs)
+        return
+    from gui.i18n import t
+
+    logger.warning(t(key, **kwargs))
 
 
 def auto_utm_epsg(path) -> str:
@@ -358,6 +398,23 @@ def remove_processed_variable(
         del project.processed_variables[key]
         drop_derived_from_map(key, map_, legend_port)
     return True
+
+
+def apply_display(project, key: str, vis_params: Optional[dict]) -> List[str]:
+    """Set a layer's display style on every year and its harmonized copies.
+
+    Every raw variable sharing ``project.raw_variables[key].name`` gets
+    ``vis_params`` (None follows the catalogue default), and so does the
+    processed copy under the same storage key. Nothing is rebuilt, downloaded
+    or re-harmonized: only the look changes. Returns the touched raw keys.
+    """
+    name = project.raw_variables[key].name
+    touched = [k for k, v in project.raw_variables.items() if v.name == name]
+    for k in touched:
+        targets = [project.raw_variables[k], project.processed_variables.get(k)]
+        for var in filter(None, targets):
+            var.vis_params = copy.deepcopy(vis_params)
+    return touched
 
 
 def change_layer_candidates(project) -> List[str]:

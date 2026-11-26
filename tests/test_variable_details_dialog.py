@@ -112,6 +112,97 @@ def test_grid_field_follows_the_lists_status():
     )
 
 
+def _rivers_project(**raw_attrs):
+    raw = _named(
+        "LocalRasterVar",
+        name="rivers_wlmc",
+        data_type="raster",
+        year=None,
+        raster_type=RasterType.categorical,
+        path="/x/rivers_wlmc.tif",
+        **raw_attrs,
+    )
+    return SimpleNamespace(raw_variables={"rivers_wlmc": raw}, processed_variables={})
+
+
+def test_predefined_row_lists_its_stored_params():
+    """The values saved on the layer show as fields, defaults included."""
+    project = _rivers_project(params={"classes": ["large", "major", "canal"]})
+    rows = dict(harmonized_details(project, "rivers_wlmc").rows)
+    assert rows[t("vars.modal.param_water_classes")] == (
+        f"{t('vars.modal.water_large')}; {t('vars.modal.water_major')}; "
+        f"{t('vars.modal.water_canal')}"
+    )
+
+
+def test_details_show_default_display():
+    """A catalogue layer on its default display says so; a plain layer has no row."""
+    rows = dict(
+        harmonized_details(_rivers_project(vis_params=None), "rivers_wlmc").rows
+    )
+    assert rows[t(K + "display")] == t(K + "display_default")
+    plain = SimpleNamespace(
+        raw_variables={"mine": _named("LocalRasterVar", name="mine", year=None)},
+        processed_variables={},
+    )
+    assert t(K + "display") not in dict(harmonized_details(plain, "mine").rows)
+
+
+def test_details_show_custom_display():
+    """A catalogue layer with its own display says Customised."""
+    project = _rivers_project(vis_params={"min": 0, "max": 1})
+    rows = dict(harmonized_details(project, "rivers_wlmc").rows)
+    assert rows[t(K + "display")] == t(K + "display_custom")
+
+
+def test_layer_saved_without_params_reads_them_from_its_name():
+    """Projects written before params were stored still show them."""
+    stored = dict(
+        harmonized_details(
+            _rivers_project(params={"classes": ["large", "major", "canal"]}),
+            "rivers_wlmc",
+        ).rows
+    )
+    legacy = dict(harmonized_details(_rivers_project(), "rivers_wlmc").rows)
+    assert legacy == stored
+
+
+def test_interval_layer_lists_its_start_and_end_year():
+    """Part C: the period shows as two plain-year fields, stored or from the name."""
+    name = "deforestation_gfc_tc30_2015_2020"
+    raw = _named(
+        "LocalRasterVar",
+        name=name,
+        data_type="raster",
+        year=None,
+        raster_type=RasterType.categorical,
+        path=f"/x/{name}.tif",
+        params=None,
+    )
+    project = SimpleNamespace(raw_variables={name: raw}, processed_variables={})
+    details = harmonized_details(project, name)
+    rows = dict(details.rows)
+    assert details.name == name
+    assert rows[t("vars.modal.param_tree_cover_threshold")] == "30"
+    assert rows[t("vars.modal.param_start_year")] == "2015"
+    assert rows[t("vars.modal.param_end_year")] == "2020"
+
+
+def test_legacy_default_layer_lists_its_default_params():
+    """A bare-named layer saved without params shows the defaults, like a new one."""
+    raw = _named(
+        "LocalRasterVar",
+        name="roads",
+        data_type="raster",
+        year=None,
+        raster_type=RasterType.categorical,
+        path="/x/roads.tif",
+    )
+    project = SimpleNamespace(raw_variables={"roads": raw}, processed_variables={})
+    rows = dict(harmonized_details(project, "roads").rows)
+    assert rows[t("vars.modal.param_roads_source")] == t("vars.modal.roads_source_osm")
+
+
 def test_gone_rows_have_no_details():
     """No project, no key or a deleted variable: nothing to show, nothing raised."""
     assert harmonized_details(None, "slope_2020") is None
@@ -238,7 +329,9 @@ def test_dialog_renders_the_rows_and_closes():
         fields = {f.label: f.v_model for f in rc.find(vw.TextField).widgets}
         assert fields[t(K + "resampling")] == "bilinear"
         assert fields[t(K + "matches_grid")] == t("common.yes")
-        assert len(fields) == 7
+        # 7 fields + slope's 2 catalogue defaults (DEM source, slope unit)
+        # + the display row
+        assert len(fields) == 10
         close = [b for b in rc.find(vw.Btn).widgets if t("common.close") in b.children]
         close[0].click()
         assert closed == [1]

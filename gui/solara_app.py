@@ -71,7 +71,11 @@ from gui.tile.sampling_tile import SamplingTile, samples_on_map, sampling_jobs
 from gui.tile.summary_tile import ProjectSummaryTile
 from gui.tile.toolbox_tile import ToolboxTile, allocation_jobs, density_on_map
 from gui.tile.train_tile import TrainTile, train_jobs
-from gui.tile.variables_tile import VariablesTile, vars_on_map
+from gui.tile.variables_tile import (
+    VariablesTile,
+    restore_cloud_variables,
+    vars_on_map,
+)
 from gui.widget.enter_key import ENTER_DEFAULT, EnterKeyListener
 from gui.widget.manage_projects import ConfirmDeleteProjectDialog, ManageProjectsDialog
 from gui.widget.pipeline_header import PipelineHeader
@@ -265,12 +269,19 @@ def ProjectPanel(on_close=None):
         with app_state.restoring_project():
             restored = load_aoi(DATA_DIR / loaded.project_name, loaded.aoi)
             app_state.aoi_result.set(restored)
+            # Not-downloaded EE layers come back from their saved recipes;
+            # rebuilding them needs the AOI set just above.
+            lost = restore_cloud_variables(loaded)
             app_state.load_project_state(loaded, when)
             # Only after the signal bump: its render resets the picker when
             # needed (AoiTile) and syncs the draw control's visibility; this
             # write then refills the picker, which seeds the draw control
             # synchronously.
             app_state.aoi_spec.set(restored.spec if restored is not None else None)
+        if lost:
+            notifications.warning(
+                t("project.cloud_variables_not_restored", names=", ".join(lost))
+            )
 
     def do_load():
         if delete_task.pending:

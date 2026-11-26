@@ -22,12 +22,13 @@ def variable_choices(project) -> List[dict]:
     """One choice per static variable and one per year of a temporal one.
 
     Each choice is ``{"value", "text", "name", "year"}``; ``year`` is None for
-    a static variable. Temporal choices read ``defor (2015)``.
+    a static variable. Temporal choices read ``defor (2015)``, newest first.
     """
     choices = []
     for name in project.list_unique_variable_names(source="processed"):
         if project.is_temporal(name, source="processed"):
-            for year in project.get_variable_years(name, source="processed"):
+            years = project.get_variable_years(name, source="processed")
+            for year in sorted(years, reverse=True):
                 choices.append(
                     {
                         "value": choice_value(name, year),

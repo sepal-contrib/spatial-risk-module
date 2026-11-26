@@ -181,19 +181,15 @@ DEFAULT_CLASS_KEYS = ("legend.class.absent", "legend.class.present")
 
 
 def _catalogue_entry(var):
-    """The PREDEFINED_CATALOGUE entry behind ``var``'s name, or None.
+    """The resolved catalogue entry behind ``var``'s name, or None.
 
     Parameterised names (``forest_gfc_tc30``) resolve back to their catalogue
-    key, the same way the style resolvers do.
+    key, the same way the style resolvers do. Param-dependent fields (unit,
+    legend classes) are evaluated for the params in the name.
     """
-    from gui.scripts.predefined_variables import (
-        PREDEFINED_CATALOGUE,
-        resolve_predefined,
-    )
+    from gui.scripts.predefined import entry_for_variable
 
-    name = getattr(var, "name", "") or ""
-    cat_key, _params = resolve_predefined(name)
-    return PREDEFINED_CATALOGUE.get(cat_key) if cat_key else None
+    return entry_for_variable(var)[2]
 
 
 def _is_categorical(render_kind: str, cat, var=None) -> bool:
@@ -254,16 +250,31 @@ def variable_spec(
     """
     if render_kind == "custom_classes":
         # The user's own class list: one chip per visible class, in their words.
-        from gui.scripts.variable_classes import legend_colors_labels
+        from gui.scripts.variable_classes import legend_colors_labels, visible_classes
 
-        chips, names = legend_colors_labels(
-            (getattr(var, "vis_params", None) or {}).get("classes")
+        classes = (getattr(var, "vis_params", None) or {}).get("classes")
+        chips, names = legend_colors_labels(classes)
+        # A catalogue class keeps its i18n key so the legend follows the language.
+        labels = tuple(
+            Label(key=c["label_key"]) if c.get("label_key") else Label(literal=name)
+            for c, name in zip(visible_classes(classes), names)
         )
+        return LegendSpec(kind="chips", title=title, colors=chips, labels=labels)
+
+    if render_kind == "class_palette":
+        # A catalogue class table (MapBiomas classes): one chip per class.
+        from gui.scripts.variable_classes import (
+            from_class_labels,
+            legend_colors_labels,
+        )
+
+        cat = _catalogue_entry(var) or {}
+        chips, keys = legend_colors_labels(from_class_labels(cat["class_labels"]))
         return LegendSpec(
             kind="chips",
             title=title,
             colors=chips,
-            labels=tuple(Label(literal=name) for name in names),
+            labels=tuple(Label(key=key) for key in keys),
         )
 
     if render_kind == "random_visualizer":
@@ -318,7 +329,7 @@ def variable_spec(
 def variable_spec_from_style(style: dict, var, title: Label) -> LegendSpec:
     """Adapter for local rasters: build from ``resolve_variable_style``'s dict."""
     render_kind = style.get("render_kind", "continuous_fallback")
-    if render_kind in ("random_visualizer", "custom_classes"):
+    if render_kind in ("random_visualizer", "custom_classes", "class_palette"):
         colors = ()
     elif render_kind == "postprocess_change":
         # variable_spec discards `colors` for this render_kind in favour of
@@ -350,7 +361,10 @@ def variable_spec_from_vis(
 ) -> LegendSpec:
     """Adapter for GEE layers: build from the ``vis`` dict ``_styled_layer`` used."""
     palette = [_with_hash(c) for c in (vis or {}).get("palette", [])]
-    if render_kind in ("random_visualizer", "custom_classes") or not palette:
+    if (
+        render_kind in ("random_visualizer", "custom_classes", "class_palette")
+        or not palette
+    ):
         colors = tuple(palette)
     elif _is_categorical(render_kind, _catalogue_entry(var), var):
         colors = tuple(palette)

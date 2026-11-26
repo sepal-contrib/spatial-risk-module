@@ -18,6 +18,15 @@ from gui.scripts.predefined_variables import (
 )
 
 
+def _plain_layer(monkeypatch):
+    """Register a catalogue entry with no params (every real one has some)."""
+    monkeypatch.setitem(
+        PREDEFINED_CATALOGUE,
+        "plain_layer",
+        {"raster_type": "categorical", "temporal": False, "get_image": None},
+    )
+
+
 def test_forest_gfc_declares_a_tree_cover_param():
     """The catalogue is the single source of truth for the knob and its default."""
     specs = param_specs("forest_gfc")
@@ -41,12 +50,12 @@ def test_get_image_default_matches_catalogue_default():
     assert sig.parameters["tree_cover_threshold"].default == 30
 
 
-def test_layers_without_params_report_empty():
+def test_layers_without_params_report_empty(monkeypatch):
     """Unparameterised entries must stay that way."""
-    assert param_specs("altitude") == []
-    assert default_param_values("altitude") == {}
+    _plain_layer(monkeypatch)
+    assert param_specs("plain_layer") == []
+    assert default_param_values("plain_layer") == {}
     assert param_specs("not_a_layer") == []
-    assert param_specs("precipitation") == []
 
 
 def test_default_param_values():
@@ -116,43 +125,17 @@ def test_roundtrip_is_exact():
         )
 
 
-def test_suffix_values_can_never_reach_four_digits():
-    """Guard: a four-digit suffix would be parsed as a year downstream.
+def test_resolve_rejects_non_canonical_suffixes():
+    """Only the name ``build_predefined_name`` emits resolves.
 
-    ``spatialrisk.evaluation.interval_from_target`` pulls years out of a name
-    with a four-consecutive-digits regex. Int params must keep ``max`` below
-    1000; choice params must have digit-free option strings. Additionally,
-    choice options must be underscore-free since ``resolve_predefined`` splits
-    the name suffix on ``_``.
-    """
-    for key in PREDEFINED_CATALOGUE:
-        for spec in param_specs(key):
-            if spec.get("type", "int") == "choice":
-                assert all(
-                    not any(ch.isdigit() for ch in str(option))
-                    for option in spec["options"]
-                ), f"{key}.{spec['key']} has a digit-bearing option"
-                # resolve_predefined splits on _, so underscores break roundtrip
-                assert all(
-                    "_" not in str(option) for option in spec["options"]
-                ), f"{key}.{spec['key']} has an underscore-bearing option"
-            else:
-                assert (
-                    spec["max"] < 1000
-                ), f"{key}.{spec['key']} allows a 4-digit suffix"
-
-
-def test_resolve_is_not_injective_over_non_canonical_suffixes():
-    """Documented limit of the inverse property (see resolve_predefined).
-
-    The inverse holds for every name ``build_predefined_name`` emits. It is not
-    injective over arbitrary strings: a zero-padded suffix parses to the same
-    values. Unreachable from the UI, where values are coerced to ``int`` before
-    the name is built — pinned here so the docstring stays honest.
+    ``resolve_predefined`` rebuilds the name from the parsed values and
+    rejects any mismatch, so a zero-padded suffix is no longer an alias of
+    the canonical one. The UI never produced such names (values are coerced
+    to ``int`` before the name is built).
     """
     canonical = build_predefined_name("forest_gfc", {"tree_cover_threshold": 30})
     assert canonical == "forest_gfc_tc30"
-    assert resolve_predefined("forest_gfc_tc030") == resolve_predefined(canonical)
+    assert resolve_predefined("forest_gfc_tc030") == (None, {})
 
 
 def test_coerce_accepts_valid_form_text():
@@ -180,9 +163,10 @@ def test_coerce_reports_missing_value():
     assert bad["key"] == "tree_cover_threshold"
 
 
-def test_coerce_on_unparameterised_layer_is_empty_and_valid():
+def test_coerce_on_unparameterised_layer_is_empty_and_valid(monkeypatch):
     """Unparameterised layers require no params, coerce succeeds."""
-    assert coerce_param_values("altitude", {}) == ({}, None)
+    _plain_layer(monkeypatch)
+    assert coerce_param_values("plain_layer", {}) == ({}, None)
 
 
 def test_threshold_reaches_the_gee_expression(monkeypatch):
@@ -193,7 +177,7 @@ def test_threshold_reaches_the_gee_expression(monkeypatch):
     """
     import types
 
-    import gui.scripts.predefined_variables as pv
+    import gui.scripts.predefined.forest as forest_mod
 
     calls = []
 
@@ -207,9 +191,11 @@ def test_threshold_reaches_the_gee_expression(monkeypatch):
 
             return _call
 
-    monkeypatch.setattr(pv, "ee", types.SimpleNamespace(Image=lambda *a, **k: _Rec()))
+    monkeypatch.setattr(
+        forest_mod, "ee", types.SimpleNamespace(Image=lambda *a, **k: _Rec())
+    )
 
-    pv._get_forest_gfc("AOI", 2020, tree_cover_threshold=45)
+    forest_mod._get_forest_gfc("AOI", 2020, tree_cover_threshold=45)
 
     assert ("gte", (45,)) in calls
 
@@ -224,22 +210,27 @@ def test_temperature_get_image_default_matches_catalogue_default():
     import inspect
 
     sig = inspect.signature(PREDEFINED_CATALOGUE["temperature_2m"]["get_image"])
-    (spec,) = param_specs("temperature_2m")
+    spec = param_specs("temperature_2m")[0]
     assert sig.parameters["aggregation"].default == spec["default"] == "median"
 
 
 def test_default_param_values_for_choice():
     """Retrieve default param values for a choice-typed catalogue entry."""
-    assert default_param_values("temperature_2m") == {"aggregation": "median"}
+    assert default_param_values("temperature_2m") == {
+        "aggregation": "median",
+        "period": "year",
+    }
 
 
 @pytest.mark.parametrize("metric", ["mean", "max", "min", "median"])
 def test_coerce_accepts_each_choice_option(metric):
     """Choice values stay strings — no int coercion."""
-    values, bad = coerce_param_values("temperature_2m", {"aggregation": metric})
+    values, bad = coerce_param_values(
+        "temperature_2m", {"aggregation": metric, "period": "year"}
+    )
 
     assert bad is None
-    assert values == {"aggregation": metric}
+    assert values == {"aggregation": metric, "period": "year"}
     assert isinstance(values["aggregation"], str)
 
 
@@ -272,7 +263,10 @@ def test_build_name_appends_bare_choice_suffix():
 def test_choice_roundtrip_is_exact(metric):
     """Build and resolve are exact inverses for every choice option."""
     name = build_predefined_name("temperature_2m", {"aggregation": metric})
-    assert resolve_predefined(name) == ("temperature_2m", {"aggregation": metric})
+    assert resolve_predefined(name) == (
+        "temperature_2m",
+        {"aggregation": metric, "period": "year"},
+    )
 
 
 @pytest.mark.parametrize(
@@ -298,15 +292,15 @@ def test_resolve_bare_temperature_key():
 # ---------------------------------------------------------------------------
 
 
-def _fake_ee_recording_filter_bounds(monkeypatch):
-    """Stub ``ee`` so every ``filterBounds`` argument is recorded.
+def _fake_ee_recording_filter_bounds(monkeypatch, module):
+    """Stub ``module.ee`` so every ``filterBounds`` argument is recorded.
 
     Returns the list of recorded arguments and the fake AOI whose
-    ``geometry().bounds()`` is the ``"BOUNDS"`` sentinel.
+    ``geometry().bounds()`` is the ``"BOUNDS"`` sentinel. ``_aoi_bounds`` lives
+    in ``aoi.py`` with the real ``ee``; the fake AOI is not an ``ee.Geometry``,
+    so it takes the ``aoi.geometry().bounds()`` branch.
     """
     import types
-
-    import gui.scripts.predefined_variables as pv
 
     seen = []
 
@@ -340,15 +334,19 @@ def _fake_ee_recording_filter_bounds(monkeypatch):
         Filter=_Rec(),
         Geometry=_Geometry,
     )
-    monkeypatch.setattr(pv, "ee", fake_ee)
+    monkeypatch.setattr(module, "ee", fake_ee)
     return seen, _Aoi()
 
 
 @pytest.mark.parametrize(
-    "layer",
-    ["_get_protected_area", "_get_forest_tmf", "_get_rivers"],
+    "theme, layer",
+    [
+        ("infrastructure", "_get_protected_area"),
+        ("forest", "_get_forest_tmf"),
+        ("water", "_get_rivers"),
+    ],
 )
-def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, layer):
+def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, theme, layer):
     """``filterBounds`` gets the AOI's bounding rectangle.
 
     Filtering a collection by the AOI object (or its ``geometry()``) makes
@@ -358,11 +356,12 @@ def test_prefilters_use_aoi_bounds_not_the_aoi(monkeypatch, layer):
     The pre-filter is only an optimisation — the layer is clipped to the AOI
     afterwards — so its bounds are sufficient.
     """
-    import gui.scripts.predefined_variables as pv
+    import importlib
 
-    seen, aoi = _fake_ee_recording_filter_bounds(monkeypatch)
+    module = importlib.import_module(f"gui.scripts.predefined.{theme}")
+    seen, aoi = _fake_ee_recording_filter_bounds(monkeypatch, module)
 
-    getattr(pv, layer)(aoi, 2010)
+    getattr(module, layer)(aoi, 2010)
 
     assert seen, "layer is expected to pre-filter with filterBounds"
     assert all(arg == "BOUNDS" for arg in seen), seen

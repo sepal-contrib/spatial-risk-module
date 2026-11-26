@@ -28,9 +28,15 @@
       "present": "Presente",
       "stable": "Estável",
       "loss": "Perda de floresta",
+      "logged": "Explorado",
       "gain": "Ganho de floresta",
       "non_forest": "Não floresta",
-      "forest": "Floresta"
+      "forest": "Floresta",
+      "burned": "Queimado",
+      "unburned": "Não queimado",
+      "fire": "Fogo",
+      "no_fire": "Sem fogo",
+      "degraded": "Degradação florestal"
     },
     "note": {
       "random_classes": "Categórico — cores atribuídas aleatoriamente"
@@ -38,7 +44,12 @@
     "unit": {
       "m_value": "{value} m",
       "deg_value": "{value}°",
-      "plain_value": "{value}"
+      "pct_value": "{value} %",
+      "plain_value": "{value}",
+      "days_value": "{value} d",
+      "mw_value": "{value} MW",
+      "years_value": "{value} anos",
+      "mm_value": "{value} mm"
     }
   }
 }

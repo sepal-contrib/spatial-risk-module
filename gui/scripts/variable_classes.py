@@ -27,14 +27,21 @@ ERR_LIMIT = "vars.modal.err_class_limit"
 ERR_NO_VISIBLE = "vars.modal.err_no_visible_class"
 
 
-def make(value, color, label: str = "", visible: bool = True) -> dict:
-    """One class, in its stored form."""
-    return {
+def make(value, color, label: str = "", visible: bool = True, label_key=None) -> dict:
+    """One class, in its stored form.
+
+    ``label_key`` (an i18n key) is stored only when given: a catalogue class
+    keeps showing its translated name until the user types their own.
+    """
+    out = {
         "value": int(value),
         "color": _bare(color)[:6],
         "label": str(label),
         "visible": bool(visible),
     }
+    if label_key:
+        out["label_key"] = label_key
+    return out
 
 
 def default_classes(absent: str = "0", present: str = "1") -> List[dict]:
@@ -141,6 +148,18 @@ def palette_of(classes) -> Optional[str]:
             if palettes.qualitative_colors(key, len(classes)) == colors
         ),
         None,
+    )
+
+
+def from_class_labels(class_labels) -> List[dict]:
+    """A catalogue entry's ``class_labels`` as classes, sorted by value.
+
+    Each label holds its i18n key (this module is i18n-free): the legend
+    translates it.
+    """
+    return sorted(
+        (make(c["value"], c["color"], c["label_key"]) for c in class_labels),
+        key=lambda c: c["value"],
     )
 
 

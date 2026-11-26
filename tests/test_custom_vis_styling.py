@@ -112,6 +112,26 @@ def test_gee_style_uses_the_variable_palette_without_touching_gee():
     assert kind == "custom_palette"
 
 
+def test_custom_ramp_without_range_is_stretched_on_gee(monkeypatch):
+    """A ramp with no range is stretched; pinned or half-pinned ranges stay."""
+    from gui.tile import variables_tile as vt
+
+    monkeypatch.setattr(vt, "_minmax", lambda *_: (3, 40))
+    ramp = ["000000", "ffffff"]
+
+    def vis_for(vis):
+        return vt._styled_layer(object(), _var(vis_params=vis), None)[1]
+
+    assert vis_for({"palette": ramp}) == {"palette": ramp, "min": 3, "max": 40}
+    pinned = {"palette": ramp, "min": 1, "max": 2}
+    assert vis_for(pinned) == pinned
+    assert vis_for({"palette": ramp, "min": 1}) == {
+        "palette": ramp,
+        "min": 1,
+        "max": 40,
+    }
+
+
 # ---- legend -------------------------------------------------------------------
 
 
@@ -150,3 +170,33 @@ def test_asset_id_gee_variable_is_mappable_before_download():
         type("GEEVar", (), {"gee_images": None, "path": "projects/p/assets/x"})()
     )
     assert not is_mappable(type("GEEVar", (), {"gee_images": None, "path": None})())
+
+
+def test_class_override_legend_translates_label_keys():
+    """A catalogue key is kept, a typed label stays literal; text follows locale."""
+    from pysepal.i18n import set_locale
+
+    from gui.i18n import t
+    from gui.scripts.legend_data import resolve_label
+    from gui.scripts.variable_classes import make
+
+    classes = [
+        make(1, "ff0000", "x", label_key="legend.class.loss"),
+        make(2, "00ff00", "mine"),
+    ]
+    spec = variable_spec_from_vis(
+        {"classes": classes},
+        "custom_classes",
+        _var(vis_params={"classes": classes}),
+        Label(literal="x"),
+    )
+    assert spec.labels[0].key == "legend.class.loss"
+    assert spec.labels[1] == Label(literal="mine")
+    try:
+        set_locale("en")
+        english = resolve_label(spec.labels[0], t)
+        set_locale("es-ES")
+        spanish = resolve_label(spec.labels[0], t)
+    finally:
+        set_locale("en")
+    assert english != spanish
